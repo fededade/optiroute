@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-leaflet';
-import L from 'leaflet';
+import * as L from 'leaflet';
 import type { Appointment, Coordinates, RouteSummary, AppointmentStatus } from '../types';
+import { getFullRouteGeometry } from '../services/routingService';
 
 const iconUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
 const iconRetinaUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png';
@@ -122,22 +123,59 @@ const MapComponent: React.FC<MapComponentProps> = ({
   onStatusChange 
 }) => {
   const [routePositions, setRoutePositions] = useState<[number, number][]>([]);
+  const [isLoadingRoute, setIsLoadingRoute] = useState(false);
 
   useEffect(() => {
-    const confirmed = appointments
-        .filter(a => a.status === 'confirmed')
-        .sort((a, b) => {
-             if (a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
-             return (a.sequenceOrder || 999) - (b.sequenceOrder || 999);
-        });
+    const fetchRoadRoute = async () => {
+      const confirmed = appointments
+          .filter(a => a.status === 'confirmed')
+          .sort((a: Appointment, b: Appointment) => {
+               if (a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
+               return (a.sequenceOrder || 999) - (b.sequenceOrder || 999);
+          });
 
-    if (confirmed.length > 1) {
-      const positions = confirmed.map(a => [a.coords.lat, a.coords.lng] as [number, number]);
-      setRoutePositions(positions);
-    } else {
-      setRoutePositions([]);
-    }
-  }, [appointments]);
+      if (confirmed.length < 2) {
+        setRoutePositions([]);
+        return;
+      }
+
+      setIsLoadingRoute(true);
+
+      // Build waypoints array, optionally starting from base
+      const waypoints: Coordinates[] = [];
+      if (baseLocation) {
+        waypoints.push(baseLocation.coords);
+      }
+      confirmed.forEach(a => waypoints.push(a.coords));
+
+      try {
+        // Get real road geometry from OSRM
+        const geometry = await getFullRouteGeometry(waypoints);
+        
+        if (geometry && geometry.length > 0) {
+          setRoutePositions(geometry);
+        } else {
+          // Fallback to straight lines if OSRM fails
+          const fallbackPositions = confirmed.map(a => [a.coords.lat, a.coords.lng] as [number, number]);
+          if (baseLocation) {
+            fallbackPositions.unshift([baseLocation.coords.lat, baseLocation.coords.lng]);
+          }
+          setRoutePositions(fallbackPositions);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch road route, using straight lines:', error);
+        const fallbackPositions = confirmed.map(a => [a.coords.lat, a.coords.lng] as [number, number]);
+        if (baseLocation) {
+          fallbackPositions.unshift([baseLocation.coords.lat, baseLocation.coords.lng]);
+        }
+        setRoutePositions(fallbackPositions);
+      } finally {
+        setIsLoadingRoute(false);
+      }
+    };
+
+    fetchRoadRoute();
+  }, [appointments, baseLocation]);
 
   const getIcon = (appt: Appointment) => {
     if (appt.status === 'confirmed') {
@@ -239,13 +277,12 @@ const MapComponent: React.FC<MapComponentProps> = ({
             );
           })}
 
-          {routePositions.length > 1 && (
+          {routePositions.length > 1 && !isLoadingRoute && (
             <Polyline 
               positions={routePositions} 
               color="#6366f1" 
               weight={4} 
-              opacity={0.7} 
-              dashArray="10, 10" 
+              opacity={0.8} 
             />
           )}
         </MapContainer>

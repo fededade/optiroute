@@ -4,7 +4,7 @@ import { geocodeAddress } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64 } from './services/excelService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
-import MapComponent from './components/MapComponent';
+import MapComponent from './Components/MapComponent';
 
 // --- CONFIGURATION ---
 // SOSTITUISCI QUESTO URL CON IL TUO WEBHOOK N8N (Method: POST)
@@ -169,7 +169,7 @@ function App() {
           return d.getMonth() === selectedDate.getMonth() && d.getFullYear() === selectedDate.getFullYear();
       };
 
-      return allAppointments.filter(appt => {
+      return allAppointments.filter((appt: Appointment) => {
           if (appt.status === 'confirmed') {
               if (!filters.confirmed) return false;
               if (viewMode === 'day') return appt.date === currentDate;
@@ -303,13 +303,13 @@ function App() {
     if (visibleAppointments.length === 0) return null;
 
     // Sort logic for export
-    const sorted = [...visibleAppointments].sort((a,b) => {
+    const sorted = [...visibleAppointments].sort((a: Appointment, b: Appointment) => {
         if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
         return (a.sequenceOrder||0) - (b.sequenceOrder||0);
     });
 
     // Format data similar to excelService export
-    return sorted.map(a => ({
+    return sorted.map((a: Appointment) => ({
         'Data': a.date || 'Da definire',
         'Ordine': a.sequenceOrder || '-',
         'Ora Arrivo': a.startTime || '-',
@@ -331,7 +331,7 @@ function App() {
     }
     const filename = `Planning_${viewMode === 'day' ? currentDate : 'Export'}.xlsx`;
     // Re-sort the actual appointments array for the file generation function
-    const sortedAppts = [...visibleAppointments].sort((a,b) => {
+    const sortedAppts = [...visibleAppointments].sort((a: Appointment, b: Appointment) => {
         if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
         return (a.sequenceOrder||0) - (b.sequenceOrder||0);
     });
@@ -346,7 +346,7 @@ function App() {
 
       setIsSendingToN8n(true);
       try {
-          const sortedAppts = [...visibleAppointments].sort((a,b) => {
+          const sortedAppts = [...visibleAppointments].sort((a: Appointment, b: Appointment) => {
               if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
               return (a.sequenceOrder||0) - (b.sequenceOrder||0);
           });
@@ -403,7 +403,7 @@ function App() {
 
               if (tryBlindly) {
                  try {
-                     const sortedAppts = [...visibleAppointments].sort((a,b) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
+                     const sortedAppts = [...visibleAppointments].sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
                      const blob = await generateExcelBlob(sortedAppts);
                      const base64String = await blobToBase64(blob);
                      
@@ -442,7 +442,7 @@ function App() {
   };
 
   const handleStatusChange = (id: string, newStatus: AppointmentStatus) => {
-    setAllAppointments(prev => prev.map(a => {
+    setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
         if (a.id !== id) return a;
         
         const update: Partial<Appointment> = { status: newStatus };
@@ -487,7 +487,7 @@ function App() {
       const scheduledIds = new Set(scheduled.map(a => a.id));
       const overflowIds = new Set(overflow.map(a => a.id));
 
-      setAllAppointments(prev => prev.map(a => {
+      setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
           if (scheduledIds.has(a.id)) {
               const calculated = scheduled.find(s => s.id === a.id);
               return { 
@@ -532,7 +532,7 @@ function App() {
     setSelectedForSwap(newSelection);
 
     if (newSelection.length === 2) {
-      const currentDayAppointments = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate).sort((a,b) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
+      const currentDayAppointments = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate).sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
       
       const idx1 = currentDayAppointments.findIndex(a => a.id === newSelection[0]);
       const idx2 = currentDayAppointments.findIndex(a => a.id === newSelection[1]);
@@ -559,7 +559,7 @@ function App() {
         const scheduledIds = new Set(scheduled.map(a => a.id));
         const overflowIds = new Set(overflow.map(a => a.id));
 
-        setAllAppointments(prev => prev.map(a => {
+        setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
             if (scheduledIds.has(a.id)) {
                 const calculated = scheduled.find(s => s.id === a.id);
                 return { ...a, ...calculated, status: 'confirmed', date: currentDate };
@@ -576,10 +576,10 @@ function App() {
   };
 
   const handleRemove = (id: string) => {
-    setAllAppointments(prev => prev.filter(a => a.id !== id));
+    setAllAppointments((prev: Appointment[]) => prev.filter((a: Appointment) => a.id !== id));
   };
 
-  const confirmedForDate = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate).sort((a,b) => (a.sequenceOrder||0) - (b.sequenceOrder||0));
+  const confirmedForDate = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate).sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0) - (b.sequenceOrder||0));
   const routeSummary = confirmedForDate.length > 0 ? calculateRouteSummary(confirmedForDate) : null;
   
   const listPending = allAppointments.filter(a => a.status === 'pending');
@@ -642,8 +642,9 @@ function App() {
       {/* Header */}
       <header className="bg-white border-b border-slate-200 px-6 py-4 flex flex-col sm:flex-row items-center justify-between shadow-sm z-10 gap-4">
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          <div className="bg-indigo-600 p-2 rounded-lg text-white">
-            <MapPinIcon />
+          {/* LOGO UPDATE */}
+          <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg shadow-sm border border-slate-100 bg-slate-900 flex items-center justify-center">
+             <img src="/logo.png" alt="Logo Aziendale" className="h-full w-full object-cover" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-800">OptiRoute</h1>

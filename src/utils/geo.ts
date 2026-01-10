@@ -1,8 +1,9 @@
 import type { Appointment, Coordinates, RouteSummary } from '../types';
 import { getRoadRoute } from '../services/routingService';
 
+// Haversine formula to calculate distance between two points in km
 export const calculateDistance = (coord1: Coordinates, coord2: Coordinates): number => {
-  const R = 6371; 
+  const R = 6371; // Radius of the earth in km
   const dLat = deg2rad(coord2.lat - coord1.lat);
   const dLon = deg2rad(coord2.lng - coord1.lng);
   const a =
@@ -12,7 +13,7 @@ export const calculateDistance = (coord1: Coordinates, coord2: Coordinates): num
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  const d = R * c; 
+  const d = R * c; // Distance in km
   return d;
 };
 
@@ -20,6 +21,7 @@ const deg2rad = (deg: number): number => {
   return deg * (Math.PI / 180);
 };
 
+// Fallback estimation if OSRM fails or is unavailable
 export const estimateTravelTimeMinutes = (distanceKm: number): number => {
   const AVERAGE_SPEED_KPM = 0.35; 
   const TORTUOSITY = 1.4; 
@@ -35,6 +37,7 @@ export const formatTime = (date: Date): string => {
   return `${hours}:${minutes}`;
 };
 
+// "Furthest First, Closest Last" Logic (Reverse Greedy)
 export const optimizeRoute = (
   appointments: Appointment[],
   baseLocation?: Coordinates | null
@@ -103,6 +106,7 @@ interface ScheduleResult {
   overflow: Appointment[];
 }
 
+// Async Schedule Calculation using Real Roads
 export const calculateSchedule = async (
   sortedAppointments: Appointment[],
   baseLocation?: Coordinates | null,
@@ -114,7 +118,7 @@ export const calculateSchedule = async (
   let currentTime = new Date();
   currentTime.setHours(startTimeHours, startTimeMinutes, 0, 0);
 
-  const LUNCH_START_THRESHOLD_HOURS = 12;
+  const LUNCH_START_THRESHOLD_HOURS = 12; // Noon
   const LUNCH_DURATION_MINUTES = 45;
   let lunchTaken = false;
 

@@ -7,6 +7,7 @@ import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils
 import MapComponent from './components/MapComponent';
 
 // --- CONFIGURATION ---
+// SOSTITUISCI QUESTO URL CON IL TUO WEBHOOK N8N (Method: POST)
 const N8N_WEBHOOK_URL = 'https://fededade.app.n8n.cloud/webhook-test/Suca'; 
 
 // Icons
@@ -86,7 +87,10 @@ function App() {
   const [addressInput, setAddressInput] = useState('');
   const [baseInput, setBaseInput] = useState('');
   
+  // Unified List
   const [allAppointments, setAllAppointments] = useState<Appointment[]>([]);
+
+  // Selection State
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
 
   const [baseLocation, setBaseLocation] = useState<{coords: Coordinates, address: string} | null>(null);
@@ -96,22 +100,26 @@ function App() {
   const [isSendingToN8n, setIsSendingToN8n] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
   
+  // Import Modal State
   const [showImportModal, setShowImportModal] = useState(false);
   const [importFinished, setImportFinished] = useState(false);
   const [importStats, setImportStats] = useState({ success: 0, failed: 0 });
   const [failedImports, setFailedImports] = useState<string[]>([]);
   
+  // Settings & View
   const [currentDate, setCurrentDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [viewMode, setViewMode] = useState<ViewMode>('day');
   const [startTime, setStartTime] = useState("09:00");
   const [endTimeLimit, setEndTimeLimit] = useState("18:00");
 
+  // Filters
   const [filters, setFilters] = useState({
       confirmed: true,
       pending: true,
       standby: true
   });
 
+  // Swap Mode State
   const [isSwapMode, setIsSwapMode] = useState(false);
   const [selectedForSwap, setSelectedForSwap] = useState<string[]>([]);
   
@@ -128,6 +136,7 @@ function App() {
     }
   }, []);
 
+  // Scroll to selected item when it changes
   useEffect(() => {
     if (selectedAppointmentId) {
       const element = document.getElementById(`appt-${selectedAppointmentId}`);
@@ -137,6 +146,7 @@ function App() {
     }
   }, [selectedAppointmentId]);
 
+  // -- Derived Lists --
   const getVisibleAppointments = useCallback(() => {
       const selectedDate = new Date(currentDate);
 
@@ -208,7 +218,7 @@ function App() {
         address: result.displayName,
         title: cleanAddress,
         coords: result.coords,
-        status: 'pending' 
+        status: 'pending' // Default to pending
       };
       
       setAllAppointments(prev => [...prev, newAppointment]);
@@ -224,6 +234,7 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Reset Import State
     setShowImportModal(true);
     setImportFinished(false);
     setImportStats({ success: 0, failed: 0 });
@@ -251,6 +262,7 @@ function App() {
         const fullAddress = `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim();
         const title = row.Intestatario || fullAddress;
         
+        // Rate limit strictness for Nominatim
         await new Promise(resolve => setTimeout(resolve, 1100)); 
 
         try {
@@ -261,7 +273,7 @@ function App() {
               address: result.displayName,
               title: title,
               coords: result.coords,
-              status: 'pending' 
+              status: 'pending' // Import as pending
             });
           } else {
             failures.push(`${fullAddress} (${title})`);
@@ -290,11 +302,13 @@ function App() {
   const getExportData = () => {
     if (visibleAppointments.length === 0) return null;
 
+    // Sort logic for export
     const sorted = [...visibleAppointments].sort((a,b) => {
         if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
         return (a.sequenceOrder||0) - (b.sequenceOrder||0);
     });
 
+    // Format data similar to excelService export
     return sorted.map(a => ({
         'Data': a.date || 'Da definire',
         'Ordine': a.sequenceOrder || '-',
@@ -316,7 +330,7 @@ function App() {
       return;
     }
     const filename = `Planning_${viewMode === 'day' ? currentDate : 'Export'}.xlsx`;
-    
+    // Re-sort the actual appointments array for the file generation function
     const sortedAppts = [...visibleAppointments].sort((a,b) => {
         if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
         return (a.sequenceOrder||0) - (b.sequenceOrder||0);
@@ -337,21 +351,27 @@ function App() {
               return (a.sequenceOrder||0) - (b.sequenceOrder||0);
           });
 
+          // 1. Genera BLOB del file
           const blob = await generateExcelBlob(sortedAppts);
           if (blob.size === 0) throw new Error("Il file Excel generato è vuoto.");
 
+          // 2. Genera BASE64 string del file (Backup per n8n text field)
           const base64String = await blobToBase64(blob);
 
           const filename = `Planning_${viewMode === 'day' ? currentDate : 'Export'}.xlsx`;
           const reportName = `Planning ${viewMode === 'day' ? currentDate : 'Export'}`;
 
+          // Use FormData to send as a file upload (multipart/form-data)
           const formData = new FormData();
           
+          // Metodo Principale: File Binario
           formData.append('data', blob, filename); 
           
+          // Metadati
           formData.append('reportName', reportName);
           formData.append('generatedAt', new Date().toISOString());
           
+          // BACKUP: Invia anche il file come stringa Base64 nel caso il binario venga perso
           formData.append('file_base64', base64String);
           formData.append('file_name', filename);
 
@@ -390,6 +410,7 @@ function App() {
                      const filename = `Planning.xlsx`;
                      const formData = new FormData();
                      
+                     // Attach everything again
                      formData.append('data', blob, filename);
                      formData.append('reportName', `Planning - Blind Mode`);
                      formData.append('file_base64', base64String);
@@ -426,7 +447,7 @@ function App() {
         
         const update: Partial<Appointment> = { status: newStatus };
         if (newStatus === 'confirmed') {
-            update.date = currentDate; 
+            update.date = currentDate; // Assign to current date
         } else {
             update.date = undefined;
             update.sequenceOrder = undefined;
@@ -621,8 +642,9 @@ function App() {
       {/* Header */}
       <header className="bg-white border-b border-slate-200 px-6 py-4 flex flex-col sm:flex-row items-center justify-between shadow-sm z-10 gap-4">
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          <div className="bg-indigo-600 p-2 rounded-lg text-white">
-            <MapPinIcon />
+          {/* LOGO UPDATE */}
+          <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg shadow-sm border border-slate-100 bg-slate-900 flex items-center justify-center">
+             <img src="/logo.png" alt="Logo Aziendale" className="h-full w-full object-cover" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-800">OptiRoute</h1>
@@ -755,6 +777,7 @@ function App() {
           {/* List Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white">
             
+            {/* 1. Confirmed */}
             {filters.confirmed && (
                 <div>
                     <h3 className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2 border-b border-blue-100 pb-1 flex justify-between">
@@ -808,10 +831,12 @@ function App() {
                                 </div>
                             </React.Fragment>
                         ))}
+                        {visibleAppointments.filter(a => a.status === 'confirmed').length === 0 && <p className="text-xs text-slate-400 italic">Nessun appuntamento confermato nel periodo.</p>}
                     </div>
                 </div>
             )}
 
+            {/* 2. Pending */}
             {filters.pending && (
                 <div>
                     <h3 className="text-xs font-bold text-orange-500 uppercase tracking-wider mb-2 border-b border-orange-100 pb-1 mt-4">
@@ -844,6 +869,7 @@ function App() {
                 </div>
             )}
 
+            {/* 3. Standby */}
             {filters.standby && (
                 <div>
                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 border-b border-gray-200 pb-1 mt-4">
@@ -876,6 +902,7 @@ function App() {
           </div>
         </aside>
 
+        {/* Map Area */}
         <main className="flex-1 relative bg-slate-200 h-[50vh] md:h-auto">
           <MapComponent 
             appointments={visibleAppointments} 

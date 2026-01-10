@@ -1,5 +1,6 @@
 import type { NominatimResult, Coordinates } from '../types';
 
+// Use OpenStreetMap Nominatim for Geocoding (Free, no key required for low volume)
 const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org/search';
 
 export const geocodeAddress = async (address: string): Promise<{ coords: Coordinates; displayName: string } | null> => {

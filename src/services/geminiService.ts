@@ -2,22 +2,15 @@ import { GoogleGenAI } from "@google/genai";
 
 // Initialize Gemini Client
 const createGeminiClient = () => {
-    // Vite usa import.meta.env.VITE_API_KEY
-    const apiKey = import.meta.env.VITE_API_KEY; 
-    
-    if (!apiKey) {
-        console.warn("API_KEY not found in environment variables");
-        return null;
-    }
-    return new GoogleGenAI({ apiKey: apiKey });
+    // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
+    return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
 export const parseAddressInput = async (userInput: string): Promise<string> => {
     const ai = createGeminiClient();
-    if (!ai) return userInput;
 
     try {
-        const model = 'gemini-2.0-flash'; // Usa un modello stabile
+        const model = 'gemini-3-flash-preview';
         const prompt = `
             Extract a searchable address string from the following text. 
             If the text is already an address, return it as is. 

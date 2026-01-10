@@ -4,8 +4,8 @@ const OSRM_BASE_URL = 'https://router.project-osrm.org/route/v1/driving';
 
 interface OSRMResponse {
   routes: {
-    distance: number; 
-    duration: number; 
+    distance: number; // meters
+    duration: number; // seconds
   }[];
 }
 
@@ -18,9 +18,10 @@ export const getRoadRoute = async (start: Coordinates, end: Coordinates, retries
     try {
       const response = await fetch(url);
       
+      // If rate limited (429) or server error (5xx), wait and retry
       if (response.status === 429 || response.status >= 500) {
         if (attempt < retries) {
-          const delay = 1000 * Math.pow(2, attempt); 
+          const delay = 1000 * Math.pow(2, attempt); // Exponential backoff: 1s, 2s, 4s
           console.warn(`OSRM Rate limit/Error. Retrying in ${delay}ms...`);
           await wait(delay);
           continue;

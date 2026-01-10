@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-leaflet';
 import L from 'leaflet';
-import { Appointment, Coordinates, RouteSummary, AppointmentStatus } from '../types';
+import type { Appointment, Coordinates, RouteSummary, AppointmentStatus } from '../types';
 
-// Standard Leaflet Icon fix
 const iconUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
 const iconRetinaUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png';
 const shadowUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png';
@@ -20,37 +19,21 @@ let DefaultIcon = L.icon({
 
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// --- COLOR GENERATION LOGIC ---
 const DATE_COLORS = [
-    '#ef4444', // Red 500
-    '#f97316', // Orange 500
-    '#f59e0b', // Amber 500
-    '#84cc16', // Lime 500
-    '#10b981', // Emerald 500
-    '#06b6d4', // Cyan 500
-    '#3b82f6', // Blue 500
-    '#6366f1', // Indigo 500
-    '#8b5cf6', // Violet 500
-    '#d946ef', // Fuchsia 500
-    '#f43f5e'  // Rose 500
+    '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981', 
+    '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef', '#f43f5e'
 ];
 
 const getColorForDate = (dateStr?: string): string => {
-    if (!dateStr) return '#3b82f6'; // Default Blue
-    
-    // Simple hash function to consistently map a date string to an index
+    if (!dateStr) return '#3b82f6'; 
     let hash = 0;
     for (let i = 0; i < dateStr.length; i++) {
         hash = dateStr.charCodeAt(i) + ((hash << 5) - hash);
     }
-    
     const index = Math.abs(hash) % DATE_COLORS.length;
     return DATE_COLORS[index];
 };
 
-// --- CUSTOM ICONS ---
-
-// 1. Confirmed (Numbered, Dynamic Color)
 const createConfirmedIcon = (number: number, color: string) => {
   return L.divIcon({
     className: 'custom-div-icon',
@@ -61,14 +44,11 @@ const createConfirmedIcon = (number: number, color: string) => {
   });
 };
 
-// 2. Pending (Orange/Yellow - Fixed)
 const createPendingIcon = () => {
   return L.divIcon({
     className: 'custom-div-icon',
     html: `<div style="background-color: #f59e0b; width: 24px; height: 24px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
-        <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25ZM12.75 6a.75.75 0 0 0-1.5 0v6c0 .414.336.75.75.75h4.5a.75.75 0 0 0 0-1.5h-3.75V6Z" clip-rule="evenodd" />
-      </svg>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4"><path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25ZM12.75 6a.75.75 0 0 0-1.5 0v6c0 .414.336.75.75.75h4.5a.75.75 0 0 0 0-1.5h-3.75V6Z" clip-rule="evenodd" /></svg>
     </div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
@@ -76,14 +56,11 @@ const createPendingIcon = () => {
   });
 };
 
-// 3. Standby (Gray - Fixed)
 const createStandbyIcon = () => {
   return L.divIcon({
     className: 'custom-div-icon',
     html: `<div style="background-color: #94a3b8; width: 20px; height: 20px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-3 h-3">
-         <path fill-rule="evenodd" d="M6.75 5.25a.75.75 0 0 1 .75-.75H9a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H7.5a.75.75 0 0 1-.75-.75V5.25Zm7.5 0A.75.75 0 0 1 15 4.5h1.5a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H15a.75.75 0 0 1-.75-.75V5.25Z" clip-rule="evenodd" />
-       </svg>
+       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M6.75 5.25a.75.75 0 0 1 .75-.75H9a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H7.5a.75.75 0 0 1-.75-.75V5.25Zm7.5 0A.75.75 0 0 1 15 4.5h1.5a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H15a.75.75 0 0 1-.75-.75V5.25Z" clip-rule="evenodd" /></svg>
     </div>`,
     iconSize: [20, 20],
     iconAnchor: [10, 10],
@@ -91,14 +68,11 @@ const createStandbyIcon = () => {
   });
 };
 
-// Base (Home/Office) Icon
 const createBaseIcon = () => {
   return L.divIcon({
     className: 'custom-div-icon',
     html: `<div style="background-color: #ef4444; width: 32px; height: 32px; border-radius: 8px; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
-        <path d="M11.47 3.84a.75.75 0 0 1 1.06 0l8.632 8.632a.75.75 0 0 1-1.06 1.06l-.353-.353v6.321a2.25 2.25 0 0 1-2.25 2.25H13.5a.75.75 0 0 1-.75-.75V15a.75.75 0 0 0-.75-.75h-2.25a.75.75 0 0 0-.75.75v5.25a.75.75 0 0 1-.75.75H4.5A2.25 2.25 0 0 1 2.25 19.5V9.18l-.353.353a.75.75 0 0 1-1.06-1.06l8.632-8.632Z" />
-      </svg>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5"><path d="M11.47 3.84a.75.75 0 0 1 1.06 0l8.632 8.632a.75.75 0 0 1-1.06 1.06l-.353-.353v6.321a2.25 2.25 0 0 1-2.25 2.25H13.5a.75.75 0 0 1-.75-.75V15a.75.75 0 0 0-.75-.75h-2.25a.75.75 0 0 0-.75.75v5.25a.75.75 0 0 1-.75.75H4.5A2.25 2.25 0 0 1 2.25 19.5V9.18l-.353.353a.75.75 0 0 1-1.06-1.06l8.632-8.632Z" /></svg>
     </div>`,
     iconSize: [32, 32],
     iconAnchor: [16, 32],
@@ -107,7 +81,7 @@ const createBaseIcon = () => {
 };
 
 interface MapComponentProps {
-  appointments: Appointment[]; // Expected to be the filtered list
+  appointments: Appointment[]; 
   center: Coordinates;
   routeSummary?: RouteSummary | null;
   baseLocation?: { coords: Coordinates; address: string } | null;
@@ -150,13 +124,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const [routePositions, setRoutePositions] = useState<[number, number][]>([]);
 
   useEffect(() => {
-    // Only draw polyline for CONFIRMED appointments in sequence
-    // Note: If multiple days are visible, this connects them all. 
-    // Ideally, we might want separate polylines per day, but for now we connect the sorted sequence.
     const confirmed = appointments
         .filter(a => a.status === 'confirmed')
         .sort((a, b) => {
-             // Sort by Date first, then Sequence
              if (a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
              return (a.sequenceOrder || 999) - (b.sequenceOrder || 999);
         });
@@ -196,7 +166,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
           <ChangeView center={center} zoom={13} />
           <FitBounds appointments={appointments} baseLocation={baseLocation} />
 
-          {/* Base Marker */}
           {baseLocation && (
             <Marker 
               position={[baseLocation.coords.lat, baseLocation.coords.lng]}
@@ -211,7 +180,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
             </Marker>
           )}
 
-          {/* Appointment Markers */}
           {appointments.map((appt) => {
              const markerColor = appt.status === 'confirmed' ? getColorForDate(appt.date) : '#475569';
              return (
@@ -239,7 +207,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
                         </div>
                     )}
 
-                    {/* Actions in Popup */}
                     <div className="mt-3 pt-2 border-t border-slate-200 flex flex-wrap gap-1 justify-center">
                         {appt.status !== 'confirmed' && (
                             <button 

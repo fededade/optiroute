@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { Appointment } from '../types';
+import type { Appointment } from '../types';
 
 export interface ExcelRow {
   Intestatario?: string;
@@ -7,7 +7,7 @@ export interface ExcelRow {
   'N.Civ.'?: string | number;
   Comune?: string;
   'Prov.'?: string;
-  [key: string]: any; // Allow other columns but ignore them
+  [key: string]: any; 
 }
 
 export const parseExcelFile = async (file: File): Promise<ExcelRow[]> => {
@@ -26,7 +26,6 @@ export const parseExcelFile = async (file: File): Promise<ExcelRow[]> => {
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         
-        // Convert to JSON
         const jsonData = XLSX.utils.sheet_to_json<ExcelRow>(worksheet);
         resolve(jsonData);
       } catch (error) {
@@ -39,9 +38,7 @@ export const parseExcelFile = async (file: File): Promise<ExcelRow[]> => {
   });
 };
 
-// Helper function to create the workbook structure
 const createWorkbook = (appointments: Appointment[]) => {
-  // Format data for export
   const dataToExport = appointments.map(a => ({
     'Data': a.date || 'Da definire',
     'Ordine': a.sequenceOrder || '-',
@@ -57,18 +54,9 @@ const createWorkbook = (appointments: Appointment[]) => {
 
   const worksheet = XLSX.utils.json_to_sheet(dataToExport);
   
-  // Auto-width for columns (simple approximation)
   const wscols = [
-    { wch: 12 }, // Date
-    { wch: 8 },  // Order
-    { wch: 10 }, // Start
-    { wch: 10 }, // End
-    { wch: 30 }, // Name
-    { wch: 50 }, // Address
-    { wch: 12 }, // Status
-    { wch: 15 }, // Dist
-    { wch: 15 }, // Time
-    { wch: 10 }  // Lunch
+    { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 30 }, 
+    { wch: 50 }, { wch: 12 }, { wch: 15 }, { wch: 15 }, { wch: 10 }
   ];
   worksheet['!cols'] = wscols;
 
@@ -77,7 +65,6 @@ const createWorkbook = (appointments: Appointment[]) => {
   return workbook;
 };
 
-// Generate a Blob object directly (for sending via API)
 export const generateExcelBlob = async (appointments: Appointment[]): Promise<Blob> => {
   const workbook = createWorkbook(appointments);
   const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
@@ -89,8 +76,6 @@ export const blobToBase64 = (blob: Blob): Promise<string> => {
     const reader = new FileReader();
     reader.onloadend = () => {
         const result = reader.result as string;
-        // returns "data:mime;base64,......", we usually just want the part after comma if we need raw base64, 
-        // but n8n might like the prefix or not. Let's return the whole string for safety as it identifies mime type.
         resolve(result);
     };
     reader.onerror = reject;
@@ -98,7 +83,6 @@ export const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-// Trigger a browser download
 export const exportAppointmentsToExcel = (appointments: Appointment[], filename: string) => {
   const workbook = createWorkbook(appointments);
   XLSX.writeFile(workbook, filename);

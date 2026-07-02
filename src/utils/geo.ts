@@ -159,7 +159,7 @@ export const calculateSchedule = async (
     let hasLunchBreakBefore = false;
     if (!lunchTaken) {
       const currentHour = currentTime.getHours();
-      
+
       if (currentHour >= LUNCH_START_THRESHOLD_HOURS) {
          currentTime = new Date(currentTime.getTime() + LUNCH_DURATION_MINUTES * 60000);
          lunchTaken = true;
@@ -167,8 +167,9 @@ export const calculateSchedule = async (
       }
     }
 
+    const apptDuration = appt.durationMinutes && appt.durationMinutes > 0 ? appt.durationMinutes : durationMinutes;
     const startString = formatTime(currentTime);
-    const endTime = new Date(currentTime.getTime() + durationMinutes * 60000);
+    const endTime = new Date(currentTime.getTime() + apptDuration * 60000);
     const endString = formatTime(endTime);
     
     const limitDate = new Date(currentTime);
@@ -191,10 +192,8 @@ export const calculateSchedule = async (
     });
 
     currentTime = endTime;
-    
-    if (i < sortedAppointments.length - 1) {
-      await new Promise(r => setTimeout(r, 800)); 
-    }
+    // NOTE: rate limiting for OSRM is handled inside routingService,
+    // so no artificial delay is needed here (cached/Google legs are instant).
   }
 
   return { scheduled, overflow };

@@ -82,12 +82,13 @@ const createBaseIcon = () => {
 };
 
 interface MapComponentProps {
-  appointments: Appointment[]; 
+  appointments: Appointment[];
   center: Coordinates;
   routeSummary?: RouteSummary | null;
   baseLocation?: { coords: Coordinates; address: string } | null;
   onSelectAppointment: (id: string) => void;
   onStatusChange: (id: string, status: AppointmentStatus) => void;
+  onRequestCall?: (id: string) => void;
 }
 
 const ChangeView: React.FC<{ center: Coordinates; zoom: number }> = ({ center, zoom }) => {
@@ -114,13 +115,14 @@ const FitBounds: React.FC<{ appointments: Appointment[]; baseLocation?: any }> =
   return null;
 };
 
-const MapComponent: React.FC<MapComponentProps> = ({ 
-  appointments, 
-  center, 
-  routeSummary, 
-  baseLocation, 
+const MapComponent: React.FC<MapComponentProps> = ({
+  appointments,
+  center,
+  routeSummary,
+  baseLocation,
   onSelectAppointment,
-  onStatusChange 
+  onStatusChange,
+  onRequestCall
 }) => {
   const [routePositions, setRoutePositions] = useState<[number, number][]>([]);
   const [isLoadingRoute, setIsLoadingRoute] = useState(false);
@@ -237,7 +239,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
                             </strong>
                     </div>
                     <p className="mt-1">{appt.address}</p>
-                    
+                    {appt.phone && <p className="mt-1 text-xs text-slate-500">📞 {appt.phone}</p>}
+
                     {appt.status === 'confirmed' && appt.startTime && (
                         <div className="mt-2 text-xs bg-slate-100 p-1 rounded">
                         🕒 {appt.startTime} - {appt.endTime} <br/>
@@ -263,11 +266,19 @@ const MapComponent: React.FC<MapComponentProps> = ({
                             </button>
                         )}
                         {appt.status !== 'standby' && (
-                            <button 
+                            <button
                                 onClick={() => onStatusChange(appt.id, 'standby')}
                                 className="bg-slate-500 text-white text-[10px] px-2 py-1 rounded hover:bg-slate-600 transition-colors"
                             >
                                 Stand-by
+                            </button>
+                        )}
+                        {appt.phone && onRequestCall && (
+                            <button
+                                onClick={() => onRequestCall(appt.id)}
+                                className="bg-emerald-600 text-white text-[10px] px-2 py-1 rounded hover:bg-emerald-700 transition-colors"
+                            >
+                                📞 Chiama (AI)
                             </button>
                         )}
                     </div>

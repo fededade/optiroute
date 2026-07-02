@@ -96,6 +96,17 @@ const getGoogleRoute = async (
 // OSRM fallback (free, no API key, but no real traffic data)
 const TRAFFIC_FACTOR = 1.4;
 
+// Internal rate-limit for the public OSRM demo server: callers no longer
+// need to sleep between requests, we space them out here only when needed.
+const OSRM_MIN_INTERVAL_MS = 800;
+let lastOsrmRequestAt = 0;
+
+const throttleOsrm = async () => {
+  const waitMs = lastOsrmRequestAt + OSRM_MIN_INTERVAL_MS - Date.now();
+  if (waitMs > 0) await wait(waitMs);
+  lastOsrmRequestAt = Date.now();
+};
+
 const getOSRMRoute = async (
   start: Coordinates,
   end: Coordinates,
@@ -107,6 +118,7 @@ const getOSRMRoute = async (
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      await throttleOsrm();
       const response = await fetch(url);
       
       if (response.status === 429 || response.status >= 500) {
@@ -138,17 +150,33 @@ const getOSRMRoute = async (
   return null;
 };
 
-// Main function: tries Google first, falls back to OSRM
+// Cache of already computed legs: re-optimizing or swapping stops on the
+// same day reuses results instantly instead of re-hitting the APIs.
+const routeCache = new Map<string, RouteResult>();
+
+const routeCacheKey = (start: Coordinates, end: Coordinates): string =>
+  `${start.lat.toFixed(5)},${start.lng.toFixed(5)}|${end.lat.toFixed(5)},${end.lng.toFixed(5)}`;
+
+// Main function: tries cache, then Google, falls back to OSRM
 export const getRoadRoute = async (
   start: Coordinates,
   end: Coordinates
 ): Promise<RouteResult | null> => {
+  const key = routeCacheKey(start, end);
+  const cached = routeCache.get(key);
+  if (cached) return cached;
+
   // Try Google Maps first (accurate traffic data)
   const googleResult = await getGoogleRoute(start, end);
-  if (googleResult) return googleResult;
-  
+  if (googleResult) {
+    routeCache.set(key, googleResult);
+    return googleResult;
+  }
+
   // Fallback to OSRM
-  return getOSRMRoute(start, end);
+  const osrmResult = await getOSRMRoute(start, end);
+  if (osrmResult) routeCache.set(key, osrmResult);
+  return osrmResult;
 };
 
 // Get full route geometry through multiple waypoints

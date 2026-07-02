@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { Appointment, Coordinates, AppointmentStatus } from './types';
-import { geocodeAddress } from './services/geocodingService';
+import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
-import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64 } from './services/excelService';
+import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow } from './services/excelService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
+import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings } from './services/storageService';
 import MapComponent from './Components/MapComponent';
+import AppointmentModal from './Components/AppointmentModal';
+import CallModal from './Components/CallModal';
 
 // --- CONFIGURATION ---
-// SOSTITUISCI QUESTO URL CON IL TUO WEBHOOK N8N (Method: POST)
-const N8N_WEBHOOK_URL = 'https://fededade.app.n8n.cloud/webhook-test/Suca'; 
+// URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
+const N8N_WEBHOOK_URL = (import.meta as any).env?.VITE_N8N_WEBHOOK_URL || 'https://fededade.app.n8n.cloud/webhook-test/Suca';
 
 // Icons
 const PlusIcon = () => (
@@ -68,6 +71,16 @@ const ClockIcon = () => (
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
     </svg>
 );
+const PhoneIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 0 0 2.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 0 1-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 0 0-1.091-.852H4.5A2.25 2.25 0 0 0 2.25 4.5v2.25Z" />
+    </svg>
+);
+const PencilIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+      <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+    </svg>
+);
 const CheckCircleIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-12 h-12 text-emerald-500">
     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -86,14 +99,14 @@ type ViewMode = 'day' | 'week' | 'month';
 function App() {
   const [addressInput, setAddressInput] = useState('');
   const [baseInput, setBaseInput] = useState('');
-  
-  // Unified List
-  const [allAppointments, setAllAppointments] = useState<Appointment[]>([]);
+
+  // Unified List (restored from localStorage)
+  const [allAppointments, setAllAppointments] = useState<Appointment[]>(() => loadAppointments());
 
   // Selection State
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
 
-  const [baseLocation, setBaseLocation] = useState<{coords: Coordinates, address: string} | null>(null);
+  const [baseLocation, setBaseLocation] = useState<{coords: Coordinates, address: string} | null>(() => loadBase());
   const [mapCenter, setMapCenter] = useState<Coordinates>(DEFAULT_CENTER);
   const [isLoading, setIsLoading] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
@@ -109,8 +122,15 @@ function App() {
   // Settings & View
   const [currentDate, setCurrentDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [viewMode, setViewMode] = useState<ViewMode>('day');
-  const [startTime, setStartTime] = useState("09:00");
-  const [endTimeLimit, setEndTimeLimit] = useState("18:00");
+  const [startTime, setStartTime] = useState(() => loadSettings()?.startTime || "09:00");
+  const [endTimeLimit, setEndTimeLimit] = useState(() => loadSettings()?.endTimeLimit || "18:00");
+
+  // Appointment add/edit modal
+  const [showApptModal, setShowApptModal] = useState(false);
+  const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
+
+  // AI call modal (Retell)
+  const [callTarget, setCallTarget] = useState<Appointment | null>(null);
 
   // Filters
   const [filters, setFilters] = useState({
@@ -135,6 +155,11 @@ function App() {
       }, () => console.log('Geolocation not allowed'));
     }
   }, []);
+
+  // Persist state locally so a page reload never loses the planning
+  useEffect(() => { saveAppointments(allAppointments); }, [allAppointments]);
+  useEffect(() => { saveBase(baseLocation); }, [baseLocation]);
+  useEffect(() => { saveSettings({ startTime, endTimeLimit }); }, [startTime, endTimeLimit]);
 
   // Scroll to selected item when it changes
   useEffect(() => {
@@ -230,6 +255,46 @@ function App() {
     setIsLoading(false);
   };
 
+  // Save from the add/edit modal (create or update)
+  const handleSaveAppointment = (appt: Appointment) => {
+    setAllAppointments(prev => {
+      const exists = prev.some(a => a.id === appt.id);
+      return exists ? prev.map(a => (a.id === appt.id ? appt : a)) : [...prev, appt];
+    });
+    setMapCenter(appt.coords);
+    setEditingAppointment(null);
+  };
+
+  const openEditModal = (appt: Appointment) => {
+    setEditingAppointment(appt);
+    setShowApptModal(true);
+  };
+
+  const openNewApptModal = () => {
+    setEditingAppointment(null);
+    setShowApptModal(true);
+  };
+
+  // --- AI Call (Retell) handlers ---
+  const requestCall = (appt: Appointment) => {
+    if (!appt.phone) {
+      alert("Questo appuntamento non ha un numero di telefono. Aggiungilo con il tasto Modifica.");
+      return;
+    }
+    setCallTarget(appt);
+  };
+
+  const handleCallStarted = (id: string) => {
+    setAllAppointments(prev => prev.map(a => a.id === id ? { ...a, callStatus: 'calling' } : a));
+  };
+
+  const handleCallResult = (id: string, ok: boolean, callId?: string) => {
+    setAllAppointments(prev => prev.map(a => a.id === id
+      ? { ...a, callStatus: ok ? 'called' : 'failed', callId: callId || a.callId, calledAt: new Date().toISOString() }
+      : a
+    ));
+  };
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -258,12 +323,16 @@ function App() {
       for (const row of validRows) {
         processedCount++;
         setUploadProgress(`Elaborazione pratica ${processedCount} di ${validRows.length}...`);
-        
+
         const fullAddress = `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim();
         const title = row.Intestatario || fullAddress;
-        
-        // Rate limit strictness for Nominatim
-        await new Promise(resolve => setTimeout(resolve, 1100)); 
+        const phone = extractPhoneFromRow(row);
+        const notes = row.Note ? `${row.Note}`.trim() : undefined;
+
+        // Rate limit strictness for Nominatim (skipped for cached/duplicate addresses)
+        if (!hasCachedGeocode(fullAddress)) {
+          await new Promise(resolve => setTimeout(resolve, 1100));
+        }
 
         try {
           const result = await geocodeAddress(fullAddress);
@@ -272,6 +341,8 @@ function App() {
               id: Date.now() + Math.random().toString(),
               address: result.displayName,
               title: title,
+              phone: phone,
+              notes: notes,
               coords: result.coords,
               status: 'pending' // Import as pending
             });
@@ -315,7 +386,9 @@ function App() {
         'Ora Arrivo': a.startTime || '-',
         'Ora Partenza': a.endTime || '-',
         'Cliente': a.title,
+        'Telefono': a.phone || '-',
         'Indirizzo': a.address,
+        'Note': a.notes || '',
         'Stato': a.status,
         'Distanza': a.distanceFromPrev || 0,
         'Tempo': a.travelTimeFromPrev || 0,
@@ -442,9 +515,11 @@ function App() {
   };
 
   const handleStatusChange = (id: string, newStatus: AppointmentStatus) => {
+    const target = allAppointments.find(a => a.id === id);
+
     setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
         if (a.id !== id) return a;
-        
+
         const update: Partial<Appointment> = { status: newStatus };
         if (newStatus === 'confirmed') {
             update.date = currentDate; // Assign to current date
@@ -456,6 +531,11 @@ function App() {
         }
         return { ...a, ...update };
     }));
+
+    // On confirmation, propose the AI confirmation call if a phone number exists
+    if (newStatus === 'confirmed' && target?.phone && target.callStatus !== 'called') {
+        setCallTarget({ ...target, status: 'confirmed', date: currentDate });
+    }
   };
 
   const handleOptimize = useCallback(async () => {
@@ -581,12 +661,39 @@ function App() {
 
   const confirmedForDate = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate).sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0) - (b.sequenceOrder||0));
   const routeSummary = confirmedForDate.length > 0 ? calculateRouteSummary(confirmedForDate) : null;
-  
+
   const listPending = allAppointments.filter(a => a.status === 'pending');
   const listStandby = allAppointments.filter(a => a.status === 'standby');
 
+  // Small badge showing the AI call state on a card
+  const CallBadge = ({ appt }: { appt: Appointment }) => {
+    if (appt.callStatus === 'called') return <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato</span>;
+    if (appt.callStatus === 'calling') return <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 In chiamata...</span>;
+    if (appt.callStatus === 'failed') return <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1 rounded">✗ Chiamata fallita</span>;
+    return null;
+  };
+
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
+      {/* --- ADD/EDIT APPOINTMENT MODAL --- */}
+      {showApptModal && (
+        <AppointmentModal
+          initial={editingAppointment}
+          onSave={handleSaveAppointment}
+          onClose={() => { setShowApptModal(false); setEditingAppointment(null); }}
+        />
+      )}
+
+      {/* --- AI CALL MODAL (Retell) --- */}
+      {callTarget && (
+        <CallModal
+          appointment={callTarget}
+          onClose={() => setCallTarget(null)}
+          onCallStarted={handleCallStarted}
+          onCallResult={handleCallResult}
+        />
+      )}
+
       {/* --- IMPORT MODAL --- */}
       {showImportModal && (
         <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4">
@@ -644,7 +751,7 @@ function App() {
         <div className="flex items-center gap-3 w-full sm:w-auto">
           {/* LOGO UPDATE */}
           <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg shadow-sm border border-slate-100 bg-slate-900 flex items-center justify-center">
-             <img src="/logo.png" alt="Logo Aziendale" className="h-full w-full object-cover" />
+             <img src="/Logo.png" alt="Logo Aziendale" className="h-full w-full object-cover" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-800">OptiRoute</h1>
@@ -726,9 +833,17 @@ function App() {
             
             {/* Add */}
             <form onSubmit={handleAddAddress} className="flex gap-2">
-              <input type="text" value={addressInput} onChange={e => setAddressInput(e.target.value)} placeholder="Nuovo appuntamento..." className="flex-1 px-3 py-2 rounded-lg border text-sm" />
-              <button disabled={isLoading} className="bg-indigo-600 text-white px-3 rounded-lg"><PlusIcon /></button>
+              <input type="text" value={addressInput} onChange={e => setAddressInput(e.target.value)} placeholder="Aggiunta rapida (solo indirizzo)..." className="flex-1 px-3 py-2 rounded-lg border text-sm" />
+              <button disabled={isLoading} title="Aggiungi da indirizzo" className="bg-indigo-600 text-white px-3 rounded-lg disabled:opacity-60">
+                {isLoading ? <span className="block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span> : <PlusIcon />}
+              </button>
             </form>
+            <button
+              onClick={openNewApptModal}
+              className="w-full text-xs py-1.5 rounded-lg border border-indigo-200 bg-white text-indigo-600 font-bold hover:bg-indigo-50 transition-colors flex items-center justify-center gap-1"
+            >
+              <PlusIcon /> Nuovo completo (cliente, telefono, note)
+            </button>
 
             {/* Time Limits */}
             <div className="flex gap-2 text-xs">
@@ -814,16 +929,22 @@ function App() {
                                             <div>
                                                 <h4 className="text-sm font-semibold text-slate-800 leading-tight">{appt.title}</h4>
                                                 <p className="text-xs text-slate-500">{appt.address}</p>
-                                                <div className="mt-1 flex gap-2">
+                                                {appt.phone && <p className="text-xs text-slate-500 mt-0.5">📞 {appt.phone}</p>}
+                                                <div className="mt-1 flex gap-2 flex-wrap items-center">
                                                     {viewMode !== 'day' && <span className="text-xs font-bold text-slate-600 bg-slate-100 px-1 rounded">{appt.date}</span>}
                                                     <span className="text-xs font-mono text-blue-700 bg-blue-100 inline-block px-1 rounded">
                                                         {appt.startTime} - {appt.endTime}
                                                     </span>
+                                                    <CallBadge appt={appt} />
                                                 </div>
                                             </div>
                                         </div>
                                         {/* Actions */}
                                         <div className="flex flex-col gap-1">
+                                            {appt.phone && appt.callStatus !== 'calling' && (
+                                                <button onClick={(e) => { e.stopPropagation(); requestCall(appt); }} title="Chiama il cliente (AI)" className={`p-1 rounded ${appt.callStatus === 'called' ? 'text-emerald-500 hover:bg-emerald-50' : 'text-emerald-600 hover:bg-emerald-100 bg-emerald-50'}`}><PhoneIcon/></button>
+                                            )}
+                                            <button onClick={(e) => { e.stopPropagation(); openEditModal(appt); }} title="Modifica" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
                                             <button onClick={(e) => { e.stopPropagation(); handleStatusChange(appt.id, 'standby'); }} title="Metti in Stand-by" className="p-1 hover:bg-slate-200 rounded text-slate-400"><PauseIcon/></button>
                                             <button onClick={(e) => { e.stopPropagation(); handleStatusChange(appt.id, 'pending'); }} title="Torna in Attesa" className="p-1 hover:bg-orange-100 rounded text-orange-400"><ClockIcon/></button>
                                         </div>
@@ -855,11 +976,15 @@ function App() {
                                  <div>
                                      <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
                                      <p className="text-xs text-slate-400">{appt.address}</p>
+                                     {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
+                                     {appt.notes && <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-2">{appt.notes}</p>}
+                                     <div className="mt-1"><CallBadge appt={appt} /></div>
                                  </div>
                                  <div className="flex flex-col gap-1">
                                     <button onClick={() => handleStatusChange(appt.id, 'confirmed')} title="Forza Conferma Oggi" className="text-xs bg-blue-100 text-blue-600 px-1 py-0.5 rounded font-bold hover:bg-blue-200">
                                         + OGGI
                                     </button>
+                                    <button onClick={() => openEditModal(appt)} title="Modifica" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
                                     <button onClick={() => handleStatusChange(appt.id, 'standby')} className="p-1 hover:bg-slate-100 rounded text-slate-400"><PauseIcon/></button>
                                     <button onClick={() => handleRemove(appt.id)} className="p-1 hover:bg-red-50 rounded text-red-300"><TrashIcon/></button>
                                  </div>
@@ -888,8 +1013,10 @@ function App() {
                                  <div>
                                      <h4 className="text-sm font-semibold text-slate-600">{appt.title}</h4>
                                      <p className="text-xs text-slate-400">{appt.address}</p>
+                                     {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
                                  </div>
                                  <div className="flex gap-2">
+                                     <button onClick={() => openEditModal(appt)} title="Modifica" className="text-indigo-400 hover:bg-indigo-50 p-1 rounded"><PencilIcon/></button>
                                      <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Riattiva" className="text-green-600 hover:bg-green-50 p-1 rounded"><ClockIcon/></button>
                                      <button onClick={() => handleRemove(appt.id)} className="text-red-400 hover:bg-red-50 p-1 rounded"><TrashIcon/></button>
                                  </div>
@@ -904,13 +1031,17 @@ function App() {
 
         {/* Map Area */}
         <main className="flex-1 relative bg-slate-200 h-[50vh] md:h-auto">
-          <MapComponent 
-            appointments={visibleAppointments} 
-            center={mapCenter} 
-            routeSummary={viewMode === 'day' ? routeSummary : null} 
-            baseLocation={baseLocation} 
+          <MapComponent
+            appointments={visibleAppointments}
+            center={mapCenter}
+            routeSummary={viewMode === 'day' ? routeSummary : null}
+            baseLocation={baseLocation}
             onSelectAppointment={setSelectedAppointmentId}
             onStatusChange={handleStatusChange}
+            onRequestCall={(id) => {
+              const appt = allAppointments.find(a => a.id === id);
+              if (appt) requestCall(appt);
+            }}
           />
           
           <div className="absolute bottom-6 left-6 z-[400] bg-white/90 backdrop-blur px-4 py-2 rounded-lg shadow-lg border border-slate-200 hidden md:block">

@@ -10,17 +10,22 @@ export type CallStatus = 'calling' | 'called' | 'failed';
 
 // Outcome of the AI confirmation call, extracted from Retell post-call analysis
 export type CallOutcomeResult =
-  | 'confermato'      // client confirmed the appointment
-  | 'rifiutato'       // client declined
-  | 'riprogrammare'   // client asked for a different date/time
-  | 'non_risposto'    // no answer / voicemail
-  | 'sconosciuto';    // call ended but outcome not classifiable
+  | 'confermato'       // client confirmed the appointment
+  | 'rifiutato'        // client declined
+  | 'riprogrammare'    // client asked for a different date/time
+  | 'altro_referente'  // client indicated another person to contact (geometra, agente...)
+  | 'non_risposto'     // no answer / voicemail
+  | 'sconosciuto';     // call ended but outcome not classifiable
 
 export interface CallOutcome {
   result: CallOutcomeResult;
   requestedDate?: string;  // free text from the client (e.g. "lunedì prossimo")
   requestedTime?: string;  // free text (e.g. "dopo le 15")
   clientNotes?: string;
+  // Referral: the correct person to contact, as reported by the client
+  newContactName?: string;
+  newContactPhone?: string;
+  newContactRole?: string; // es. "geometra di cantiere", "agente immobiliare"
   summary?: string;        // Retell call_summary
   sentiment?: string;      // Positive | Negative | Neutral | Unknown
   receivedAt: string;      // ISO timestamp
@@ -28,7 +33,9 @@ export interface CallOutcome {
 
 export interface Appointment {
   id: string;
-  address: string;
+  address: string;       // indirizzo completo geocodificato (display name)
+  shortAddress?: string; // via + civico originali (per il gestionale)
+  comune?: string;       // comune originale (per il gestionale)
   title: string;
   coords: Coordinates;
   sequenceOrder?: number;
@@ -50,6 +57,10 @@ export interface Appointment {
   // Pratica/perizia linkage (MISI / Prelios workflow)
   periziaCode?: string;     // Codice pratica/perizia (e.g. "826361")
   project?: string;         // Progetto/commessa (e.g. "01-09546 (INTESA SANPAOLO)")
+
+  // Referral: when the person to call is NOT the client (intestatario)
+  contactPerson?: string;   // chi va contattato (es. "Geom. Bianchi - geometra di cantiere")
+  referredBy?: string;      // chi lo ha indicato (di solito l'intestatario)
 
   // AI call tracking
   callStatus?: CallStatus;

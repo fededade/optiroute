@@ -4,6 +4,7 @@ import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
 import { startConfirmationCall, fetchCallOutcome } from './services/callService';
+import { syncConfirmedToGestionale, getSyncableAppointments, getSyncEnvName } from './services/syncService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
 import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings } from './services/storageService';
 import MapComponent from './Components/MapComponent';
@@ -101,6 +102,8 @@ type ViewMode = 'day' | 'week' | 'month';
 interface ImportRow {
   title: string;
   fullAddress: string;
+  shortAddress?: string; // via + civico (per il gestionale)
+  comune?: string;
   phone?: string;
   notes?: string;
   codice?: string;   // codice pratica/perizia (per merge e link Prelios)
@@ -156,6 +159,10 @@ function App() {
   // AI call modal (Retell)
   const [callTarget, setCallTarget] = useState<Appointment | null>(null);
   const [isBatchCalling, setIsBatchCalling] = useState(false);
+
+  // Sync verso il gestionale Effetre
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
 
   // Filters
   const [filters, setFilters] = useState({
@@ -416,22 +423,53 @@ function App() {
     return () => clearInterval(interval);
   }, [allAppointments]);
 
+  // --- Sync verso il gestionale: solo sopralluoghi CONFERMATI ---
+  const handleSyncGestionale = useCallback(async (automatic = false) => {
+    const syncable = getSyncableAppointments(allAppointmentsRef.current);
+    if (syncable.length === 0) {
+      if (!automatic) alert("Nessun sopralluogo confermato da sincronizzare.\n(Vengono inviati solo i confermati dal cliente o senza telefono, con orario calcolato.)");
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      const result = await syncConfirmedToGestionale(allAppointmentsRef.current);
+      const when = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+      setLastSyncInfo(`${when}: ${result.sent} inviate (${result.envName})${result.failed ? `, ${result.failed} errori` : ''}`);
+      if (result.failed > 0) console.warn('Sync gestionale, errori:', result.errors);
+      if (!automatic && result.failed > 0) {
+        alert(`Sync completata con errori: ${result.sent} inviate, ${result.failed} fallite.\n${result.errors.slice(0, 3).join('\n')}`);
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  }, []);
+
+  // Sync automatica ogni ora (il gestionale importa a sua volta ogni ora)
+  useEffect(() => {
+    const interval = setInterval(() => { handleSyncGestionale(true); }, 60 * 60000);
+    return () => clearInterval(interval);
+  }, [handleSyncGestionale]);
+
   // --- Applica esiti: riorganizza il giro in base alle risposte dei clienti ---
   const handleApplyOutcomes = () => {
     const dayAppts = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate && a.callOutcome);
     const refused = dayAppts.filter(a => a.callOutcome!.result === 'rifiutato');
     const toReschedule = dayAppts.filter(a => a.callOutcome!.result === 'riprogrammare');
+    const referrals = dayAppts.filter(a => a.callOutcome!.result === 'altro_referente' && a.callOutcome!.newContactPhone);
+    const referralsNoPhone = dayAppts.filter(a => a.callOutcome!.result === 'altro_referente' && !a.callOutcome!.newContactPhone);
 
-    if (refused.length === 0 && toReschedule.length === 0) {
-      alert("Nessuna modifica da applicare: nessun rifiuto né richiesta di spostamento tra gli esiti raccolti.");
+    if (refused.length === 0 && toReschedule.length === 0 && referrals.length === 0) {
+      alert("Nessuna modifica da applicare: nessun rifiuto, spostamento o nuovo referente tra gli esiti raccolti."
+        + (referralsNoPhone.length ? `\n\nAttenzione: ${referralsNoPhone.length} clienti hanno indicato un'altra persona ma l'AI non ha raccolto il numero — gestisci a mano (matita).` : ''));
       return;
     }
 
     const proceed = window.confirm(
       `Applicare gli esiti al giro del ${currentDate}?\n\n` +
       `• ${refused.length} rifiutati → Stand-by\n` +
-      `• ${toReschedule.length} da riprogrammare → Stand-by (con la richiesta del cliente in nota)\n\n` +
-      `Dopo, premi "Ottimizza" per ricalcolare sequenza e orari del giro con i soli confermati.`
+      `• ${toReschedule.length} da riprogrammare → Stand-by (con la richiesta del cliente in nota)\n` +
+      `• ${referrals.length} con nuovo referente → aggiorno telefono e li rimetto in coda "Chiama tutti" (verranno richiamati presentandosi per conto dell'intestatario)\n\n` +
+      `Dopo, premi "Ottimizza" se serve ricalcolare, poi "Chiama tutti" per i nuovi referenti.`
     );
     if (!proceed) return;
 
@@ -451,6 +489,20 @@ function App() {
           ...a, status: 'standby' as const, date: undefined, sequenceOrder: undefined,
           startTime: undefined, endTime: undefined,
           notes: appendNote(a.notes, `Da riprogrammare — richiesta cliente: ${req || 'altro giorno/orario'}`),
+        };
+      }
+      if (a.callOutcome.result === 'altro_referente' && a.callOutcome.newContactPhone) {
+        // Il cliente ha indicato un'altra persona: aggiorna la scheda col
+        // nuovo numero e rimetti in coda chiamate (script "per conto di...")
+        const who = [a.callOutcome.newContactName, a.callOutcome.newContactRole ? `(${a.callOutcome.newContactRole})` : '']
+          .filter(Boolean).join(' ');
+        return {
+          ...a,
+          phone: a.callOutcome.newContactPhone,
+          contactPerson: who || a.callOutcome.newContactPhone,
+          referredBy: a.referredBy || a.title,
+          notes: appendNote(a.notes, `Nuovo referente indicato da ${a.title}: ${who || '?'} ${a.callOutcome.newContactPhone}`),
+          callStatus: undefined, callId: undefined, calledAt: undefined, callOutcome: undefined,
         };
       }
       return a;
@@ -481,6 +533,8 @@ function App() {
         importRows = validRows.map(row => ({
           title: row.Intestatario || `${row.Indirizzo} ${row['N.Civ.'] || ''}`.trim(),
           fullAddress: `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim(),
+          shortAddress: `${row.Indirizzo} ${row['N.Civ.'] || ''}`.trim(),
+          comune: row.Comune ? `${row.Comune}`.trim() : undefined,
           phone: extractPhoneFromRow(row),
           notes: row.Note ? `${row.Note}`.trim() : undefined,
           codice: extractCodiceFromRow(row),
@@ -491,6 +545,8 @@ function App() {
         importRows = selected.map(p => ({
           title: p.intestatario || `${p.via} ${p.civico}`.trim(),
           fullAddress: `${p.via} ${p.civico}, ${p.comune}, ${p.provincia}`.trim(),
+          shortAddress: `${p.via} ${p.civico}`.trim(),
+          comune: p.comune,
           notes: p.noteGestore || undefined,
           codice: p.codice,
           project: p.progetto || undefined,
@@ -553,6 +609,8 @@ function App() {
             newAppointments.push({
               id: Date.now() + Math.random().toString(),
               address: result.displayName,
+              shortAddress: row.shortAddress,
+              comune: row.comune,
               title: row.title,
               phone: row.phone,
               notes: row.notes,
@@ -922,6 +980,10 @@ function App() {
         const req = [o.requestedDate, o.requestedTime].filter(Boolean).join(' ');
         return <span title={tooltip} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">🔁 Chiede: {req || 'altro giorno/orario'}</span>;
       }
+      case 'altro_referente': {
+        const who = [o.newContactName, o.newContactRole ? `(${o.newContactRole})` : '', o.newContactPhone].filter(Boolean).join(' ');
+        return <span title={tooltip} className="text-[10px] font-bold text-violet-700 bg-violet-50 border border-violet-200 px-1 rounded">👤 Da contattare: {who || 'altra persona (numero mancante)'}</span>;
+      }
       case 'non_risposto':
         return <span title={tooltip} className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">📵 Non risponde</span>;
       default:
@@ -1162,13 +1224,26 @@ function App() {
               </div>
 
               {/* Tasto Invia a N8N */}
-              <button 
-                onClick={handleSendToN8n} 
+              <button
+                onClick={handleSendToN8n}
                 disabled={isSendingToN8n}
                 className="col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-slate-800 hover:bg-slate-900 border-slate-900 transition-colors"
               >
                  {isSendingToN8n ? 'Invio in corso...' : <><PaperAirplaneIcon /> Invia Report Email</>}
               </button>
+
+              {/* Sync gestionale (automatica ogni ora + manuale) */}
+              <button
+                onClick={() => handleSyncGestionale(false)}
+                disabled={isSyncing}
+                title="Invia i sopralluoghi CONFERMATI al gestionale Effetre (sync automatica ogni ora)"
+                className="col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-emerald-700 border-emerald-300 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-60 transition-colors"
+              >
+                {isSyncing ? 'Sincronizzazione...' : `🔄 Sync gestionale (${getSyncableAppointments(allAppointments).length} confermate — ${getSyncEnvName()})`}
+              </button>
+              {lastSyncInfo && (
+                <p className="col-span-2 text-[10px] text-slate-400 text-center -mt-1">Ultima sync {lastSyncInfo} · auto ogni ora</p>
+              )}
           </div>
 
           {/* List Content */}

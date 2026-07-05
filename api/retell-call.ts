@@ -57,7 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const { phone, clientName, date, startTime, endTime, address, notes, periziaCode, project } = req.body || {};
+  const { phone, clientName, date, startTime, endTime, address, notes, periziaCode, project, contactPerson, referredBy } = req.body || {};
 
   if (!phone) {
     return res.status(400).json({ error: 'Numero di telefono mancante.' });
@@ -74,15 +74,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Ready-to-speak Italian script: the Retell agent prompt can simply
   // reference {{call_script}}, or use the granular variables below.
   const isSopralluogo = !!periziaCode;
+  const isReferral = !!contactPerson; // stiamo chiamando la persona indicata dal cliente
+
+  const chiTelefono = isReferral ? contactPerson : (clientName || 'un cliente');
+
   const callScript = [
     `Sei l'assistente telefonico di ${COMPANY_NAME}.`,
-    isSopralluogo
-      ? `Stai chiamando ${clientName || 'un cliente'} per confermare il sopralluogo del tecnico incaricato della perizia immobiliare (pratica ${periziaCode}).`
-      : `Stai chiamando ${clientName || 'un cliente'} per confermare un appuntamento.`,
+    isReferral
+      ? `Stai chiamando ${chiTelefono}, che ${referredBy || 'il cliente'} (intestatario della pratica) ha indicato come persona di riferimento per il sopralluogo dell'immobile${periziaCode ? ` (pratica ${periziaCode})` : ''}. All'inizio della chiamata PRESENTATI e SPIEGA per conto di chi chiami: sei l'assistente di ${COMPANY_NAME} e chiami su indicazione di ${referredBy || 'l\'intestatario della pratica'}.`
+      : (isSopralluogo
+          ? `Stai chiamando ${chiTelefono} per confermare il sopralluogo del tecnico incaricato della perizia immobiliare (pratica ${periziaCode}).`
+          : `Stai chiamando ${chiTelefono} per confermare un appuntamento.`),
     `Dettagli dell'appuntamento:`,
     dateSpoken ? `- Data: ${dateSpoken}` : null,
     startTime ? `- Orario di arrivo previsto: ${startTime}${endTime ? ` (fine prevista ${endTime})` : ''}` : `- Orario: da definire, comunica che verrà confermato a breve`,
     address ? `- Indirizzo: ${address}` : null,
+    (isReferral && clientName) ? `- Intestatario della pratica: ${clientName}` : null,
     notes ? `- Note: ${notes}` : null,
     ``,
     `Istruzioni: saluta cortesemente, presentati a nome di ${COMPANY_NAME}, verifica di parlare con la persona giusta, ` +
@@ -90,6 +97,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? `spiega che si tratta del sopralluogo tecnico necessario per la perizia dell'immobile, comunica data, orario e indirizzo, e chiedi conferma della presenza. `
       : `comunica data, orario e luogo dell'appuntamento, chiedi conferma della presenza. `) +
     `Se il cliente chiede di spostare l'appuntamento, prendi nota di giorno e orario preferiti e comunica che verrà ricontattato per conferma della nuova data. ` +
+    `IMPORTANTE: se l'interlocutore dice che NON è lui la persona da contattare per il sopralluogo (per esempio va contattato il geometra di cantiere, l'agente immobiliare, un familiare con le chiavi), DEVI farti dare: nome della persona corretta, numero di telefono e ruolo. Ripeti il numero per conferma e comunica che quella persona verrà ricontattata a breve. ` +
     `Ringrazia e saluta prima di chiudere la chiamata.`,
   ].filter(line => line !== null).join('\n');
 
@@ -107,6 +115,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       appointment_notes: notes || '',
       pratica_codice: periziaCode || '',
       progetto: project || '',
+      contact_person: contactPerson || '',
+      referred_by: referredBy || '',
       call_script: callScript,
     },
     metadata: {

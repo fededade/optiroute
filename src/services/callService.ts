@@ -27,6 +27,8 @@ export const startConfirmationCall = async (appointment: Appointment): Promise<C
         notes: appointment.notes,
         periziaCode: appointment.periziaCode,
         project: appointment.project,
+        contactPerson: appointment.contactPerson,
+        referredBy: appointment.referredBy,
       }),
     });
 
@@ -77,6 +79,9 @@ export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll>
         requestedDate: o.requestedDate,
         requestedTime: o.requestedTime,
         clientNotes: o.clientNotes,
+        newContactName: o.newContactName,
+        newContactPhone: o.newContactPhone,
+        newContactRole: o.newContactRole,
         summary: o.summary,
         sentiment: o.sentiment,
         receivedAt: new Date().toISOString(),

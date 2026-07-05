@@ -12,7 +12,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 const RETELL_API_KEY = process.env.RETELL_API_KEY || '';
 
-type OutcomeResult = 'confermato' | 'rifiutato' | 'riprogrammare' | 'non_risposto' | 'sconosciuto';
+type OutcomeResult = 'confermato' | 'rifiutato' | 'riprogrammare' | 'altro_referente' | 'non_risposto' | 'sconosciuto';
 
 const pickString = (obj: Record<string, unknown> | undefined, keys: string[]): string | undefined => {
   if (!obj) return undefined;
@@ -28,19 +28,28 @@ const pickString = (obj: Record<string, unknown> | undefined, keys: string[]): s
   return undefined;
 };
 
-const classifyOutcome = (raw: string | undefined, inVoicemail: boolean, disconnectionReason: string): OutcomeResult => {
+const classifyOutcome = (
+  raw: string | undefined,
+  inVoicemail: boolean,
+  disconnectionReason: string,
+  hasNewContact: boolean,
+): OutcomeResult => {
   if (raw) {
     const v = raw.toLowerCase();
     // ORDINE IMPORTANTE: l'esito arriva come testo libero dell'LLM, quindi i
     // casi negativi/di spostamento vanno valutati PRIMA del match su "conferm"
     // ("non confermato", "rifiuta di confermare", "da riconfermare con nuova
     // data" NON sono conferme).
+    if (v.includes('altro_referente') || v.includes('contattare_altro') || v.includes('altro referente') || v.includes('altra persona') || v.includes('deleg')) return 'altro_referente';
     if (v.includes('riprogramm') || v.includes('sposta') || v.includes('cambi') || v.includes('altro orario') || v.includes('altra data') || v.includes('nuova data') || v.includes('nuovo orario') || v.includes('reschedul')) return 'riprogrammare';
     if (v.includes('rifiut') || v.includes('annull') || v.includes('disdet') || v.includes('declin') || v.includes('non vuole') || v.includes('non interessat')) return 'rifiutato';
     if (v.includes('non risp') || v.includes('no_answer') || v.includes('segreteria') || v.includes('voicemail') || v.includes('irraggiungibile') || v.includes('occupato')) return 'non_risposto';
     if (/non\s+(ha\s+|è\s+stato\s+|e'\s+stato\s+)?conferm/.test(v)) return 'sconosciuto'; // ambiguo: lo valuta l'operatore
     if (v.includes('conferm')) return 'confermato';
   }
+  // Nessun esito esplicito ma l'agente ha raccolto un nuovo contatto:
+  // il cliente ha indicato un'altra persona da chiamare
+  if (hasNewContact) return 'altro_referente';
   if (inVoicemail || disconnectionReason === 'voicemail_reached') return 'non_risposto';
   if (disconnectionReason === 'dial_no_answer' || disconnectionReason === 'dial_busy' || disconnectionReason === 'dial_failed') return 'non_risposto';
   return 'sconosciuto';
@@ -97,7 +106,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const rawEsito = pickString(custom, ['esito_appuntamento', 'esito', 'appointment_outcome', 'outcome']);
-    const result = classifyOutcome(rawEsito, inVoicemail, disconnectionReason);
+    const newContactName = pickString(custom, ['nuovo_referente_nome', 'referente_nome', 'new_contact_name']);
+    const newContactPhone = pickString(custom, ['nuovo_referente_telefono', 'referente_telefono', 'new_contact_phone']);
+    const newContactRole = pickString(custom, ['nuovo_referente_ruolo', 'referente_ruolo', 'new_contact_role']);
+    const result = classifyOutcome(rawEsito, inVoicemail, disconnectionReason, !!newContactPhone);
 
     return res.status(200).json({
       pending: false,
@@ -108,6 +120,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         requestedDate: pickString(custom, ['nuova_data_richiesta', 'data_richiesta', 'requested_date']),
         requestedTime: pickString(custom, ['nuovo_orario_richiesto', 'orario_richiesto', 'requested_time']),
         clientNotes: pickString(custom, ['note_cliente', 'note', 'client_notes']),
+        newContactName,
+        newContactPhone,
+        newContactRole,
         summary: typeof analysis.call_summary === 'string' ? analysis.call_summary : undefined,
         sentiment: typeof analysis.user_sentiment === 'string' ? analysis.user_sentiment : undefined,
       },

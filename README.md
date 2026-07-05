@@ -43,10 +43,15 @@ Perché OptiRoute possa leggere l'esito della chiamata (confermato / rifiutato /
 
 | Nome campo | Tipo | Descrizione da inserire |
 |---|---|---|
-| `esito_appuntamento` | enum/testo | Uno tra: `confermato`, `rifiutato`, `riprogrammare`, `non_risposto` |
+| `esito_appuntamento` | enum/testo | Uno tra: `confermato`, `rifiutato`, `riprogrammare`, `contattare_altro`, `non_risposto` |
 | `nuova_data_richiesta` | testo | Se il cliente chiede di spostare: giorno richiesto (testo libero) |
 | `nuovo_orario_richiesto` | testo | Se il cliente chiede di spostare: orario richiesto (testo libero) |
+| `nuovo_referente_nome` | testo | Se va contattata un'altra persona: il suo nome |
+| `nuovo_referente_telefono` | testo | Se va contattata un'altra persona: il suo numero (l'agente DEVE chiederlo e ripeterlo per conferma) |
+| `nuovo_referente_ruolo` | testo | Ruolo della persona (geometra di cantiere, agente immobiliare, familiare con le chiavi...) |
 | `note_cliente` | testo | Eventuali note/richieste particolari del cliente |
+
+**Referente alternativo**: se il cliente indica un'altra persona da contattare, "Applica esiti al giro" aggiorna la scheda (nuovo telefono + referente) e rimette l'appuntamento in coda "Chiama tutti": la seconda chiamata usa uno script dedicato in cui l'AI si presenta spiegando che chiama per conto dell'azienda **su indicazione dell'intestatario**.
 
 OptiRoute interroga `GET /api/call-status` (che a sua volta chiama Retell `get-call`) ogni 15 secondi finché l'analisi non è pronta, poi mostra il badge esito sulla card e abilita **"Applica esiti al giro"**.
 
@@ -56,8 +61,15 @@ OptiRoute interroga `GET /api/call-status` (che a sua volta chiama Retell `get-c
 2. (Opzionale) Arricchisci i telefoni con il **bridge Prelios** (`prelios-bridge/`): produce un Excel con la colonna `Telefono` che, re-importato, **aggiorna** le pratiche esistenti per codice (nessun duplicato).
 3. **Ottimizza** il giro del giorno → sequenza e orari.
 4. **Chiama tutti**: l'AI chiama in sequenza i clienti del giro; gli esiti arrivano automaticamente (badge sulle card).
-5. **Applica esiti al giro**: i rifiutati e chi chiede un altro giorno escono dal giro (Stand-by con nota), poi ri-ottimizza con i soli confermati.
-6. **Ok finale** dell'operatore → **Esporta Excel** (include codice pratica, progetto, esiti) per il caricamento nel database ufficiale.
+5. **Applica esiti al giro**: i rifiutati e chi chiede un altro giorno escono dal giro (Stand-by con nota); chi ha indicato un altro referente viene aggiornato (nuovo numero) e rimesso in coda chiamate. Poi ri-ottimizza con i soli confermati.
+6. **Ok finale** dell'operatore → sync automatica al gestionale (sotto) e/o **Esporta Excel**.
+
+## Sync automatica verso il Gestionale Effetre
+
+- OptiRoute invia **solo i sopralluoghi confermati** (esito cliente `confermato`, oppure senza telefono con orario calcolato dall'operatore) alla collection Firestore `optiroute_sync` del gestionale. Esclusi: in attesa, stand-by, rifiutati, da riprogrammare, esiti mancanti.
+- La sync parte **automaticamente ogni ora** (app aperta) e col pulsante **"🔄 Sync gestionale"**; i re-invii aggiornano lo stesso documento (chiave = codice pratica), niente duplicati.
+- Il gestionale (branch `staging` di Effetre-Working-Platform) importa la collection ogni ora e crea/aggiorna le pratiche nel proprio formato, marcando i documenti come `importato`.
+- Ambiente: di default si scrive sul Firestore di **collaudo** (`gestionale-effetre-staging`). Per la produzione: variabile `VITE_SYNC_ENV=production` su Vercel.
 
 ## Altre variabili d'ambiente
 

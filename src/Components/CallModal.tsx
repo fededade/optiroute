@@ -50,6 +50,12 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, onClose, onCallStart
 
             <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm space-y-1.5 mb-4">
               <p><span className="font-bold text-slate-500">Cliente:</span> {appointment.title}</p>
+              {appointment.contactPerson && (
+                <p className="text-violet-700">
+                  <span className="font-bold text-slate-500">Da contattare:</span> {appointment.contactPerson}
+                  {appointment.referredBy && <span className="text-xs text-slate-500"> (indicato da {appointment.referredBy} — l'AI si presenterà per suo conto)</span>}
+                </p>
+              )}
               <p><span className="font-bold text-slate-500">Telefono:</span> {appointment.phone}</p>
               <p><span className="font-bold text-slate-500">Data:</span> {appointment.date || 'Da definire'}</p>
               <p>

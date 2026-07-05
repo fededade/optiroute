@@ -116,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--user-id", default=DEFAULT_USER_ID,
                         help="User ID Prelios per l'apertura perizia "
                              "(default: %(default)s)")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Lavora solo le prime N pratiche (0 = tutte). "
+                             "Utile per il primo test su Prelios.")
     args = parser.parse_args(argv)
 
     pratiche = load_pratiche(args.elenco)
@@ -123,6 +126,10 @@ def main(argv: list[str] | None = None) -> int:
     if not pratiche:
         print("Niente da fare: nessuna pratica FULL - Acquisto nell'elenco.")
         return 1
+
+    if args.limit and args.limit > 0:
+        pratiche = pratiche[:args.limit]
+        print(f"--limit {args.limit}: lavoro solo le prime {len(pratiche)} pratiche.")
 
     righe: list[list[str]] = []
 

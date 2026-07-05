@@ -108,3 +108,7 @@ python test_excel_pratiche.py
 Test puri (niente pytest, niente pipeline, nessun dato reale): filtro
 FULL - Acquisto, estrazione campi, euristica posizionale senza header,
 parsing con header, riferimento gestore, lettura TSV senza openpyxl.
+
+## Strumento diagnostico
+
+`dump_perizia_fields.py` (da copiare accanto a run_giro.py nel progetto MISI): apre una perizia e produce un JSON con pagine di menu, tutti i campi form (id/etichetta/valore) e i candidati telefono. Uso: `python dump_perizia_fields.py 826361 [--page "NomePagina"]`. Il JSON serve a finalizzare i selettori di t05_extract_contacts.

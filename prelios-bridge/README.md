@@ -112,3 +112,17 @@ parsing con header, riferimento gestore, lettura TSV senza openpyxl.
 ## Strumento diagnostico
 
 `dump_perizia_fields.py` (da copiare accanto a run_giro.py nel progetto MISI): apre una perizia e produce un JSON con pagine di menu, tutti i campi form (id/etichetta/valore) e i candidati telefono. Uso: `python dump_perizia_fields.py 826361 [--page "NomePagina"]`. Il JSON serve a finalizzare i selettori di t05_extract_contacts.
+
+## Estrazione telefono: FINALIZZATA
+
+`t05_extract_contacts.py` legge il telefono del cliente dalla pagina **Anagrafica Perizia** (quella su cui atterra l'apertura) in questo ordine:
+
+1. **`Imm_Descrizione`** — "Note del Gestore Intesa" (pattern `Nome - 0039333... - istruzioni`): cellulare preferito
+2. Campo **"Telefono Mutuatario"** (cercato per etichetta)
+3. **`Imm_Note`** — "Note interne per il perito"
+4. Campo **"Telefono Richiedente"**
+5. Scansione generica della pagina (ultima spiaggia)
+
+I campi **NTM** (Telefono NTM / Riferimento NTM) sono esclusi: sono referenti tecnici, non il cliente. I numeri sono normalizzati a `+39...` e la nota gestore (referente + istruzioni sopralluogo) finisce nella colonna Note dell'output, cosi' arriva fino all'operatore AI in chiamata.
+
+**File aggiuntivo da copiare**: `contact_parse.py` va nella ROOT del progetto MISI (accanto a run_giro.py); `t05_extract_contacts.py` in `tools/`. Test: `python3 test_contact_parse.py`.

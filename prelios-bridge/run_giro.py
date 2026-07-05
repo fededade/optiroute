@@ -156,11 +156,13 @@ def _format_codice(codice: str) -> str:
     return f"{codice[:-3]}.{codice[-3:]}" if len(codice) > 3 else codice
 
 
-def processa_pratica(ctx, tools: dict, pratica: Pratica) -> tuple[str, str]:
+def processa_pratica(ctx, tools: dict, pratica: Pratica) -> tuple[str, str, str]:
     """Lavora una singola pratica: ricerca, apertura, estrazione telefono.
 
     Returns:
-        (telefono, esito) — telefono '' se non trovato; esito 'OK' o motivo KO.
+        (telefono, esito, nota_contatto) — telefono '' se non trovato;
+        esito 'OK' o motivo KO; nota_contatto = nota gestore Prelios con
+        referente/istruzioni per il sopralluogo (utile all'operatore AI).
     """
     # Imposta il codice e azzera i flag della pratica precedente
     ctx.data.perizia_code = pratica.codice
@@ -168,27 +170,34 @@ def processa_pratica(ctx, tools: dict, pratica: Pratica) -> tuple[str, str]:
     ctx.data.perizia_found = False
     ctx.data.perizia_open = False
     ctx.data.client_phone = ""
+    ctx.data.contact_name = ""
+    ctx.data.contact_note = ""
 
     for tool_cls in (tools["SearchPeriziaTool"], tools["OpenPeriziaTool"],
                      tools["ExtractContactsTool"]):
         ok, msg = _run_tool(ctx, tool_cls)
         if not ok:
-            return "", f"KO {msg}"
+            return "", f"KO {msg}", ""
 
     telefono = getattr(ctx.data, "client_phone", "") or ""
+    nota_contatto = (getattr(ctx.data, "contact_note", "") or "").strip()
     esito = "OK" if telefono else "OK (telefono non trovato)"
-    return telefono, esito
+    return telefono, esito, nota_contatto
 
 
 # === OUTPUT EXCEL ===
 
-def _componi_note(pratica: Pratica) -> str:
-    """Note per OptiRoute: progetto + eventuale riferimento gestore."""
+def _componi_note(pratica: Pratica, nota_contatto: str = "") -> str:
+    """Note per OptiRoute: progetto + riferimento gestore + nota contatto
+    Prelios (referente e istruzioni sopralluogo, letta dalla perizia)."""
     parti = [p for p in (pratica.progetto, pratica.note_gestore) if p]
+    if nota_contatto and all(nota_contatto not in p for p in parti):
+        parti.append(f"Contatto Prelios: {nota_contatto[:200]}")
     return " | ".join(parti)
 
 
-def _riga_output(pratica: Pratica, telefono: str, esito: str) -> list[str]:
+def _riga_output(pratica: Pratica, telefono: str, esito: str,
+                 nota_contatto: str = "") -> list[str]:
     return [
         pratica.intestatario,
         pratica.via,
@@ -196,7 +205,7 @@ def _riga_output(pratica: Pratica, telefono: str, esito: str) -> list[str]:
         pratica.comune,
         pratica.provincia,
         telefono,
-        _componi_note(pratica),
+        _componi_note(pratica, nota_contatto),
         pratica.codice,
         esito,
     ]
@@ -284,12 +293,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{i}/{len(pratiche)}] Pratica {pratica.codice} "
                   f"({pratica.intestatario})...")
             try:
-                telefono, esito = processa_pratica(ctx, tools, pratica)
+                telefono, esito, nota_contatto = processa_pratica(ctx, tools, pratica)
             except Exception as e:  # noqa: BLE001 — il giro deve continuare
                 traceback.print_exc()
-                telefono, esito = "", f"ERRORE: {e}"
+                telefono, esito, nota_contatto = "", f"ERRORE: {e}", ""
             print(f"    -> {esito}" + (f" tel={telefono}" if telefono else ""))
-            righe.append(_riga_output(pratica, telefono, esito))
+            righe.append(_riga_output(pratica, telefono, esito, nota_contatto))
 
     # 3. Scrivi l'Excel per OptiRoute
     out = scrivi_output(Path(args.out), righe)

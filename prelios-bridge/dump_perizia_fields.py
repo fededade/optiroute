@@ -33,7 +33,7 @@ from run_giro import (  # riusa la stessa infrastruttura del giro
 )
 
 RE_PHONE = re.compile(
-    r"\b(?:\+39[\s.]?)?(?:3\d{2}(?:[\s./-]?\d{3}){2}\d?|0\d{1,3}[\s./-]?\d{5,8})\b"
+    r"\b(?:(?:\+|00)39[\s.]?)?(?:3\d{2}(?:[\s./-]?\d{3}){2}\d?|0\d{1,3}[\s./-]?\d{5,8})\b"
 )
 
 # JS: elenco delle pagine di menu (input nascosti con parametri XmlForm)

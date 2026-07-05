@@ -54,7 +54,7 @@ export interface PraticaMisi {
 }
 
 const normalizeTipologia = (value: string): string =>
-  value.toUpperCase().replace(/\s+/g, ' ').trim();
+  value.toUpperCase().replace(/\s*-\s*/g, ' - ').replace(/\s+/g, ' ').trim();
 
 // Only "FULL - Acquisto" rows are relevant for the sopralluoghi tour
 export const isFullAcquisto = (tipologia: string): boolean =>

@@ -31,10 +31,15 @@ const pickString = (obj: Record<string, unknown> | undefined, keys: string[]): s
 const classifyOutcome = (raw: string | undefined, inVoicemail: boolean, disconnectionReason: string): OutcomeResult => {
   if (raw) {
     const v = raw.toLowerCase();
+    // ORDINE IMPORTANTE: l'esito arriva come testo libero dell'LLM, quindi i
+    // casi negativi/di spostamento vanno valutati PRIMA del match su "conferm"
+    // ("non confermato", "rifiuta di confermare", "da riconfermare con nuova
+    // data" NON sono conferme).
+    if (v.includes('riprogramm') || v.includes('sposta') || v.includes('cambi') || v.includes('altro orario') || v.includes('altra data') || v.includes('nuova data') || v.includes('nuovo orario') || v.includes('reschedul')) return 'riprogrammare';
+    if (v.includes('rifiut') || v.includes('annull') || v.includes('disdet') || v.includes('declin') || v.includes('non vuole') || v.includes('non interessat')) return 'rifiutato';
+    if (v.includes('non risp') || v.includes('no_answer') || v.includes('segreteria') || v.includes('voicemail') || v.includes('irraggiungibile') || v.includes('occupato')) return 'non_risposto';
+    if (/non\s+(ha\s+|è\s+stato\s+|e'\s+stato\s+)?conferm/.test(v)) return 'sconosciuto'; // ambiguo: lo valuta l'operatore
     if (v.includes('conferm')) return 'confermato';
-    if (v.includes('rifiut') || v.includes('annull') || v.includes('disdet') || v.includes('declin')) return 'rifiutato';
-    if (v.includes('riprogramm') || v.includes('sposta') || v.includes('cambi') || v.includes('altro orario') || v.includes('reschedul')) return 'riprogrammare';
-    if (v.includes('non risp') || v.includes('no_answer') || v.includes('segreteria') || v.includes('voicemail')) return 'non_risposto';
   }
   if (inVoicemail || disconnectionReason === 'voicemail_reached') return 'non_risposto';
   if (disconnectionReason === 'dial_no_answer' || disconnectionReason === 'dial_busy' || disconnectionReason === 'dial_failed') return 'non_risposto';
@@ -73,8 +78,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const callStatus: string = data.call_status || 'unknown';
 
-    // Call not finished yet: report pending, the client keeps polling
-    if (callStatus === 'registered' || callStatus === 'ongoing' || callStatus === 'not_connected') {
+    // Call not finished yet: report pending, the client keeps polling.
+    // NOTA: 'not_connected' è uno stato TERMINALE (occupato/non raggiungibile),
+    // quindi NON è pending: prosegue e viene classificato come non_risposto
+    // tramite disconnection_reason.
+    if (callStatus === 'registered' || callStatus === 'ongoing') {
       return res.status(200).json({ pending: true, callStatus });
     }
 

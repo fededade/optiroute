@@ -59,6 +59,11 @@ export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll>
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+      // Errori transitori (rate limit, gateway/serverless 5xx): continua il
+      // polling invece di congelare l'esito a "sconosciuto".
+      if (response.status === 429 || response.status >= 500) {
+        return { pending: true };
+      }
       return { pending: false, error: data?.error || `Errore server (${response.status})` };
     }
 

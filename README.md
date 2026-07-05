@@ -28,7 +28,7 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
 2. Crea un agente vocale (lingua: italiano) e associalo al numero per le chiamate outbound.
 3. Nel prompt dell'agente puoi usare le variabili dinamiche inviate da OptiRoute:
    - `{{call_script}}` — script completo già pronto (saluto, presentazione, dati appuntamento, richiesta di conferma). Il prompt minimo dell'agente può essere semplicemente: *"Segui queste istruzioni: {{call_script}}"*.
-   - Oppure le variabili singole: `{{company_name}}`, `{{client_name}}`, `{{appointment_date}}`, `{{appointment_time}}`, `{{appointment_time_spoken}}`, `{{appointment_end_time}}`, `{{appointment_address}}`, `{{appointment_notes}}`.
+   - Oppure le variabili singole: `{{company_name}}`, `{{client_name}}`, `{{appointment_date}}`, `{{appointment_time}}`, `{{appointment_time_spoken}}`, `{{appointment_end_time}}`, `{{appointment_address}}`, `{{appointment_notes}}`, `{{pratica_codice}}`, `{{progetto}}`.
 4. Su Vercel (Settings → Environment Variables) imposta:
    - `RETELL_API_KEY` — API key Retell
    - `RETELL_FROM_NUMBER` — numero in uscita in formato E.164 (es. `+39...`)
@@ -36,6 +36,28 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
    - `RETELL_COMPANY_NAME` — (opzionale) nome aziendale pronunciato dall'operatore
 
 I numeri italiani senza prefisso internazionale vengono normalizzati automaticamente a `+39`.
+
+### Esiti chiamata (Post-Call Analysis) — OBBLIGATORIO per la raccolta esiti
+
+Perché OptiRoute possa leggere l'esito della chiamata (confermato / rifiutato / da riprogrammare) e riorganizzare il giro, configura nell'agente Retell la sezione **Post-Call Analysis** con questi campi personalizzati:
+
+| Nome campo | Tipo | Descrizione da inserire |
+|---|---|---|
+| `esito_appuntamento` | enum/testo | Uno tra: `confermato`, `rifiutato`, `riprogrammare`, `non_risposto` |
+| `nuova_data_richiesta` | testo | Se il cliente chiede di spostare: giorno richiesto (testo libero) |
+| `nuovo_orario_richiesto` | testo | Se il cliente chiede di spostare: orario richiesto (testo libero) |
+| `note_cliente` | testo | Eventuali note/richieste particolari del cliente |
+
+OptiRoute interroga `GET /api/call-status` (che a sua volta chiama Retell `get-call`) ogni 15 secondi finché l'analisi non è pronta, poi mostra il badge esito sulla card e abilita **"Applica esiti al giro"**.
+
+## Flusso sopralluoghi (pratiche MISI / Prelios)
+
+1. **Importa Excel** con l'elenco pratiche grezzo (export MISI): vengono selezionate **solo** le pratiche `FULL - Acquisto`, geocodificate e messe "In Attesa" con codice pratica e progetto.
+2. (Opzionale) Arricchisci i telefoni con il **bridge Prelios** (`prelios-bridge/`): produce un Excel con la colonna `Telefono` che, re-importato, **aggiorna** le pratiche esistenti per codice (nessun duplicato).
+3. **Ottimizza** il giro del giorno → sequenza e orari.
+4. **Chiama tutti**: l'AI chiama in sequenza i clienti del giro; gli esiti arrivano automaticamente (badge sulle card).
+5. **Applica esiti al giro**: i rifiutati e chi chiede un altro giorno escono dal giro (Stand-by con nota), poi ri-ottimizza con i soli confermati.
+6. **Ok finale** dell'operatore → **Esporta Excel** (include codice pratica, progetto, esiti) per il caricamento nel database ufficiale.
 
 ## Altre variabili d'ambiente
 

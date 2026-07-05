@@ -1,0 +1,111 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+// Retrieves the outcome of a Retell call (post-call analysis) and maps it
+// to a normalized "esito" the frontend can act on.
+//
+// The Retell agent should have Post-Call Analysis configured with these
+// custom fields (see README):
+//   esito_appuntamento     -> "confermato" | "rifiutato" | "riprogrammare" | "non_risposto"
+//   nuova_data_richiesta   -> free text (only if riprogrammare)
+//   nuovo_orario_richiesto -> free text (only if riprogrammare)
+//   note_cliente           -> free text
+
+const RETELL_API_KEY = process.env.RETELL_API_KEY || '';
+
+type OutcomeResult = 'confermato' | 'rifiutato' | 'riprogrammare' | 'non_risposto' | 'sconosciuto';
+
+const pickString = (obj: Record<string, unknown> | undefined, keys: string[]): string | undefined => {
+  if (!obj) return undefined;
+  // Case/format-insensitive key lookup (esito_appuntamento vs "Esito Appuntamento")
+  const normalized: Record<string, unknown> = {};
+  for (const k of Object.keys(obj)) {
+    normalized[k.toLowerCase().replace(/[\s-]+/g, '_')] = obj[k];
+  }
+  for (const key of keys) {
+    const v = normalized[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+};
+
+const classifyOutcome = (raw: string | undefined, inVoicemail: boolean, disconnectionReason: string): OutcomeResult => {
+  if (raw) {
+    const v = raw.toLowerCase();
+    if (v.includes('conferm')) return 'confermato';
+    if (v.includes('rifiut') || v.includes('annull') || v.includes('disdet') || v.includes('declin')) return 'rifiutato';
+    if (v.includes('riprogramm') || v.includes('sposta') || v.includes('cambi') || v.includes('altro orario') || v.includes('reschedul')) return 'riprogrammare';
+    if (v.includes('non risp') || v.includes('no_answer') || v.includes('segreteria') || v.includes('voicemail')) return 'non_risposto';
+  }
+  if (inVoicemail || disconnectionReason === 'voicemail_reached') return 'non_risposto';
+  if (disconnectionReason === 'dial_no_answer' || disconnectionReason === 'dial_busy' || disconnectionReason === 'dial_failed') return 'non_risposto';
+  return 'sconosciuto';
+};
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
+  if (!RETELL_API_KEY) {
+    return res.status(500).json({ error: 'RETELL_API_KEY non configurata.' });
+  }
+
+  const callId = typeof req.query.callId === 'string' ? req.query.callId : '';
+  if (!callId || !/^[\w-]+$/.test(callId)) {
+    return res.status(400).json({ error: 'Parametro callId mancante o non valido.' });
+  }
+
+  try {
+    const response = await fetch(`https://api.retellai.com/v2/get-call/${encodeURIComponent(callId)}`, {
+      headers: { 'Authorization': `Bearer ${RETELL_API_KEY}` },
+    });
+
+    const data: any = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data?.message || data?.error || `Errore Retell (${response.status})`,
+      });
+    }
+
+    const callStatus: string = data.call_status || 'unknown';
+
+    // Call not finished yet: report pending, the client keeps polling
+    if (callStatus === 'registered' || callStatus === 'ongoing' || callStatus === 'not_connected') {
+      return res.status(200).json({ pending: true, callStatus });
+    }
+
+    const analysis = data.call_analysis || {};
+    const custom: Record<string, unknown> | undefined = analysis.custom_analysis_data;
+    const disconnectionReason: string = data.disconnection_reason || '';
+    const inVoicemail: boolean = !!data.in_voicemail;
+
+    // Analysis may lag a few seconds behind call end
+    if (callStatus === 'ended' && !analysis.call_summary && !custom) {
+      return res.status(200).json({ pending: true, callStatus, analysisPending: true });
+    }
+
+    const rawEsito = pickString(custom, ['esito_appuntamento', 'esito', 'appointment_outcome', 'outcome']);
+    const result = classifyOutcome(rawEsito, inVoicemail, disconnectionReason);
+
+    return res.status(200).json({
+      pending: false,
+      callStatus,
+      disconnectionReason,
+      outcome: {
+        result,
+        requestedDate: pickString(custom, ['nuova_data_richiesta', 'data_richiesta', 'requested_date']),
+        requestedTime: pickString(custom, ['nuovo_orario_richiesto', 'orario_richiesto', 'requested_time']),
+        clientNotes: pickString(custom, ['note_cliente', 'note', 'client_notes']),
+        summary: typeof analysis.call_summary === 'string' ? analysis.call_summary : undefined,
+        sentiment: typeof analysis.user_sentiment === 'string' ? analysis.user_sentiment : undefined,
+      },
+    });
+  } catch (error) {
+    console.error('call-status error:', error);
+    return res.status(500).json({ error: 'Impossibile recuperare lo stato della chiamata.' });
+  }
+}

@@ -57,7 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const { phone, clientName, date, startTime, endTime, address, notes } = req.body || {};
+  const { phone, clientName, date, startTime, endTime, address, notes, periziaCode, project } = req.body || {};
 
   if (!phone) {
     return res.status(400).json({ error: 'Numero di telefono mancante.' });
@@ -73,9 +73,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Ready-to-speak Italian script: the Retell agent prompt can simply
   // reference {{call_script}}, or use the granular variables below.
+  const isSopralluogo = !!periziaCode;
   const callScript = [
     `Sei l'assistente telefonico di ${COMPANY_NAME}.`,
-    `Stai chiamando ${clientName || 'un cliente'} per confermare un appuntamento.`,
+    isSopralluogo
+      ? `Stai chiamando ${clientName || 'un cliente'} per confermare il sopralluogo del tecnico incaricato della perizia immobiliare (pratica ${periziaCode}).`
+      : `Stai chiamando ${clientName || 'un cliente'} per confermare un appuntamento.`,
     `Dettagli dell'appuntamento:`,
     dateSpoken ? `- Data: ${dateSpoken}` : null,
     startTime ? `- Orario di arrivo previsto: ${startTime}${endTime ? ` (fine prevista ${endTime})` : ''}` : `- Orario: da definire, comunica che verrà confermato a breve`,
@@ -83,8 +86,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     notes ? `- Note: ${notes}` : null,
     ``,
     `Istruzioni: saluta cortesemente, presentati a nome di ${COMPANY_NAME}, verifica di parlare con la persona giusta, ` +
-    `comunica data, orario e luogo dell'appuntamento, chiedi conferma della presenza. ` +
-    `Se il cliente chiede di spostare l'appuntamento, prendi nota della preferenza e comunica che verrà ricontattato per la nuova data. ` +
+    (isSopralluogo
+      ? `spiega che si tratta del sopralluogo tecnico necessario per la perizia dell'immobile, comunica data, orario e indirizzo, e chiedi conferma della presenza. `
+      : `comunica data, orario e luogo dell'appuntamento, chiedi conferma della presenza. `) +
+    `Se il cliente chiede di spostare l'appuntamento, prendi nota di giorno e orario preferiti e comunica che verrà ricontattato per conferma della nuova data. ` +
     `Ringrazia e saluta prima di chiudere la chiamata.`,
   ].filter(line => line !== null).join('\n');
 
@@ -100,11 +105,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       appointment_end_time: endTime || '',
       appointment_address: address || '',
       appointment_notes: notes || '',
+      pratica_codice: periziaCode || '',
+      progetto: project || '',
       call_script: callScript,
     },
     metadata: {
       source: 'optiroute',
       appointment_date: date || '',
+      perizia_code: periziaCode || '',
     },
   };
 

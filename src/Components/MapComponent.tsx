@@ -240,6 +240,15 @@ const MapComponent: React.FC<MapComponentProps> = ({
                     </div>
                     <p className="mt-1">{appt.address}</p>
                     {appt.phone && <p className="mt-1 text-xs text-slate-500">📞 {appt.phone}</p>}
+                    {appt.callOutcome && (
+                        <p className="mt-1 text-xs font-bold">
+                            {appt.callOutcome.result === 'confermato' && <span className="text-emerald-600">✅ Cliente ha confermato</span>}
+                            {appt.callOutcome.result === 'rifiutato' && <span className="text-red-600">🚫 Rifiutato</span>}
+                            {appt.callOutcome.result === 'riprogrammare' && <span className="text-amber-600">🔁 Chiede altro giorno/orario</span>}
+                            {appt.callOutcome.result === 'non_risposto' && <span className="text-slate-500">📵 Non risponde</span>}
+                            {appt.callOutcome.result === 'sconosciuto' && <span className="text-slate-500">❓ Esito da verificare</span>}
+                        </p>
+                    )}
 
                     {appt.status === 'confirmed' && appt.startTime && (
                         <div className="mt-2 text-xs bg-slate-100 p-1 rounded">

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { Appointment, Coordinates, AppointmentStatus } from './types';
 import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
-import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow } from './services/excelService';
+import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
+import { startConfirmationCall, fetchCallOutcome } from './services/callService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
 import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings } from './services/storageService';
 import MapComponent from './Components/MapComponent';
@@ -96,6 +97,26 @@ const DEFAULT_CENTER: Coordinates = { lat: 41.9028, lng: 12.4964 }; // Rome
 
 type ViewMode = 'day' | 'week' | 'month';
 
+// Normalized row produced by any of the supported import formats
+interface ImportRow {
+  title: string;
+  fullAddress: string;
+  phone?: string;
+  notes?: string;
+  codice?: string;   // codice pratica/perizia (per merge e link Prelios)
+  project?: string;
+}
+
+const appendNote = (notes: string | undefined, extra: string): string =>
+  notes ? `${notes} | ${extra}` : extra;
+
+// Max age of a call before we stop polling for its outcome
+const OUTCOME_POLL_MAX_AGE_MS = 45 * 60000;
+
+const needsOutcomePolling = (a: Appointment): boolean =>
+  !!a.callId && a.callStatus === 'called' && !a.callOutcome &&
+  !!a.calledAt && (Date.now() - new Date(a.calledAt).getTime()) < OUTCOME_POLL_MAX_AGE_MS;
+
 function App() {
   const [addressInput, setAddressInput] = useState('');
   const [baseInput, setBaseInput] = useState('');
@@ -131,6 +152,7 @@ function App() {
 
   // AI call modal (Retell)
   const [callTarget, setCallTarget] = useState<Appointment | null>(null);
+  const [isBatchCalling, setIsBatchCalling] = useState(false);
 
   // Filters
   const [filters, setFilters] = useState({
@@ -290,9 +312,116 @@ function App() {
 
   const handleCallResult = (id: string, ok: boolean, callId?: string) => {
     setAllAppointments(prev => prev.map(a => a.id === id
-      ? { ...a, callStatus: ok ? 'called' : 'failed', callId: callId || a.callId, calledAt: new Date().toISOString() }
+      ? { ...a, callStatus: ok ? 'called' : 'failed', callId: ok ? callId : a.callId, calledAt: new Date().toISOString(), callOutcome: ok ? undefined : a.callOutcome }
       : a
     ));
+  };
+
+  // --- Batch calling: chiama in sequenza tutti gli appuntamenti del giorno ---
+  // Richiamabili: mai chiamati, chiamata fallita, oppure esito "non risponde"/
+  // "da verificare". NON richiamabili: chiamata in corso, esito in arrivo,
+  // già confermati, rifiutati o con richiesta di spostamento (li gestisce
+  // l'operatore con "Applica esiti").
+  const getBatchCallTargets = () => allAppointments
+    .filter(a => {
+      if (a.status !== 'confirmed' || a.date !== currentDate || !a.phone) return false;
+      if (a.callStatus === 'calling') return false;
+      if (a.callStatus === 'called' && !a.callOutcome) return false; // esito in arrivo
+      if (a.callOutcome && !['non_risposto', 'sconosciuto'].includes(a.callOutcome.result)) return false;
+      return true;
+    })
+    .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0));
+
+  const handleCallAll = async () => {
+    const targets = getBatchCallTargets();
+    if (targets.length === 0) {
+      alert("Nessun appuntamento da chiamare per questa data (serve il telefono e una conferma ancora mancante).");
+      return;
+    }
+    if (!window.confirm(`Avviare le chiamate AI per ${targets.length} sopralluoghi del ${currentDate}?\n\nGli esiti (conferma / rifiuto / richiesta di spostamento) verranno raccolti automaticamente.`)) return;
+
+    setIsBatchCalling(true);
+    try {
+      for (const appt of targets) {
+        setAllAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, callStatus: 'calling' } : a));
+        const res = await startConfirmationCall(appt);
+        setAllAppointments(prev => prev.map(a => a.id === appt.id
+          ? {
+              ...a,
+              callStatus: res.ok ? 'called' : 'failed',
+              callId: res.ok ? res.callId : a.callId,
+              calledAt: new Date().toISOString(),
+              callOutcome: res.ok ? undefined : a.callOutcome,
+            }
+          : a));
+        // Piccola pausa tra un avvio e l'altro
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    } finally {
+      setIsBatchCalling(false);
+    }
+  };
+
+  // --- Polling esiti: interroga Retell finché le chiamate lanciate non hanno un esito ---
+  useEffect(() => {
+    if (!allAppointments.some(needsOutcomePolling)) return;
+
+    const interval = setInterval(async () => {
+      const targets = allAppointments.filter(needsOutcomePolling);
+      for (const appt of targets) {
+        const poll = await fetchCallOutcome(appt.callId!);
+        if (poll.pending) continue;
+        const outcome = poll.outcome || {
+          result: 'sconosciuto' as const,
+          summary: poll.error,
+          receivedAt: new Date().toISOString(),
+        };
+        setAllAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, callOutcome: outcome } : a));
+      }
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [allAppointments]);
+
+  // --- Applica esiti: riorganizza il giro in base alle risposte dei clienti ---
+  const handleApplyOutcomes = () => {
+    const dayAppts = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate && a.callOutcome);
+    const refused = dayAppts.filter(a => a.callOutcome!.result === 'rifiutato');
+    const toReschedule = dayAppts.filter(a => a.callOutcome!.result === 'riprogrammare');
+
+    if (refused.length === 0 && toReschedule.length === 0) {
+      alert("Nessuna modifica da applicare: nessun rifiuto né richiesta di spostamento tra gli esiti raccolti.");
+      return;
+    }
+
+    const proceed = window.confirm(
+      `Applicare gli esiti al giro del ${currentDate}?\n\n` +
+      `• ${refused.length} rifiutati → Stand-by\n` +
+      `• ${toReschedule.length} da riprogrammare → Stand-by (con la richiesta del cliente in nota)\n\n` +
+      `Dopo, premi "Ottimizza" per ricalcolare sequenza e orari del giro con i soli confermati.`
+    );
+    if (!proceed) return;
+
+    setAllAppointments(prev => prev.map(a => {
+      if (a.status !== 'confirmed' || a.date !== currentDate || !a.callOutcome) return a;
+
+      if (a.callOutcome.result === 'rifiutato') {
+        return {
+          ...a, status: 'standby' as const, date: undefined, sequenceOrder: undefined,
+          startTime: undefined, endTime: undefined,
+          notes: appendNote(a.notes, `Rifiutato dal cliente (chiamata AI del ${currentDate})`),
+        };
+      }
+      if (a.callOutcome.result === 'riprogrammare') {
+        const req = [a.callOutcome.requestedDate, a.callOutcome.requestedTime].filter(Boolean).join(' ');
+        return {
+          ...a, status: 'standby' as const, date: undefined, sequenceOrder: undefined,
+          startTime: undefined, endTime: undefined,
+          notes: appendNote(a.notes, `Da riprogrammare — richiesta cliente: ${req || 'altro giorno/orario'}`),
+        };
+      }
+      return a;
+    }));
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -307,60 +436,112 @@ function App() {
     setUploadProgress('Lettura file in corso...');
 
     try {
-      const rows = await parseExcelFile(file);
-      const newAppointments: Appointment[] = [];
-      const failures: string[] = [];
+      // 1) Formato strutturato: colonne Intestatario/Indirizzo/Comune (+ Telefono/Note/Codice)
+      //    È anche il formato prodotto dal bridge Prelios (giro arricchito).
+      let importRows: ImportRow[] = [];
+      let excludedInfo = '';
 
-      let processedCount = 0;
+      const rows = await parseExcelFile(file);
       const validRows = rows.filter(r => r.Indirizzo && r.Comune);
-      
-      if (validRows.length === 0) {
-        setUploadProgress("Errore: Nessuna riga valida trovata.");
-        setTimeout(() => setShowImportModal(false), 2000);
+
+      if (validRows.length > 0) {
+        importRows = validRows.map(row => ({
+          title: row.Intestatario || `${row.Indirizzo} ${row['N.Civ.'] || ''}`.trim(),
+          fullAddress: `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim(),
+          phone: extractPhoneFromRow(row),
+          notes: row.Note ? `${row.Note}`.trim() : undefined,
+          codice: extractCodiceFromRow(row),
+        }));
+      } else {
+        // 2) Elenco pratiche MISI grezzo (export Prelios): SOLO tipologia FULL - Acquisto
+        const { selected, excluded } = await parsePraticheMisi(file);
+        importRows = selected.map(p => ({
+          title: p.intestatario || `${p.via} ${p.civico}`.trim(),
+          fullAddress: `${p.via} ${p.civico}, ${p.comune}, ${p.provincia}`.trim(),
+          notes: p.noteGestore || undefined,
+          codice: p.codice,
+          project: p.progetto || undefined,
+        }));
+        if (excluded > 0) excludedInfo = ` — ${excluded} escluse (non FULL - Acquisto)`;
+      }
+
+      if (importRows.length === 0) {
+        setUploadProgress("Errore: Nessuna riga valida trovata (formati supportati: elenco pratiche MISI o colonne Indirizzo/Comune).");
+        setTimeout(() => setShowImportModal(false), 3000);
         return;
       }
 
-      for (const row of validRows) {
-        processedCount++;
-        setUploadProgress(`Elaborazione pratica ${processedCount} di ${validRows.length}...`);
+      // Merge per codice pratica: le pratiche già presenti vengono AGGIORNATE
+      // (telefono/note/progetto) invece di essere duplicate — è il flusso del
+      // file arricchito dal bridge Prelios.
+      const byCode = new Map<string, Appointment>();
+      allAppointments.forEach(a => { if (a.periziaCode) byCode.set(a.periziaCode, a); });
 
-        const fullAddress = `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim();
-        const title = row.Intestatario || fullAddress;
-        const phone = extractPhoneFromRow(row);
-        const notes = row.Note ? `${row.Note}`.trim() : undefined;
+      const newAppointments: Appointment[] = [];
+      const updates = new Map<string, Partial<Appointment>>();
+      const failures: string[] = [];
+      const seenCodes = new Set<string>();
+      let processedCount = 0;
+
+      for (const row of importRows) {
+        processedCount++;
+        setUploadProgress(`Elaborazione pratica ${processedCount} di ${importRows.length}...${excludedInfo}`);
+
+        // Dedupe righe duplicate nello stesso file
+        if (row.codice) {
+          if (seenCodes.has(row.codice)) continue;
+          seenCodes.add(row.codice);
+        }
+
+        const existing = row.codice ? byCode.get(row.codice) : undefined;
+        if (existing) {
+          updates.set(existing.id, {
+            phone: row.phone || existing.phone,
+            notes: row.notes || existing.notes,
+            project: row.project || existing.project,
+          });
+          continue;
+        }
 
         // Rate limit strictness for Nominatim (skipped for cached/duplicate addresses)
-        if (!hasCachedGeocode(fullAddress)) {
+        if (!hasCachedGeocode(row.fullAddress)) {
           await new Promise(resolve => setTimeout(resolve, 1100));
         }
 
         try {
-          const result = await geocodeAddress(fullAddress);
+          const result = await geocodeAddress(row.fullAddress);
           if (result) {
             newAppointments.push({
               id: Date.now() + Math.random().toString(),
               address: result.displayName,
-              title: title,
-              phone: phone,
-              notes: notes,
+              title: row.title,
+              phone: row.phone,
+              notes: row.notes,
+              periziaCode: row.codice,
+              project: row.project,
               coords: result.coords,
               status: 'pending' // Import as pending
             });
           } else {
-            failures.push(`${fullAddress} (${title})`);
+            failures.push(`${row.fullAddress} (${row.title})`);
           }
-        } catch (err) { 
+        } catch (err) {
           console.error(err);
-          failures.push(`${fullAddress} (Errore di rete)`);
+          failures.push(`${row.fullAddress} (Errore di rete)`);
         }
       }
 
-      setAllAppointments(prev => [...prev, ...newAppointments]);
-      
-      setImportStats({ success: newAppointments.length, failed: failures.length });
+      setAllAppointments(prev => [
+        ...prev.map(a => updates.has(a.id) ? { ...a, ...updates.get(a.id) } : a),
+        ...newAppointments
+      ]);
+
+      setImportStats({ success: newAppointments.length + updates.size, failed: failures.length });
       setFailedImports(failures);
       setImportFinished(true);
-      setUploadProgress('Completato!');
+      setUploadProgress(updates.size > 0
+        ? `Completato! ${newAppointments.length} nuove, ${updates.size} aggiornate (telefono/note).${excludedInfo}`
+        : `Completato!${excludedInfo}`);
 
     } catch (error) {
       console.error(error);
@@ -385,11 +566,14 @@ function App() {
         'Ordine': a.sequenceOrder || '-',
         'Ora Arrivo': a.startTime || '-',
         'Ora Partenza': a.endTime || '-',
+        'Codice': a.periziaCode || '-',
         'Cliente': a.title,
         'Telefono': a.phone || '-',
         'Indirizzo': a.address,
+        'Progetto': a.project || '',
         'Note': a.notes || '',
         'Stato': a.status,
+        'Esito Cliente': a.callOutcome?.result || '-',
         'Distanza': a.distanceFromPrev || 0,
         'Tempo': a.travelTimeFromPrev || 0,
         'Pausa Pranzo': a.hasLunchBreakBefore ? 'Sì' : 'No'
@@ -667,11 +851,40 @@ function App() {
 
   // Small badge showing the AI call state on a card
   const CallBadge = ({ appt }: { appt: Appointment }) => {
-    if (appt.callStatus === 'called') return <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato</span>;
+    if (appt.callOutcome) return null; // l'esito sostituisce lo stato chiamata
+    if (appt.callStatus === 'called') return <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">🕓 Esito in arrivo...</span>;
     if (appt.callStatus === 'calling') return <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 In chiamata...</span>;
     if (appt.callStatus === 'failed') return <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1 rounded">✗ Chiamata fallita</span>;
     return null;
   };
+
+  // Badge with the client's answer collected by the AI call
+  const OutcomeBadge = ({ appt }: { appt: Appointment }) => {
+    const o = appt.callOutcome;
+    if (!o) return null;
+    const tooltip = [o.summary, o.clientNotes].filter(Boolean).join(' — ');
+    switch (o.result) {
+      case 'confermato':
+        return <span title={tooltip} className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 rounded">✅ Cliente ha confermato</span>;
+      case 'rifiutato':
+        return <span title={tooltip} className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 rounded">🚫 Rifiutato</span>;
+      case 'riprogrammare': {
+        const req = [o.requestedDate, o.requestedTime].filter(Boolean).join(' ');
+        return <span title={tooltip} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">🔁 Chiede: {req || 'altro giorno/orario'}</span>;
+      }
+      case 'non_risposto':
+        return <span title={tooltip} className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">📵 Non risponde</span>;
+      default:
+        return <span title={tooltip} className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">❓ Esito da verificare</span>;
+    }
+  };
+
+  // Chip with the pratica/perizia code
+  const CodeChip = ({ appt }: { appt: Appointment }) => (
+    appt.periziaCode
+      ? <span className="text-[10px] font-mono text-slate-500 bg-slate-100 border border-slate-200 px-1 rounded" title={appt.project || ''}>#{appt.periziaCode}</span>
+      : null
+  );
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
@@ -868,6 +1081,25 @@ function App() {
                     <ArrowsRightLeftIcon /> Scambia Ordine
                 </button>
              )}
+
+             {/* Giro giornaliero: chiamate AI in blocco + applicazione esiti */}
+             {confirmedForDate.length > 0 && viewMode === 'day' && (
+                <div className="col-span-2 grid grid-cols-2 gap-2">
+                    <button
+                        onClick={handleCallAll}
+                        disabled={isBatchCalling}
+                        className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-emerald-600 hover:bg-emerald-700 border-emerald-700 disabled:opacity-60 transition-colors"
+                    >
+                        <PhoneIcon /> {isBatchCalling ? 'Chiamate in corso...' : `Chiama tutti (${getBatchCallTargets().length})`}
+                    </button>
+                    <button
+                        onClick={handleApplyOutcomes}
+                        className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-amber-700 border-amber-300 bg-amber-50 hover:bg-amber-100 transition-colors"
+                    >
+                        🔁 Applica esiti al giro
+                    </button>
+                </div>
+             )}
               <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".xlsx,.csv" className="hidden" />
               
               <div className="col-span-2 grid grid-cols-2 gap-2">
@@ -935,7 +1167,9 @@ function App() {
                                                     <span className="text-xs font-mono text-blue-700 bg-blue-100 inline-block px-1 rounded">
                                                         {appt.startTime} - {appt.endTime}
                                                     </span>
+                                                    <CodeChip appt={appt} />
                                                     <CallBadge appt={appt} />
+                                                    <OutcomeBadge appt={appt} />
                                                 </div>
                                             </div>
                                         </div>
@@ -978,7 +1212,7 @@ function App() {
                                      <p className="text-xs text-slate-400">{appt.address}</p>
                                      {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
                                      {appt.notes && <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-2">{appt.notes}</p>}
-                                     <div className="mt-1"><CallBadge appt={appt} /></div>
+                                     <div className="mt-1 flex gap-1 flex-wrap"><CodeChip appt={appt} /><CallBadge appt={appt} /><OutcomeBadge appt={appt} /></div>
                                  </div>
                                  <div className="flex flex-col gap-1">
                                     <button onClick={() => handleStatusChange(appt.id, 'confirmed')} title="Forza Conferma Oggi" className="text-xs bg-blue-100 text-blue-600 px-1 py-0.5 rounded font-bold hover:bg-blue-200">
@@ -1014,6 +1248,8 @@ function App() {
                                      <h4 className="text-sm font-semibold text-slate-600">{appt.title}</h4>
                                      <p className="text-xs text-slate-400">{appt.address}</p>
                                      {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
+                                     {appt.notes && <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-2">{appt.notes}</p>}
+                                     <div className="mt-1 flex gap-1 flex-wrap"><CodeChip appt={appt} /><OutcomeBadge appt={appt} /></div>
                                  </div>
                                  <div className="flex gap-2">
                                      <button onClick={() => openEditModal(appt)} title="Modifica" className="text-indigo-400 hover:bg-indigo-50 p-1 rounded"><PencilIcon/></button>

@@ -1,6 +1,6 @@
-import type { Appointment } from '../types';
+import type { Appointment, CallOutcome } from '../types';
 
-// Client for the /api/retell-call serverless endpoint (Retell AI outbound call).
+// Client for the /api/retell-call and /api/call-status serverless endpoints.
 
 export interface CallResult {
   ok: boolean;
@@ -25,6 +25,8 @@ export const startConfirmationCall = async (appointment: Appointment): Promise<C
         endTime: appointment.endTime,
         address: appointment.address,
         notes: appointment.notes,
+        periziaCode: appointment.periziaCode,
+        project: appointment.project,
       }),
     });
 
@@ -38,5 +40,46 @@ export const startConfirmationCall = async (appointment: Appointment): Promise<C
   } catch (error) {
     console.error('Call service error:', error);
     return { ok: false, error: 'Errore di rete: impossibile contattare il server delle chiamate.' };
+  }
+};
+
+// Poll the outcome of a finished call. Returns:
+//  - { pending: true }            call still in progress / analysis not ready
+//  - { pending: false, outcome }  final outcome available
+//  - { error }                    unrecoverable error (stop polling)
+export interface CallOutcomePoll {
+  pending: boolean;
+  outcome?: CallOutcome;
+  error?: string;
+}
+
+export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll> => {
+  try {
+    const response = await fetch(`/api/call-status?callId=${encodeURIComponent(callId)}`);
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return { pending: false, error: data?.error || `Errore server (${response.status})` };
+    }
+
+    if (data.pending) return { pending: true };
+
+    const o = data.outcome || {};
+    return {
+      pending: false,
+      outcome: {
+        result: o.result || 'sconosciuto',
+        requestedDate: o.requestedDate,
+        requestedTime: o.requestedTime,
+        clientNotes: o.clientNotes,
+        summary: o.summary,
+        sentiment: o.sentiment,
+        receivedAt: new Date().toISOString(),
+      },
+    };
+  } catch (error) {
+    console.error('Call outcome poll error:', error);
+    // Network hiccup: keep polling
+    return { pending: true };
   }
 };

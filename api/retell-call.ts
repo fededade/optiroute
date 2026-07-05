@@ -6,14 +6,18 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 //   RETELL_FROM_NUMBER  -> outbound number purchased/imported on Retell (E.164, e.g. +39...)
 // Optional:
 //   RETELL_AGENT_ID     -> overrides the agent bound to the number
-//   RETELL_COMPANY_NAME -> company name spoken by the agent (default: "il nostro ufficio")
+//   RETELL_COMPANY_NAME -> company name spoken by the agent (default: "Effestudio")
+//   RETELL_AGENT_NAME   -> operator name spoken by the agent (default: "Chiara")
+//   RETELL_MANDANTE     -> chain of principals (default: "Prelios per conto di Banca Intesa")
 
 const RETELL_API_URL = 'https://api.retellai.com/v2/create-phone-call';
 
 const RETELL_API_KEY = process.env.RETELL_API_KEY || '';
 const RETELL_FROM_NUMBER = process.env.RETELL_FROM_NUMBER || '';
 const RETELL_AGENT_ID = process.env.RETELL_AGENT_ID || '';
-const COMPANY_NAME = process.env.RETELL_COMPANY_NAME || 'il nostro ufficio';
+const COMPANY_NAME = process.env.RETELL_COMPANY_NAME || 'Effestudio';
+const AGENT_NAME = process.env.RETELL_AGENT_NAME || 'Chiara';
+const MANDANTE = process.env.RETELL_MANDANTE || 'Prelios per conto di Banca Intesa';
 
 // Normalize to E.164; numbers without prefix are assumed to be Italian (+39)
 const normalizePhone = (raw: string): string | null => {
@@ -57,7 +61,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const { phone, clientName, date, startTime, endTime, address, notes, periziaCode, project, contactPerson, referredBy } = req.body || {};
+  const { phone, clientName, date, startTime, endTime, address, shortAddress, comune, notes, periziaCode, project, contactPerson, referredBy } = req.body || {};
 
   if (!phone) {
     return res.status(400).json({ error: 'Numero di telefono mancante.' });
@@ -71,33 +75,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const dateSpoken = formatDateItalian(date);
   const timeSpoken = startTime ? `alle ore ${startTime}` : 'in orario da definire';
 
-  // Ready-to-speak Italian script: the Retell agent prompt can simply
-  // reference {{call_script}}, or use the granular variables below.
-  const isSopralluogo = !!periziaCode;
   const isReferral = !!contactPerson; // stiamo chiamando la persona indicata dal cliente
 
-  const chiTelefono = isReferral ? contactPerson : (clientName || 'un cliente');
+  // Immobile: "comune indirizzo e civico presi dalla perizia"
+  const immobile = [comune, shortAddress].filter(Boolean).join(' ').trim() || address || 'indirizzo da comunicare';
 
+  // Frase per la parte "proposta appuntamento"
+  const propostaGiorno = dateSpoken ? `per il giorno ${dateSpoken}` : 'in una data da concordare';
+  const propostaOra = startTime ? ` alle ore ${startTime}` : '';
+
+  // Presentazione ufficiale (invariata nel testo, con i dati della perizia)
+  const presentazione =
+    `Buongiorno, sono ${AGENT_NAME}, la contatto per conto di ${COMPANY_NAME}, ` +
+    `società incaricata da ${MANDANTE} relativamente alla richiesta di finanziamento ` +
+    `per l'immobile sito in ${immobile}. La mia chiamata è finalizzata alla gestione ` +
+    `dell'appuntamento per la perizia, che volevamo proporle ${propostaGiorno}${propostaOra}.`;
+
+  // Ready-to-speak Italian script: the Retell agent prompt can simply
+  // reference {{call_script}}, or use the granular variables below.
   const callScript = [
-    `Sei l'assistente telefonico di ${COMPANY_NAME}.`,
-    isReferral
-      ? `Stai chiamando ${chiTelefono}, che ${referredBy || 'il cliente'} (intestatario della pratica) ha indicato come persona di riferimento per il sopralluogo dell'immobile${periziaCode ? ` (pratica ${periziaCode})` : ''}. All'inizio della chiamata PRESENTATI e SPIEGA per conto di chi chiami: sei l'assistente di ${COMPANY_NAME} e chiami su indicazione di ${referredBy || 'l\'intestatario della pratica'}.`
-      : (isSopralluogo
-          ? `Stai chiamando ${chiTelefono} per confermare il sopralluogo del tecnico incaricato della perizia immobiliare (pratica ${periziaCode}).`
-          : `Stai chiamando ${chiTelefono} per confermare un appuntamento.`),
-    `Dettagli dell'appuntamento:`,
-    dateSpoken ? `- Data: ${dateSpoken}` : null,
-    startTime ? `- Orario di arrivo previsto: ${startTime}${endTime ? ` (fine prevista ${endTime})` : ''}` : `- Orario: da definire, comunica che verrà confermato a breve`,
-    address ? `- Indirizzo: ${address}` : null,
-    (isReferral && clientName) ? `- Intestatario della pratica: ${clientName}` : null,
-    notes ? `- Note: ${notes}` : null,
+    `Sei ${AGENT_NAME}, assistente telefonico di ${COMPANY_NAME}.`,
     ``,
-    `Istruzioni: saluta cortesemente, presentati a nome di ${COMPANY_NAME}, verifica di parlare con la persona giusta, ` +
-    (isSopralluogo
-      ? `spiega che si tratta del sopralluogo tecnico necessario per la perizia dell'immobile, comunica data, orario e indirizzo, e chiedi conferma della presenza. `
-      : `comunica data, orario e luogo dell'appuntamento, chiedi conferma della presenza. `) +
-    `Se il cliente chiede di spostare l'appuntamento, prendi nota di giorno e orario preferiti e comunica che verrà ricontattato per conferma della nuova data. ` +
-    `IMPORTANTE: se l'interlocutore dice che NON è lui la persona da contattare per il sopralluogo (per esempio va contattato il geometra di cantiere, l'agente immobiliare, un familiare con le chiavi), DEVI farti dare: nome della persona corretta, numero di telefono e ruolo. Ripeti il numero per conferma e comunica che quella persona verrà ricontattata a breve. ` +
+    `## PRESENTAZIONE (usa ESATTAMENTE questo testo, adattando solo i dati tra parentesi):`,
+    presentazione,
+    ``,
+    isReferral
+      ? `## CONTESTO: NON stai chiamando l'intestatario. Stai chiamando ${contactPerson}, indicato da ${referredBy || 'l\'intestatario della pratica'} come persona di riferimento per il sopralluogo. Dopo la presentazione, chiarisci che l'appuntamento riguarda l'immobile dell'intestatario${clientName ? ` (${clientName})` : ''} e che ${referredBy || 'l\'intestatario'} ti ha indicato lui/lei come referente da contattare.`
+      : `## CONTESTO: stai chiamando l'intestatario della pratica${clientName ? ` (${clientName})` : ''}.`,
+    ``,
+    `## DATI APPUNTAMENTO:`,
+    `- Immobile: ${immobile}`,
+    address ? `- Indirizzo completo: ${address}` : null,
+    dateSpoken ? `- Giorno proposto: ${dateSpoken}` : `- Giorno: da definire`,
+    startTime ? `- Orario proposto: ${startTime}${endTime ? ` (indicativamente fino alle ${endTime})` : ''}` : `- Orario: da definire`,
+    periziaCode ? `- Pratica: ${periziaCode}` : null,
+    notes ? `- Note interne (NON leggerle al cliente, servono a te): ${notes}` : null,
+    ``,
+    `## COME GESTIRE LA RISPOSTA:`,
+    `- Se accetta giorno e orario proposti: conferma l'appuntamento, ringrazia e saluta.`,
+    `- Se chiede un altro giorno o un'altra ora: prendi nota della sua preferenza (giorno e fascia oraria) e comunica che verrà ricontattato per confermare la nuova data. NON garantire tu la nuova data.`,
+    `- Se non è interessato / rifiuta / dice che la perizia non serve più: prendi atto cortesemente e chiudi.`,
+    `- Se dice che NON è lui la persona giusta da contattare per il sopralluogo (es. va sentito il geometra di cantiere, l'agente immobiliare, un familiare che ha le chiavi): fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta. RIPETI il numero per conferma. Comunica che contatterai direttamente quella persona.`,
+    `- Mantieni sempre un tono cortese e professionale. Non fornire dettagli sull'importo del finanziamento o dati sensibili.`,
     `Ringrazia e saluta prima di chiudere la chiamata.`,
   ].filter(line => line !== null).join('\n');
 
@@ -106,6 +125,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     to_number: toNumber,
     retell_llm_dynamic_variables: {
       company_name: COMPANY_NAME,
+      agent_name: AGENT_NAME,
+      mandante: MANDANTE,
+      presentazione: presentazione,
+      immobile: immobile,
       client_name: clientName || 'cliente',
       appointment_date: dateSpoken || 'da definire',
       appointment_time: startTime || 'da definire',

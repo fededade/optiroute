@@ -24,6 +24,8 @@ export const startConfirmationCall = async (appointment: Appointment): Promise<C
         startTime: appointment.startTime,
         endTime: appointment.endTime,
         address: appointment.address,
+        shortAddress: appointment.shortAddress,
+        comune: appointment.comune,
         notes: appointment.notes,
         periziaCode: appointment.periziaCode,
         project: appointment.project,

@@ -235,7 +235,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
                     <div className="font-sans text-sm">
                     <div className="flex items-center justify-between mb-1 gap-2">
                             <strong className="block" style={{ color: appt.status === 'confirmed' ? markerColor : '#475569' }}>
-                                {appt.status === 'confirmed' && `${appt.sequenceOrder}. `} {appt.title}
+                                {appt.status === 'confirmed' && appt.sequenceOrder ? `${appt.sequenceOrder}. ` : ''}{appt.title}
                             </strong>
                     </div>
                     <p className="mt-1">{appt.address}</p>

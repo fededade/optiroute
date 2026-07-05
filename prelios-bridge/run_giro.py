@@ -88,49 +88,59 @@ def _import_pipeline() -> dict:
 
 
 def _crea_contesto():
-    """Costruisce il ToolContext della pipeline MISI (browser avviato).
+    """Costruisce il ToolContext della pipeline MISI e avvia il browser.
 
-    NOTA: la costruzione esatta dipende dal bootstrap del progetto MISI
-    (il suo main.py). Qui proviamo prima una factory esposta dal progetto,
-    poi la costruzione manuale standard. Se nessuna delle due combacia,
-    adattare QUESTA funzione replicando le righe di setup del main MISI.
+    Replica il setup reale di MISI ISP:
+      - AppConfig()               (config.py)
+      - BrowserSession(...).start()  (browser_session.py) — apre/collega
+        il Chrome con remote debugging su cui farai il login MFA
+      - ToolContext(browser, data, config, logger)  (models.py)
     """
-    import importlib
-
-    # 1) Factory del progetto, se esiste (main.build_context / app.build_context)
-    for mod_name in ("main", "app", "pipeline"):
-        try:
-            mod = importlib.import_module(mod_name)
-        except ImportError:
-            continue
-        for attr in ("build_context", "create_context", "crea_contesto"):
-            factory = getattr(mod, attr, None)
-            if callable(factory):
-                return factory()
-
-    # 2) Costruzione manuale standard: Config + Browser + PeriziaData
     try:
+        import logging
         from models import ToolContext, PeriziaData
-        from config import Config          # type: ignore
-        from browser import Browser        # type: ignore
+        from config import AppConfig
+        from browser_session import BrowserSession
+    except ImportError as e:
+        raise PipelineNonDisponibile(
+            f"moduli MISI non trovati ({e}). Copiare run_giro.py, "
+            "excel_pratiche.py e contact_parse.py nella cartella RADICE del "
+            "progetto MISI (accanto a config.py, models.py, browser_session.py)."
+        ) from e
 
-        config = Config()
-        browser = Browser(config)
+    try:
+        config = AppConfig()
+        browser = BrowserSession(
+            headless=config.headless,
+            chrome_driver_path=config.chrome_driver_path,
+            page_load_timeout=config.page_load_timeout,
+            element_wait_timeout=config.element_wait_timeout,
+            download_dir=str(config.downloads_dir),
+        )
         browser.start()
-        return ToolContext(browser=browser, config=config, data=PeriziaData())
+        logger = logging.getLogger("prelios_bridge")
+        return ToolContext(
+            browser=browser,
+            data=PeriziaData(),
+            config=config,
+            logger=logger,
+        )
     except Exception as e:
         raise PipelineNonDisponibile(
-            f"impossibile costruire il ToolContext ({e}). Adattare "
-            "_crea_contesto() in run_giro.py replicando il setup del "
-            "main.py del progetto MISI"
+            f"impossibile avviare il browser/contesto MISI ({e}). "
+            "Assicurati che MISI non sia gia' aperto (usano lo stesso Chrome) "
+            "e che Chrome sia installato."
         ) from e
 
 
 # === ESECUZIONE TOOL ===
 
 def _merge_result(ctx, result) -> None:
-    """Riversa result.data dentro ctx.data (come fa il runner MISI)."""
-    for key, value in (getattr(result, "data", None) or {}).items():
+    """Riversa result.data_updates dentro ctx.data (come fa il runner MISI).
+
+    NB: il campo di ToolResult si chiama `data_updates` (non `data`).
+    """
+    for key, value in (getattr(result, "data_updates", None) or {}).items():
         setattr(ctx.data, key, value)
 
 

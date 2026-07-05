@@ -46,6 +46,15 @@ class ExtractContactsTool(BaseTool):
     def execute(self) -> ToolResult:
         self._drain_alerts("prima dell'estrazione contatti")
 
+        # 0. Assicura di essere sulla pagina "Anagrafica Perizia": è lì che
+        #    vivono Imm_Descrizione (Note del Gestore) e Imm_Note. Dopo t03 la
+        #    perizia è aperta ma potrebbe mostrare un'altra pagina.
+        try:
+            self.navigate_and_wait("anagrafica")
+        except Exception as e:
+            self.log(f"Navigazione alla pagina Anagrafica non riuscita ({e}); "
+                     "provo a leggere la pagina corrente")
+
         # 1. Lettura fonti dalla pagina Anagrafica Perizia
         nota_gestore = self._leggi_campo_per_id(FIELD_NOTE_GESTORE) or ""
         nota_perito = self._leggi_campo_per_id(FIELD_NOTE_PERITO) or ""
@@ -167,7 +176,7 @@ var target = '%s';
 var tds = document.querySelectorAll('td, th');
 for (var i = 0; i < tds.length; i++) {
     var t = (tds[i].textContent || '').trim().toLowerCase();
-    if (t === target) {
+    if (t.length < 40 && t.indexOf(target) > -1) {
         var next = tds[i].nextElementSibling;
         if (next) {
             var inp = next.querySelector('input, textarea');
@@ -175,7 +184,6 @@ for (var i = 0; i < tds.length; i++) {
             var v = (next.textContent || '').trim();
             if (v) return v;
         }
-        return '';
     }
 }
 return null;

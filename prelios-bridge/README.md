@@ -17,17 +17,27 @@ di telefono dei clienti e produrre un Excel importabile nell'app OptiRoute.
 Gli errori sulla singola pratica NON fermano il giro: finiscono nella
 colonna diagnostica `Esito`.
 
-## File
+## File — DOVE COPIARLI nel progetto MISI ISP
 
-| File | Cosa fa | Dove copiarlo nel progetto MISI |
-|---|---|---|
-| `excel_pratiche.py` | Lettura/filtro elenco pratiche (standalone) | root (accanto a `models.py`) |
-| `run_giro.py` | Orchestratore CLI del giro | root (accanto a `models.py`) |
-| `t05_extract_contacts.py` | Tool estrazione telefono (fase 3, Lettura) | `tools/` (accanto a `t01_login.py`) |
-| `test_excel_pratiche.py` | Test puri di `excel_pratiche` | opzionale, ovunque accanto a `excel_pratiche.py` |
+Verificato sul sorgente reale di MISI (config.py → `AppConfig`,
+browser_session.py → `BrowserSession`, models.py → `ToolContext`,
+`ToolResult.data_updates`).
 
-`excel_pratiche.py` e `test_excel_pratiche.py` sono completamente standalone:
-non importano nulla della pipeline.
+| File | Dove copiarlo |
+|---|---|
+| `run_giro.py` | **radice** del progetto (accanto a `config.py`, `models.py`, `browser_session.py`) |
+| `excel_pratiche.py` | **radice** |
+| `contact_parse.py` | **radice** |
+| `dump_perizia_fields.py` | **radice** (diagnostico, opzionale) |
+| `t05_extract_contacts.py` | cartella **`tools/`** (accanto a `t01_login.py`) |
+| `test_excel_pratiche.py`, `test_contact_parse.py` | radice (opzionali, per i test) |
+
+`excel_pratiche.py`, `contact_parse.py` e i test sono standalone: non
+importano nulla della pipeline (girano anche fuori dal progetto MISI).
+
+⚠️ **Chiudi MISI prima di lanciare il bridge**: usano lo stesso Chrome con
+remote-debugging (porta 9222), quindi due processi che lo pilotano insieme
+darebbero conflitti.
 
 ## Dipendenze
 
@@ -58,28 +68,15 @@ Copiare i file come da tabella sopra, poi dalla root del progetto MISI:
 python run_giro.py elenco.xlsx --out giro_arricchito.xlsx
 ```
 
-Il login puo' richiedere l'intervento manuale (MFA/SSO), come nel resto
-della pipeline. Se i moduli MISI non sono importabili, `run_giro.py` esce
-con un messaggio che spiega dove copiare i file.
+All'apertura, il bridge apre (o si collega a) il Chrome con remote-debugging
+esattamente come MISI: **fai il login Prelios col tuo MFA come al solito** e
+il bridge prosegue da solo, pratica per pratica. Il login viene fatto una
+sola volta per tutto il giro.
 
-Nota: `_crea_contesto()` in `run_giro.py` prova prima una factory del
-progetto (`main.build_context` e simili), poi la costruzione standard
-`Config + Browser + ToolContext`. Se il bootstrap del vostro `main.py` e'
-diverso, adattare quella singola funzione replicandone le righe di setup.
-
-## TODO — estrazione telefono (t05)
-
-Non e' ancora noto in quale pagina/campo della perizia si trovi il telefono
-del cliente. `t05_extract_contacts.py` implementa per ora una ricerca
-GENERICA best-effort: scandisce documento principale + tutti i frame
-cercando input/celle con id/etichette contenenti `tel`, `cell`, `phone`,
-`recapito` e valori che corrispondono a un numero italiano (mobile
-`3xx xxxxxxx`, fisso `0x ...`), con fallback sul testo della pagina (solo
-mobili). Preferisce i numeri di cellulare.
-
-Quando si sapra' la posizione esatta del campo, inserire navigazione e
-selettori nel punto marcato `TODO(TELEFONO CLIENTE)` dentro
-`t05_extract_contacts.py` (la scansione generica puo' restare come fallback).
+`_crea_contesto()` in `run_giro.py` costruisce il contesto con
+`AppConfig()` + `BrowserSession(...).start()` + `ToolContext(...)`, gli
+stessi oggetti del progetto MISI. Se il file del browser non si chiamasse
+`browser_session.py`, correggere l'import in cima a quella funzione.
 
 ## Formato di output per OptiRoute
 

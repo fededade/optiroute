@@ -110,12 +110,15 @@ interface ImportRow {
 const appendNote = (notes: string | undefined, extra: string): string =>
   notes ? `${notes} | ${extra}` : extra;
 
-// Max age of a call before we stop polling for its outcome
+// Max age of a call before its outcome is finalized as "da verificare"
 const OUTCOME_POLL_MAX_AGE_MS = 45 * 60000;
 
-const needsOutcomePolling = (a: Appointment): boolean =>
-  !!a.callId && a.callStatus === 'called' && !a.callOutcome &&
-  !!a.calledAt && (Date.now() - new Date(a.calledAt).getTime()) < OUTCOME_POLL_MAX_AGE_MS;
+// Call launched and outcome not yet stored (regardless of age)
+const awaitingOutcome = (a: Appointment): boolean =>
+  !!a.callId && a.callStatus === 'called' && !a.callOutcome && !!a.calledAt;
+
+const isOutcomeExpired = (a: Appointment): boolean =>
+  awaitingOutcome(a) && (Date.now() - new Date(a.calledAt!).getTime()) >= OUTCOME_POLL_MAX_AGE_MS;
 
 function App() {
   const [addressInput, setAddressInput] = useState('');
@@ -166,6 +169,11 @@ function App() {
   const [selectedForSwap, setSelectedForSwap] = useState<string[]>([]);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Ref sempre aggiornata: serve ai loop async (batch chiamate, polling) per
+  // leggere lo stato CORRENTE invece di uno snapshot vecchio
+  const allAppointmentsRef = useRef<Appointment[]>(allAppointments);
+  useEffect(() => { allAppointmentsRef.current = allAppointments; }, [allAppointments]);
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -343,8 +351,17 @@ function App() {
     setIsBatchCalling(true);
     try {
       for (const appt of targets) {
+        // Ricontrolla lo stato ATTUALE prima di ogni avvio: nel frattempo
+        // l'operatore può aver chiamato manualmente (CallModal), spostato
+        // l'appuntamento o ricevuto un esito — evita doppie chiamate
+        const current = allAppointmentsRef.current.find(a => a.id === appt.id);
+        if (!current || current.status !== 'confirmed' || current.date !== currentDate || !current.phone) continue;
+        if (current.callStatus === 'calling') continue;
+        if (current.callStatus === 'called' && !current.callOutcome) continue;
+        if (current.callOutcome && !['non_risposto', 'sconosciuto'].includes(current.callOutcome.result)) continue;
+
         setAllAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, callStatus: 'calling' } : a));
-        const res = await startConfirmationCall(appt);
+        const res = await startConfirmationCall(current);
         setAllAppointments(prev => prev.map(a => a.id === appt.id
           ? {
               ...a,
@@ -364,11 +381,22 @@ function App() {
 
   // --- Polling esiti: interroga Retell finché le chiamate lanciate non hanno un esito ---
   useEffect(() => {
-    if (!allAppointments.some(needsOutcomePolling)) return;
+    if (!allAppointments.some(awaitingOutcome)) return;
 
     const interval = setInterval(async () => {
-      const targets = allAppointments.filter(needsOutcomePolling);
+      // Legge dalla ref per avere lo stato corrente anche nei tick lunghi
+      const targets = allAppointmentsRef.current.filter(awaitingOutcome);
       for (const appt of targets) {
+        // Finestra scaduta: chiudi come "da verificare" invece di lasciare
+        // la card su "Esito in arrivo..." per sempre
+        if (isOutcomeExpired(appt)) {
+          setAllAppointments(prev => prev.map(a =>
+            a.id === appt.id && a.callId === appt.callId && !a.callOutcome
+              ? { ...a, callOutcome: { result: 'sconosciuto', summary: 'Esito non ricevuto entro 45 minuti: verificare nella dashboard Retell', receivedAt: new Date().toISOString() } }
+              : a));
+          continue;
+        }
+
         const poll = await fetchCallOutcome(appt.callId!);
         if (poll.pending) continue;
         const outcome = poll.outcome || {
@@ -376,7 +404,12 @@ function App() {
           summary: poll.error,
           receivedAt: new Date().toISOString(),
         };
-        setAllAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, callOutcome: outcome } : a));
+        // Guardia su callId: se nel frattempo è partita una NUOVA chiamata
+        // allo stesso appuntamento, l'esito della vecchia non va applicato
+        setAllAppointments(prev => prev.map(a =>
+          a.id === appt.id && a.callId === appt.callId && !a.callOutcome
+            ? { ...a, callOutcome: outcome }
+            : a));
       }
     }, 15000);
 
@@ -497,7 +530,13 @@ function App() {
         if (existing) {
           updates.set(existing.id, {
             phone: row.phone || existing.phone,
-            notes: row.notes || existing.notes,
+            // Le note operative locali (esiti, richieste cliente) NON vanno
+            // sovrascritte dal file: si appende solo contenuto nuovo
+            notes: !existing.notes
+              ? row.notes
+              : (row.notes && !existing.notes.includes(row.notes)
+                  ? appendNote(existing.notes, row.notes)
+                  : existing.notes),
             project: row.project || existing.project,
           });
           continue;
@@ -705,6 +744,13 @@ function App() {
         if (a.id !== id) return a;
 
         const update: Partial<Appointment> = { status: newStatus };
+        // Un cambio di stato invalida chiamata ed esito precedenti: si
+        // riferivano a un'altra proposta di data (evita che "Applica esiti"
+        // espella un appuntamento appena ripianificato per un vecchio esito)
+        update.callStatus = undefined;
+        update.callId = undefined;
+        update.calledAt = undefined;
+        update.callOutcome = undefined;
         if (newStatus === 'confirmed') {
             update.date = currentDate; // Assign to current date
         } else {
@@ -754,20 +800,24 @@ function App() {
       setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
           if (scheduledIds.has(a.id)) {
               const calculated = scheduled.find(s => s.id === a.id);
-              return { 
-                  ...a, 
-                  ...calculated, 
-                  status: 'confirmed', 
-                  date: currentDate 
+              // Appuntamento NUOVO per questo giorno (era pending o di altra
+              // data): chiamata/esito precedenti non valgono più
+              const isNewToDay = !(a.status === 'confirmed' && a.date === currentDate);
+              return {
+                  ...a,
+                  ...calculated,
+                  status: 'confirmed',
+                  date: currentDate,
+                  ...(isNewToDay ? { callStatus: undefined, callId: undefined, calledAt: undefined, callOutcome: undefined } : {})
               };
           } else if (overflowIds.has(a.id)) {
-              return { 
-                  ...a, 
-                  status: 'pending', 
-                  date: undefined, 
-                  sequenceOrder: undefined, 
-                  startTime: undefined, 
-                  endTime: undefined 
+              return {
+                  ...a,
+                  status: 'pending',
+                  date: undefined,
+                  sequenceOrder: undefined,
+                  startTime: undefined,
+                  endTime: undefined
               };
           }
           return a;

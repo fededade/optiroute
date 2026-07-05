@@ -39,7 +39,7 @@ TIPOLOGIA_TARGET = "FULL - ACQUISTO"
 _EXT_EXCEL = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 
 # Valori riconosciuti come "tipologia" (ancora dell'euristica posizionale)
-_RE_TIPOLOGIA = re.compile(r"^(FULL|DSKT)\s*-\s*\S+", re.IGNORECASE)
+_RE_TIPOLOGIA = re.compile(r"^(FULL|DSKT|DRIVE)\s*-\s*\S+", re.IGNORECASE)
 
 # Codice pratica/perizia: 5-7 cifre, eventualmente con punto migliaia (810.766)
 _RE_CODICE = re.compile(r"^\d{5,7}$")
@@ -296,15 +296,33 @@ def _leggi_excel(path: Path) -> list[list[object]]:
 
 def _leggi_testo(path: Path) -> list[list[object]]:
     """Legge un file testuale TSV/CSV rilevando il separatore
-    (tab > punto e virgola > virgola)."""
-    testo = path.read_text(encoding="utf-8-sig", errors="replace")
-    prima_riga = testo.splitlines()[0] if testo.splitlines() else ""
-    if "\t" in prima_riga:
-        delim = "\t"
-    elif ";" in prima_riga:
-        delim = ";"
-    else:
-        delim = ","
+    (tab > punto e virgola > virgola).
+
+    Il separatore viene cercato sulla PRIMA riga che ne contiene uno:
+    righe vuote o di titolo ("Elenco perizie...") in testa al file non
+    devono far degradare il rilevamento a virgola. La decodifica prova
+    UTF-8 e ripiega su cp1252 (export ANSI di Excel italiano) per non
+    corrompere le lettere accentate di nomi e indirizzi.
+    """
+    raw = path.read_bytes()
+    try:
+        testo = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        testo = raw.decode("cp1252", errors="replace")
+
+    delim = ","
+    for riga in testo.splitlines():
+        if not riga.strip():
+            continue
+        if "\t" in riga:
+            delim = "\t"
+            break
+        if ";" in riga:
+            delim = ";"
+            break
+        if "," in riga:
+            delim = ","
+            break
     return [list(r) for r in csv.reader(testo.splitlines(), delimiter=delim)]
 
 

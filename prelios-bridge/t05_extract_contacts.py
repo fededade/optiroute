@@ -14,7 +14,8 @@ from models import ToolResult
 PHONE_KEYWORDS = ("tel", "cell", "phone", "recapito")
 
 # Numeri italiani: mobile (3xx...) ed eventuale fisso (0x...)
-RE_MOBILE = re.compile(r"\b(?:\+39\s?)?3\d{2}[\s./-]?\d{6,7}\b")
+# Il mobile accetta anche il formato a gruppi "333 123 4567".
+RE_MOBILE = re.compile(r"\b(?:\+39[\s.]?)?3\d{2}(?:[\s./-]?\d{3}){2}\d?\b")
 RE_FISSO = re.compile(r"\b0\d{1,3}[\s./-]?\d{5,8}\b")
 
 # JS: raccoglie candidati telefono nel contesto corrente (documento o frame).

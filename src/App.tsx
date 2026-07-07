@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { Appointment, Coordinates, AppointmentStatus } from './types';
+import type { Appointment, Coordinates, AppointmentStatus, CallOutcome } from './types';
 import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
@@ -394,23 +394,28 @@ function App() {
       // Legge dalla ref per avere lo stato corrente anche nei tick lunghi
       const targets = allAppointmentsRef.current.filter(awaitingOutcome);
       for (const appt of targets) {
-        // Finestra scaduta: chiudi come "da verificare" invece di lasciare
-        // la card su "Esito in arrivo..." per sempre
-        if (isOutcomeExpired(appt)) {
-          setAllAppointments(prev => prev.map(a =>
-            a.id === appt.id && a.callId === appt.callId && !a.callOutcome
-              ? { ...a, callOutcome: { result: 'sconosciuto', summary: 'Esito non ricevuto entro 45 minuti: verificare nella dashboard Retell', receivedAt: new Date().toISOString() } }
-              : a));
-          continue;
+        // Anche a finestra scaduta (es. app riaperta il giorno dopo) si fa
+        // comunque UN recupero reale: l'esito su Retell è spesso già pronto
+        const poll = await fetchCallOutcome(appt.callId!);
+
+        let outcome: CallOutcome;
+        if (poll.pending) {
+          // Ancora niente: continua a poll-are finché la finestra è aperta,
+          // poi chiudi come "da verificare" (evita "Esito in arrivo" eterno)
+          if (!isOutcomeExpired(appt)) continue;
+          outcome = {
+            result: 'sconosciuto',
+            summary: 'Esito non ricevuto entro 45 minuti: verificare nella dashboard Retell',
+            receivedAt: new Date().toISOString(),
+          };
+        } else {
+          outcome = poll.outcome || {
+            result: 'sconosciuto',
+            summary: poll.error,
+            receivedAt: new Date().toISOString(),
+          };
         }
 
-        const poll = await fetchCallOutcome(appt.callId!);
-        if (poll.pending) continue;
-        const outcome = poll.outcome || {
-          result: 'sconosciuto' as const,
-          summary: poll.error,
-          receivedAt: new Date().toISOString(),
-        };
         // Guardia su callId: se nel frattempo è partita una NUOVA chiamata
         // allo stesso appuntamento, l'esito della vecchia non va applicato
         setAllAppointments(prev => prev.map(a =>

@@ -61,7 +61,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const { phone, clientName, date, startTime, endTime, address, shortAddress, comune, notes, periziaCode, project, contactPerson, referredBy } = req.body || {};
+  const { phone, clientName, date, startTime, endTime, address, shortAddress, comune, notes, periziaCode, project, contactPerson, referredBy, daySchedule } = req.body || {};
 
   if (!phone) {
     return res.status(400).json({ error: 'Numero di telefono mancante.' });
@@ -114,9 +114,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ``,
     `${isReferral ? '4' : '3'}. GESTIONE DELLA RISPOSTA:`,
     `- ACCETTA giorno e orario → ripeti chiaramente data e ora, ringrazia e saluta.`,
-    `- Chiede un ALTRO giorno/ora → prendi nota della sua preferenza (giorno e fascia oraria) e comunica che verrà ricontattato per la conferma della nuova data. NON garantire tu la nuova data.`,
+    `- Chiede un ALTRO giorno/ora → consulta l'AGENDA DEL GIORNO qui sotto e rispondi onestamente, poi prendi SEMPRE nota di giorno e fascia richiesti:`,
+    `  * se l'orario richiesto CADE in una fascia già impegnata: dillo con garbo (es. "guardi, a quell'ora abbiamo già un sopralluogo fissato") e comunica che verrà ricontattato con una proposta alternativa;`,
+    `  * se l'orario richiesto NON risulta impegnato: di' che dovrebbe essere possibile, ma che riceverà una conferma definitiva a breve. NON dare MAI il nuovo orario per già fissato: la conferma spetta all'ufficio.`,
+    `  * se chiede un ALTRO GIORNO: prendi nota e comunica che verrà ricontattato con la proposta.`,
     `- RIFIUTA / la perizia non serve più → prendi atto cortesemente e chiudi.`,
     `- NON è lui la persona da contattare (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
+    ``,
+    `## AGENDA DEL GIORNO (solo per tua consultazione — NON elencarla al cliente, non citare altri clienti):`,
+    `${daySchedule || 'Nessuna informazione sull\'agenda: in caso di richieste di spostamento prendi nota e basta.'}`,
     ``,
     `## DATI APPUNTAMENTO:`,
     `- Immobile: ${[comune, shortAddress].filter(Boolean).join(', ') || address}`,
@@ -139,6 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mandante: MANDANTE,
       presentazione: presentazione,
       proposta: proposta,
+      agenda_giorno: daySchedule || '',
       immobile: [comune, shortAddress].filter(Boolean).join(', ') || address || '',
       client_name: clientName || 'cliente',
       appointment_date: dateSpoken || 'da definire',

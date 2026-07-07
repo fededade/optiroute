@@ -317,6 +317,21 @@ function App() {
   };
 
   // --- AI Call (Retell) handlers ---
+
+  // Fotografia del giro del giorno per l'agente AI: fasce già impegnate
+  // (escluso l'appuntamento chiamato) + orario di lavoro. Serve per dare
+  // risposte oneste se il cliente chiede un altro orario, SENZA impegnare
+  // slot in diretta.
+  const buildDaySchedule = (date: string | undefined, excludeId: string): string => {
+    const day = date || currentDate;
+    const impegni = allAppointmentsRef.current
+      .filter(a => a.status === 'confirmed' && a.date === day && a.id !== excludeId && a.startTime)
+      .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0))
+      .map(a => `${a.startTime}-${a.endTime || '?'}${a.comune ? ` (zona ${a.comune})` : ''}`);
+    return `Giornata lavorativa ${startTime}-${endTimeLimit}. ` +
+      (impegni.length ? `Fasce già impegnate: ${impegni.join('; ')}.` : 'Nessun altro appuntamento fissato.');
+  };
+
   const requestCall = (appt: Appointment) => {
     if (!appt.phone) {
       alert("Questo appuntamento non ha un numero di telefono. Aggiungilo con il tasto Modifica.");
@@ -372,7 +387,7 @@ function App() {
         if (current.callOutcome && !['non_risposto', 'sconosciuto'].includes(current.callOutcome.result)) continue;
 
         setAllAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, callStatus: 'calling' } : a));
-        const res = await startConfirmationCall(current);
+        const res = await startConfirmationCall(current, buildDaySchedule(current.date, current.id));
         setAllAppointments(prev => prev.map(a => a.id === appt.id
           ? {
               ...a,
@@ -1022,6 +1037,7 @@ function App() {
       {callTarget && (
         <CallModal
           appointment={callTarget}
+          daySchedule={buildDaySchedule(callTarget.date, callTarget.id)}
           onClose={() => setCallTarget(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}

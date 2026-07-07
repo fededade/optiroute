@@ -4,6 +4,7 @@ import { startConfirmationCall } from '../services/callService';
 
 interface CallModalProps {
   appointment: Appointment;
+  daySchedule?: string; // agenda del giorno passata all'agente AI
   onClose: () => void;
   onCallStarted: (id: string) => void;
   onCallResult: (id: string, ok: boolean, callId?: string) => void;
@@ -11,7 +12,7 @@ interface CallModalProps {
 
 type Phase = 'preview' | 'calling' | 'success' | 'error';
 
-const CallModal: React.FC<CallModalProps> = ({ appointment, onClose, onCallStarted, onCallResult }) => {
+const CallModal: React.FC<CallModalProps> = ({ appointment, daySchedule, onClose, onCallStarted, onCallResult }) => {
   const [phase, setPhase] = useState<Phase>('preview');
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -19,7 +20,7 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, onClose, onCallStart
     setPhase('calling');
     onCallStarted(appointment.id);
 
-    const result = await startConfirmationCall(appointment);
+    const result = await startConfirmationCall(appointment, daySchedule);
 
     if (result.ok) {
       setPhase('success');

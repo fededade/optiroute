@@ -164,6 +164,10 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
 
+  // Pannello strumenti: aperto al primo uso (nessun appuntamento),
+  // richiuso di default quando c'è già un planning da consultare
+  const [showTools, setShowTools] = useState<boolean>(() => loadAppointments().length === 0);
+
   // Filters
   const [filters, setFilters] = useState({
       confirmed: true,
@@ -1131,7 +1135,7 @@ function App() {
         <aside className="w-full md:w-96 bg-white z-20 flex flex-col border-r border-slate-200 shadow-xl md:shadow-none">
           
            {/* Filters Bar */}
-           <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between gap-1 overflow-x-auto">
+           <div className="p-2 bg-slate-50 border-b border-slate-200 flex justify-between gap-1 overflow-x-auto">
              <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-50 text-blue-800 border border-blue-100 cursor-pointer whitespace-nowrap">
                 <input type="checkbox" checked={filters.confirmed} onChange={e => setFilters(p => ({...p, confirmed: e.target.checked}))} className="rounded text-blue-600 focus:ring-0" />
                 Confermate ({allAppointments.filter(a => a.status === 'confirmed').length})
@@ -1146,8 +1150,40 @@ function App() {
              </label>
            </div>
 
-          {/* Config & Add */}
-          <div className="p-4 bg-slate-100 border-b border-slate-200 space-y-3">
+          {/* Azioni principali (sempre visibili) */}
+          <div className="p-2 grid grid-cols-2 gap-2 bg-white border-b border-slate-100">
+             <button onClick={handleOptimize} className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
+                {isOptimizing ? "Calcolo..." : <><SparklesIcon /> Ottimizza {currentDate}</>}
+             </button>
+             {confirmedForDate.length > 0 && viewMode === 'day' && (
+                <>
+                    <button
+                        onClick={handleCallAll}
+                        disabled={isBatchCalling}
+                        className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-emerald-600 hover:bg-emerald-700 border-emerald-700 disabled:opacity-60 transition-colors"
+                    >
+                        <PhoneIcon /> {isBatchCalling ? 'Chiamate...' : `Chiama tutti (${getBatchCallTargets().length})`}
+                    </button>
+                    <button
+                        onClick={handleApplyOutcomes}
+                        className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-amber-700 border-amber-300 bg-amber-50 hover:bg-amber-100 transition-colors"
+                    >
+                        🔁 Applica esiti
+                    </button>
+                </>
+             )}
+             <button
+                onClick={() => setShowTools(v => !v)}
+                className="col-span-2 text-[11px] py-1 rounded text-slate-500 hover:bg-slate-100 border border-slate-200 flex items-center justify-center gap-1 transition-colors"
+             >
+                ⚙️ Strumenti e impostazioni {showTools ? '▲' : '▼'}
+             </button>
+          </div>
+
+          {/* Pannello strumenti (collassabile) */}
+          {showTools && (
+          <>
+          <div className="p-3 bg-slate-100 border-b border-slate-200 space-y-2">
             {/* Base */}
             {!baseLocation ? (
                 <form onSubmit={handleSetBase} className="flex gap-2">
@@ -1188,34 +1224,12 @@ function App() {
             </div>
           </div>
 
-          {/* Controls */}
+          {/* Strumenti secondari */}
           <div className="p-2 grid grid-cols-2 gap-2 bg-white border-b border-slate-100">
-             <button onClick={handleOptimize} className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
-                {isOptimizing ? "Calcolo..." : <><SparklesIcon /> Ottimizza {currentDate}</>}
-             </button>
              {confirmedForDate.length > 0 && viewMode === 'day' && (
-                <button onClick={() => setIsSwapMode(!isSwapMode)} className={`text-xs py-1.5 border rounded flex items-center justify-center gap-1 ${isSwapMode ? 'bg-amber-100 text-amber-800' : 'text-slate-600'}`}>
+                <button onClick={() => setIsSwapMode(!isSwapMode)} className={`col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 ${isSwapMode ? 'bg-amber-100 text-amber-800' : 'text-slate-600'}`}>
                     <ArrowsRightLeftIcon /> Scambia Ordine
                 </button>
-             )}
-
-             {/* Giro giornaliero: chiamate AI in blocco + applicazione esiti */}
-             {confirmedForDate.length > 0 && viewMode === 'day' && (
-                <div className="col-span-2 grid grid-cols-2 gap-2">
-                    <button
-                        onClick={handleCallAll}
-                        disabled={isBatchCalling}
-                        className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-emerald-600 hover:bg-emerald-700 border-emerald-700 disabled:opacity-60 transition-colors"
-                    >
-                        <PhoneIcon /> {isBatchCalling ? 'Chiamate in corso...' : `Chiama tutti (${getBatchCallTargets().length})`}
-                    </button>
-                    <button
-                        onClick={handleApplyOutcomes}
-                        className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-amber-700 border-amber-300 bg-amber-50 hover:bg-amber-100 transition-colors"
-                    >
-                        🔁 Applica esiti al giro
-                    </button>
-                </div>
              )}
               <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".xlsx,.csv" className="hidden" />
               
@@ -1250,9 +1264,11 @@ function App() {
                 <p className="col-span-2 text-[10px] text-slate-400 text-center -mt-1">Ultima sync {lastSyncInfo} · auto ogni ora</p>
               )}
           </div>
+          </>
+          )}
 
           {/* List Content */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white">
+          <div className="flex-1 overflow-y-auto p-3 space-y-4 bg-white">
             
             {/* 1. Confirmed */}
             {filters.confirmed && (

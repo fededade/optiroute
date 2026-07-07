@@ -34,12 +34,25 @@ const formatDateItalian = (isoDate?: string): string => {
   if (!isoDate) return '';
   const date = new Date(`${isoDate}T00:00:00`);
   if (isNaN(date.getTime())) return isoDate;
+  // Senza anno: al telefono si dice "martedì 7 luglio", non "... 2026"
   return date.toLocaleDateString('it-IT', {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
-    year: 'numeric',
   });
+};
+
+// "09:00" -> "9", "09:30" -> "9 e trenta": così il TTS dice "alle nove"
+// invece di "alle ore zero nove e zero zero".
+const oraParlata = (hhmm?: string): string => {
+  if (!hhmm) return '';
+  const [hStr, mStr] = hhmm.split(':');
+  const h = parseInt(hStr, 10);
+  const m = parseInt(mStr || '0', 10);
+  if (isNaN(h)) return hhmm;
+  if (!m) return `${h}`;
+  if (m === 30) return `${h} e mezza`;
+  return `${h} e ${m}`;
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -73,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const dateSpoken = formatDateItalian(date);
-  const timeSpoken = startTime ? `alle ore ${startTime}` : 'in orario da definire';
+  const timeSpoken = startTime ? `alle ${oraParlata(startTime)}` : 'in orario da definire';
 
   const isReferral = !!contactPerson; // stiamo chiamando la persona indicata dal cliente
 
@@ -92,7 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // PROPOSTA: l'operatrice propone, il cliente conferma
   const proposta = (dateSpoken && startTime)
-    ? `La chiamavo per proporle la data del sopralluogo del perito: avremmo disponibilità per ${dateSpoken} alle ore ${startTime}. Può andarle bene?`
+    ? `La chiamavo per proporle la data del sopralluogo del perito: avremmo disponibilità per ${dateSpoken} alle ${oraParlata(startTime)}. Può andarle bene?`
     : `La chiamavo per concordare la data del sopralluogo del perito: prendo nota delle sue disponibilità e verrà ricontattato con la proposta di giorno e orario.`;
 
   // Ready-to-speak Italian script: the Retell agent prompt can simply
@@ -114,10 +127,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ``,
     `${isReferral ? '4' : '3'}. GESTIONE DELLA RISPOSTA:`,
     `- ACCETTA giorno e orario → ripeti chiaramente data e ora, ringrazia e saluta.`,
-    `- Chiede un ALTRO giorno/ora → consulta l'AGENDA DEL GIORNO qui sotto e rispondi onestamente, poi prendi SEMPRE nota di giorno e fascia richiesti:`,
-    `  * se l'orario richiesto CADE in una fascia già impegnata: dillo con garbo (es. "guardi, a quell'ora abbiamo già un sopralluogo fissato") e comunica che verrà ricontattato con una proposta alternativa;`,
+    `- È TITUBANTE o chiede di spostare → l'obiettivo è CONSERVARE l'appuntamento proposto: fai UN SOLO tentativo, gentile ma deciso, es.: "Guardi, le dico la verità: ci verrebbe difficile riprogrammare, l'agenda è pressoché piena e spostare il sopralluogo potrebbe allungare i tempi della sua pratica. È sicuro di non riuscire a esserci? In alternativa può anche delegare qualcuno: un familiare, l'agente immobiliare, il geometra...". Se delega qualcuno, raccogli NOME, TELEFONO e RUOLO del delegato (e ripeti il numero per conferma). Se invece insiste per spostare, NON forzare oltre — accondiscendi con garbo e procedi:`,
+    `  * consulta l'AGENDA DEL GIORNO qui sotto: se l'orario richiesto CADE in una fascia già impegnata, dillo con garbo (es. "a quell'ora abbiamo già un sopralluogo fissato") e comunica che verrà ricontattato con una proposta alternativa;`,
     `  * se l'orario richiesto NON risulta impegnato: di' che dovrebbe essere possibile, ma che riceverà una conferma definitiva a breve. NON dare MAI il nuovo orario per già fissato: la conferma spetta all'ufficio.`,
     `  * se chiede un ALTRO GIORNO: prendi nota e comunica che verrà ricontattato con la proposta.`,
+    `  * in ogni caso prendi SEMPRE nota di giorno e fascia richiesti.`,
     `- RIFIUTA / la perizia non serve più → prendi atto cortesemente e chiudi.`,
     `- NON è lui la persona da contattare (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
     ``,
@@ -133,7 +147,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     periziaCode ? `- Pratica: ${periziaCode}` : null,
     notes ? `- Note interne (NON leggerle al cliente, servono a te): ${notes}` : null,
     ``,
-    `## REGOLE: tono cortese e professionale; non fornire MAI l'importo del finanziamento o altri dati sensibili; ringrazia e saluta prima di chiudere.`,
+    `## REGOLE:`,
+    `- Tono cortese e professionale; non fornire MAI l'importo del finanziamento o altri dati sensibili.`,
+    `- ORARI: pronunciali in italiano colloquiale — "alle nove", "alle nove e mezza", "alle quindici". MAI leggere le cifre una a una ("zero nove e zero zero" è VIETATO).`,
+    `- Ringrazia e saluta prima di chiudere la chiamata.`,
   ].filter(line => line !== null).join('\n');
 
   const payload: Record<string, unknown> = {

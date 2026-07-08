@@ -42,6 +42,34 @@ const formatDateItalian = (isoDate?: string): string => {
   });
 };
 
+// Ripulisce l'indirizzo geocodificato "lungo" (Nominatim display_name) in
+// "via civico, comune": toglie CAP, "Municipio N", regione, quartieri/frazioni
+// e "Italia". Usato solo come fallback quando non abbiamo via+comune separati.
+const REGIONI_IT = [
+  'abruzzo', 'basilicata', 'calabria', 'campania', 'emilia-romagna',
+  'friuli-venezia giulia', 'lazio', 'liguria', 'lombardia', 'marche',
+  'molise', 'piemonte', 'puglia', 'sardegna', 'sicilia', 'toscana',
+  'trentino-alto adige', 'umbria', "valle d'aosta", 'veneto',
+];
+
+const cleanDisplayName = (full: string): string => {
+  const parts = full.split(',').map(s => s.trim()).filter(Boolean);
+  const kept = parts.filter(p => {
+    const pl = p.toLowerCase();
+    if (/^\d{4,5}$/.test(p)) return false;      // CAP
+    if (pl === 'italia') return false;
+    if (/^municipio\b/i.test(p)) return false;
+    if (REGIONI_IT.includes(pl)) return false;
+    return true;
+  });
+  // Nominatim IT: [civico, via, ...quartieri/frazioni..., comune].
+  // Tieni civico + via + comune, scartando le zone intermedie.
+  if (kept.length > 3) {
+    return [kept[0], kept[1], kept[kept.length - 1]].filter(Boolean).join(', ');
+  }
+  return kept.join(', ');
+};
+
 // "09:00" -> "9", "09:30" -> "9 e trenta": così il TTS dice "alle nove"
 // invece di "alle ore zero nove e zero zero".
 const oraParlata = (hhmm?: string): string => {
@@ -90,10 +118,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const isReferral = !!contactPerson; // stiamo chiamando la persona indicata dal cliente
 
+  // Luogo da PRONUNCIARE: solo via, civico e comune (niente CAP/provincia/
+  // quartiere/regione). Preferisce i campi separati; altrimenti ripulisce
+  // l'indirizzo geocodificato lungo.
+  const luogoBreve = (shortAddress || comune)
+    ? [shortAddress, comune].filter(Boolean).join(', ')
+    : (address ? cleanDisplayName(address) : 'indirizzo da comunicare');
+
   // Immobile: "di COMUNE in VIA CIVICO" presi dalla perizia
   const luogoImmobile = comune && shortAddress
     ? `di ${comune} in ${shortAddress}`
-    : `in ${shortAddress || comune || address || 'indirizzo da comunicare'}`;
+    : `in ${luogoBreve}`;
 
   const interlocutore = isReferral ? contactPerson : (clientName || '');
 
@@ -139,8 +174,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     `${daySchedule || 'Nessuna informazione sull\'agenda: in caso di richieste di spostamento prendi nota e basta.'}`,
     ``,
     `## DATI APPUNTAMENTO:`,
-    `- Immobile: ${[comune, shortAddress].filter(Boolean).join(', ') || address}`,
-    address ? `- Indirizzo completo: ${address}` : null,
+    `- Immobile (pronuncia SOLO questo: via, civico e città): ${luogoBreve}`,
+    address ? `- Indirizzo esteso (solo riferimento interno, NON leggerlo al cliente): ${address}` : null,
     dateSpoken ? `- Giorno proposto: ${dateSpoken}` : `- Giorno: da definire`,
     startTime ? `- Orario proposto: ${startTime}${endTime ? ` (indicativamente fino alle ${endTime})` : ''}` : `- Orario: da definire`,
     (isReferral && clientName) ? `- Intestatario della pratica: ${clientName}` : null,
@@ -150,6 +185,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     `## REGOLE:`,
     `- Tono cortese e professionale; non fornire MAI l'importo del finanziamento o altri dati sensibili.`,
     `- ORARI: pronunciali in italiano colloquiale — "alle nove", "alle nove e mezza", "alle quindici". MAI leggere le cifre una a una ("zero nove e zero zero" è VIETATO).`,
+    `- INDIRIZZO: quando citi il luogo dell'immobile di' SOLO via, numero civico e città (es. "Via Roma 10, Milano"). NON pronunciare MAI CAP, provincia, quartiere, frazione, regione o la parola "Italia".`,
     `- Ringrazia e saluta prima di chiudere la chiamata.`,
   ].filter(line => line !== null).join('\n');
 
@@ -163,7 +199,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       presentazione: presentazione,
       proposta: proposta,
       agenda_giorno: daySchedule || '',
-      immobile: [comune, shortAddress].filter(Boolean).join(', ') || address || '',
+      immobile: luogoBreve,
       client_name: clientName || 'cliente',
       appointment_date: dateSpoken || 'da definire',
       appointment_time: startTime || 'da definire',

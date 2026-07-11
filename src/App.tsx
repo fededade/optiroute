@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { Appointment, Coordinates, AppointmentStatus } from './types';
+import type { Appointment, Coordinates, AppointmentStatus, Technician } from './types';
 import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
-import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow } from './services/excelService';
+import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow } from './services/excelService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
 import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings } from './services/storageService';
+import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, workWindowOn } from './services/technicianService';
+import { provinceToCode } from './utils/provinces';
 import MapComponent from './Components/MapComponent';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
+import TechnicianModal from './Components/TechnicianModal';
+import DispatchModal from './Components/DispatchModal';
 
 // --- CONFIGURATION ---
 // URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
@@ -17,12 +21,6 @@ const N8N_WEBHOOK_URL = (import.meta as any).env?.VITE_N8N_WEBHOOK_URL || 'https
 const PlusIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-  </svg>
-);
-const MapPinIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" />
   </svg>
 );
 const SparklesIcon = () => (
@@ -81,6 +79,26 @@ const PencilIcon = () => (
       <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
     </svg>
 );
+const UsersIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+    </svg>
+);
+const TruckIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
+    </svg>
+);
+const CheckIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+  </svg>
+);
+const XMarkIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+  </svg>
+);
 const CheckCircleIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-12 h-12 text-emerald-500">
     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -96,12 +114,28 @@ const DEFAULT_CENTER: Coordinates = { lat: 41.9028, lng: 12.4964 }; // Rome
 
 type ViewMode = 'day' | 'week' | 'month';
 
+const ALL_TECH = 'all';
+
+const formatDayLabel = (iso?: string): string => {
+  if (!iso) return '';
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('it-IT', {
+    weekday: 'short', day: 'numeric', month: 'short',
+  });
+};
+
 function App() {
   const [addressInput, setAddressInput] = useState('');
   const [baseInput, setBaseInput] = useState('');
 
   // Unified List (restored from localStorage)
   const [allAppointments, setAllAppointments] = useState<Appointment[]>(() => loadAppointments());
+
+  // Technicians (i soggetti che effettuano i sopralluoghi)
+  const [technicians, setTechnicians] = useState<Technician[]>(() => loadTechnicians());
+  const [selectedTechId, setSelectedTechId] = useState<string>(ALL_TECH);
+  const [showTechModal, setShowTechModal] = useState(false);
+  const [techModalOpenId, setTechModalOpenId] = useState<string | null>(null);
+  const [showDispatchModal, setShowDispatchModal] = useState(false);
 
   // Selection State
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
@@ -112,13 +146,13 @@ function App() {
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [isSendingToN8n, setIsSendingToN8n] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
-  
+
   // Import Modal State
   const [showImportModal, setShowImportModal] = useState(false);
   const [importFinished, setImportFinished] = useState(false);
   const [importStats, setImportStats] = useState({ success: 0, failed: 0 });
   const [failedImports, setFailedImports] = useState<string[]>([]);
-  
+
   // Settings & View
   const [currentDate, setCurrentDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [viewMode, setViewMode] = useState<ViewMode>('day');
@@ -135,6 +169,7 @@ function App() {
   // Filters
   const [filters, setFilters] = useState({
       confirmed: true,
+      proposed: true,
       pending: true,
       standby: true
   });
@@ -142,8 +177,20 @@ function App() {
   // Swap Mode State
   const [isSwapMode, setIsSwapMode] = useState(false);
   const [selectedForSwap, setSelectedForSwap] = useState<string[]>([]);
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const selectedTech: Technician | null =
+    selectedTechId !== ALL_TECH ? technicians.find(t => t.id === selectedTechId) || null : null;
+
+  const techById = useCallback(
+    (id?: string): Technician | undefined => (id ? technicians.find(t => t.id === id) : undefined),
+    [technicians]
+  );
+
+  const technicianNameById: Record<string, string> = Object.fromEntries(
+    technicians.map(t => [t.id, t.name])
+  );
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -160,6 +207,14 @@ function App() {
   useEffect(() => { saveAppointments(allAppointments); }, [allAppointments]);
   useEffect(() => { saveBase(baseLocation); }, [baseLocation]);
   useEffect(() => { saveSettings({ startTime, endTimeLimit }); }, [startTime, endTimeLimit]);
+  useEffect(() => { saveTechnicians(technicians); }, [technicians]);
+
+  // Se il tecnico selezionato viene eliminato, torna a "Tutti"
+  useEffect(() => {
+    if (selectedTechId !== ALL_TECH && !technicians.some(t => t.id === selectedTechId)) {
+      setSelectedTechId(ALL_TECH);
+    }
+  }, [technicians, selectedTechId]);
 
   // Scroll to selected item when it changes
   useEffect(() => {
@@ -172,6 +227,11 @@ function App() {
   }, [selectedAppointmentId]);
 
   // -- Derived Lists --
+  const matchesTechFilter = useCallback((appt: Appointment): boolean => {
+    if (selectedTechId === ALL_TECH) return true;
+    return appt.technicianId === selectedTechId;
+  }, [selectedTechId]);
+
   const getVisibleAppointments = useCallback(() => {
       const selectedDate = new Date(currentDate);
 
@@ -179,11 +239,11 @@ function App() {
           if (!dateStr) return false;
           const d = new Date(dateStr);
           const startOfWeek = new Date(selectedDate);
-          const day = startOfWeek.getDay() || 7; 
-          if (day !== 1) startOfWeek.setHours(-24 * (day - 1)); 
-          
+          const day = startOfWeek.getDay() || 7;
+          if (day !== 1) startOfWeek.setHours(-24 * (day - 1));
+
           const endOfWeek = new Date(startOfWeek);
-          endOfWeek.setDate(startOfWeek.getDate() + 6); 
+          endOfWeek.setDate(startOfWeek.getDate() + 6);
 
           return d >= startOfWeek && d <= endOfWeek;
       };
@@ -195,6 +255,8 @@ function App() {
       };
 
       return allAppointments.filter((appt: Appointment) => {
+          if (!matchesTechFilter(appt)) return false;
+
           if (appt.status === 'confirmed') {
               if (!filters.confirmed) return false;
               if (viewMode === 'day') return appt.date === currentDate;
@@ -202,11 +264,12 @@ function App() {
               if (viewMode === 'month') return isSameMonth(appt.date);
               return false;
           }
+          if (appt.status === 'proposed') return filters.proposed;
           if (appt.status === 'pending') return filters.pending;
           if (appt.status === 'standby') return filters.standby;
           return true;
       });
-  }, [allAppointments, filters, currentDate, viewMode]);
+  }, [allAppointments, filters, currentDate, viewMode, matchesTechFilter]);
 
   const visibleAppointments = getVisibleAppointments();
 
@@ -214,7 +277,7 @@ function App() {
     e.preventDefault();
     if (!baseInput.trim()) return;
     setIsLoading(true);
-    
+
     const result = await geocodeAddress(baseInput);
     if (result) {
       setBaseLocation({
@@ -238,14 +301,20 @@ function App() {
     const result = await geocodeAddress(cleanAddress);
 
     if (result) {
+      // Assegnazione automatica del tecnico in base alla zona di competenza
+      const matched = matchTechnician({ coords: result.coords, province: result.province }, technicians);
+
       const newAppointment: Appointment = {
         id: Date.now().toString(),
         address: result.displayName,
         title: cleanAddress,
         coords: result.coords,
+        province: result.province,
+        comune: result.comune,
+        technicianId: matched?.id,
         status: 'pending' // Default to pending
       };
-      
+
       setAllAppointments(prev => [...prev, newAppointment]);
       setMapCenter(result.coords);
       setAddressInput('');
@@ -273,6 +342,11 @@ function App() {
   const openNewApptModal = () => {
     setEditingAppointment(null);
     setShowApptModal(true);
+  };
+
+  const openTechModal = (openId: string | null = null) => {
+    setTechModalOpenId(openId);
+    setShowTechModal(true);
   };
 
   // --- AI Call (Retell) handlers ---
@@ -313,7 +387,7 @@ function App() {
 
       let processedCount = 0;
       const validRows = rows.filter(r => r.Indirizzo && r.Comune);
-      
+
       if (validRows.length === 0) {
         setUploadProgress("Errore: Nessuna riga valida trovata.");
         setTimeout(() => setShowImportModal(false), 2000);
@@ -328,6 +402,7 @@ function App() {
         const title = row.Intestatario || fullAddress;
         const phone = extractPhoneFromRow(row);
         const notes = row.Note ? `${row.Note}`.trim() : undefined;
+        const urgent = extractUrgentFromRow(row);
 
         // Rate limit strictness for Nominatim (skipped for cached/duplicate addresses)
         if (!hasCachedGeocode(fullAddress)) {
@@ -337,6 +412,11 @@ function App() {
         try {
           const result = await geocodeAddress(fullAddress);
           if (result) {
+            // Provincia: la colonna "Prov." del file è più affidabile del geocoding
+            const province = provinceToCode(row['Prov.'] ? `${row['Prov.']}` : undefined) || result.province;
+            const comune = row.Comune ? `${row.Comune}`.trim() : result.comune;
+            const matched = matchTechnician({ coords: result.coords, province }, technicians);
+
             newAppointments.push({
               id: Date.now() + Math.random().toString(),
               address: result.displayName,
@@ -344,19 +424,23 @@ function App() {
               phone: phone,
               notes: notes,
               coords: result.coords,
+              province,
+              comune,
+              urgent: urgent || undefined,
+              technicianId: matched?.id,
               status: 'pending' // Import as pending
             });
           } else {
             failures.push(`${fullAddress} (${title})`);
           }
-        } catch (err) { 
+        } catch (err) {
           console.error(err);
           failures.push(`${fullAddress} (Errore di rete)`);
         }
       }
 
       setAllAppointments(prev => [...prev, ...newAppointments]);
-      
+
       setImportStats({ success: newAppointments.length, failed: failures.length });
       setFailedImports(failures);
       setImportFinished(true);
@@ -370,62 +454,36 @@ function App() {
     }
   };
 
-  const getExportData = () => {
+  const getExportPool = () => {
     if (visibleAppointments.length === 0) return null;
-
-    // Sort logic for export
-    const sorted = [...visibleAppointments].sort((a: Appointment, b: Appointment) => {
-        if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
+    return [...visibleAppointments].sort((a: Appointment, b: Appointment) => {
+        if (a.technicianId !== b.technicianId) return (a.technicianId || 'zzz').localeCompare(b.technicianId || 'zzz');
+        if (a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
         return (a.sequenceOrder||0) - (b.sequenceOrder||0);
     });
-
-    // Format data similar to excelService export
-    return sorted.map((a: Appointment) => ({
-        'Data': a.date || 'Da definire',
-        'Ordine': a.sequenceOrder || '-',
-        'Ora Arrivo': a.startTime || '-',
-        'Ora Partenza': a.endTime || '-',
-        'Cliente': a.title,
-        'Telefono': a.phone || '-',
-        'Indirizzo': a.address,
-        'Note': a.notes || '',
-        'Stato': a.status,
-        'Distanza': a.distanceFromPrev || 0,
-        'Tempo': a.travelTimeFromPrev || 0,
-        'Pausa Pranzo': a.hasLunchBreakBefore ? 'Sì' : 'No'
-    }));
   };
 
   const handleExport = () => {
-    const data = getExportData();
-    if (!data) {
+    const sortedAppts = getExportPool();
+    if (!sortedAppts) {
       alert("Nessun appuntamento da esportare nella vista corrente.");
       return;
     }
     const filename = `Planning_${viewMode === 'day' ? currentDate : 'Export'}.xlsx`;
-    // Re-sort the actual appointments array for the file generation function
-    const sortedAppts = [...visibleAppointments].sort((a: Appointment, b: Appointment) => {
-        if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
-        return (a.sequenceOrder||0) - (b.sequenceOrder||0);
-    });
-    exportAppointmentsToExcel(sortedAppts, filename);
+    exportAppointmentsToExcel(sortedAppts, filename, technicianNameById);
   };
 
   const handleSendToN8n = async () => {
-      if (visibleAppointments.length === 0) {
+      const sortedAppts = getExportPool();
+      if (!sortedAppts) {
           alert("Nessun dato da inviare.");
           return;
       }
 
       setIsSendingToN8n(true);
       try {
-          const sortedAppts = [...visibleAppointments].sort((a: Appointment, b: Appointment) => {
-              if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
-              return (a.sequenceOrder||0) - (b.sequenceOrder||0);
-          });
-
           // 1. Genera BLOB del file
-          const blob = await generateExcelBlob(sortedAppts);
+          const blob = await generateExcelBlob(sortedAppts, technicianNameById);
           if (blob.size === 0) throw new Error("Il file Excel generato è vuoto.");
 
           // 2. Genera BASE64 string del file (Backup per n8n text field)
@@ -436,14 +494,14 @@ function App() {
 
           // Use FormData to send as a file upload (multipart/form-data)
           const formData = new FormData();
-          
+
           // Metodo Principale: File Binario
-          formData.append('data', blob, filename); 
-          
+          formData.append('data', blob, filename);
+
           // Metadati
           formData.append('reportName', reportName);
           formData.append('generatedAt', new Date().toISOString());
-          
+
           // BACKUP: Invia anche il file come stringa Base64 nel caso il binario venga perso
           formData.append('file_base64', base64String);
           formData.append('file_name', filename);
@@ -476,13 +534,12 @@ function App() {
 
               if (tryBlindly) {
                  try {
-                     const sortedAppts = [...visibleAppointments].sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
-                     const blob = await generateExcelBlob(sortedAppts);
+                     const blob = await generateExcelBlob(sortedAppts, technicianNameById);
                      const base64String = await blobToBase64(blob);
-                     
+
                      const filename = `Planning.xlsx`;
                      const formData = new FormData();
-                     
+
                      // Attach everything again
                      formData.append('data', blob, filename);
                      formData.append('reportName', `Planning - Blind Mode`);
@@ -492,7 +549,7 @@ function App() {
                      await fetch(N8N_WEBHOOK_URL, {
                          method: 'POST',
                          body: formData,
-                         mode: 'no-cors' 
+                         mode: 'no-cors'
                      });
                      alert("Inviato in modalità blind! Controlla in n8n il campo 'file_base64' se l'allegato manca.");
                  } catch (blindErr) {
@@ -516,13 +573,18 @@ function App() {
 
   const handleStatusChange = (id: string, newStatus: AppointmentStatus) => {
     const target = allAppointments.find(a => a.id === id);
+    if (!target) return;
+
+    // Conferma di una proposta: mantiene la data/orario proposti dallo smistamento
+    const keepProposal = newStatus === 'confirmed' && target.status === 'proposed' && !!target.date;
+    const confirmDate = keepProposal ? target.date! : currentDate;
 
     setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
         if (a.id !== id) return a;
 
         const update: Partial<Appointment> = { status: newStatus };
         if (newStatus === 'confirmed') {
-            update.date = currentDate; // Assign to current date
+            update.date = confirmDate;
         } else {
             update.date = undefined;
             update.sequenceOrder = undefined;
@@ -534,34 +596,81 @@ function App() {
 
     // On confirmation, propose the AI confirmation call if a phone number exists
     if (newStatus === 'confirmed' && target?.phone && target.callStatus !== 'called') {
-        setCallTarget({ ...target, status: 'confirmed', date: currentDate });
+        setCallTarget({ ...target, status: 'confirmed', date: confirmDate });
     }
   };
 
+  // Conferma in blocco tutte le proposte di un tecnico per una data
+  const handleConfirmDay = (technicianId: string | undefined, date: string) => {
+    setAllAppointments(prev => prev.map(a =>
+      a.status === 'proposed' && a.technicianId === technicianId && a.date === date
+        ? { ...a, status: 'confirmed' }
+        : a
+    ));
+  };
+
+  // Applica gli esiti dello smistamento automatico (stato 'proposed' + assegnazioni)
+  const handleApplyDispatch = (updates: Appointment[]) => {
+    const byId = new Map(updates.map(u => [u.id, u]));
+    setAllAppointments(prev => prev.map(a => byId.get(a.id) || a));
+  };
+
   const handleOptimize = useCallback(async () => {
-    const activePool = allAppointments.filter(a => 
-        (a.status === 'confirmed' && a.date === currentDate) || a.status === 'pending'
+    // Con un tecnico selezionato si ottimizza il SUO giro (base, orari e
+    // indisponibilità suoi); con "Tutti" si ottimizza il pool non assegnato
+    // (comportamento storico, base generale).
+    const tech = selectedTech;
+
+    const inPool = (a: Appointment) =>
+      tech ? a.technicianId === tech.id : !a.technicianId;
+
+    const activePool = allAppointments.filter(a =>
+        inPool(a) && ((a.status === 'confirmed' && a.date === currentDate) || a.status === 'pending')
     );
-    
-    if (activePool.length < 1) return; 
-    
+
+    if (activePool.length < 1) {
+        const assignedPending = allAppointments.filter(a => a.status === 'pending' && a.technicianId).length;
+        if (!tech && assignedPending > 0) {
+            alert("Le pratiche in attesa sono assegnate ai tecnici: seleziona un tecnico (chip in alto) per ottimizzare il suo giro, oppure usa \"Smista pratiche\" per pianificare tutto.");
+        }
+        return;
+    }
+
+    let dayStart = startTime;
+    let dayEnd = endTimeLimit;
+    let base = baseLocation?.coords || null;
+
+    if (tech) {
+        const window = workWindowOn(tech, currentDate);
+        if (!window) {
+            alert(`${tech.name} non è disponibile il ${currentDate} (vedi scheda tecnico).`);
+            return;
+        }
+        dayStart = window.start;
+        dayEnd = window.end;
+        base = tech.baseCoords || baseLocation?.coords || null;
+    }
+
     setIsOptimizing(true);
     setIsSwapMode(false);
     setSelectedForSwap([]);
 
     try {
-      const sorted = optimizeRoute(activePool, baseLocation?.coords);
+      const sorted = optimizeRoute(activePool, base);
 
-      const startH = parseInt(startTime.split(':')[0]);
-      const startM = parseInt(startTime.split(':')[1]);
-      const endH = parseInt(endTimeLimit.split(':')[0]);
+      const startH = parseInt(dayStart.split(':')[0]);
+      const startM = parseInt(dayStart.split(':')[1]);
+      const endH = parseInt(dayEnd.split(':')[0]);
+      const endM = parseInt(dayEnd.split(':')[1]) || 0;
 
       const { scheduled, overflow } = await calculateSchedule(
-        sorted, 
-        baseLocation?.coords, 
-        startH, 
-        startM, 
-        endH
+        sorted,
+        base,
+        startH,
+        startM,
+        endH,
+        20,
+        { maxEndTimeMinutes: endM, startFromBase: !!tech && !!tech.baseCoords }
       );
 
       const scheduledIds = new Set(scheduled.map(a => a.id));
@@ -570,20 +679,20 @@ function App() {
       setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
           if (scheduledIds.has(a.id)) {
               const calculated = scheduled.find(s => s.id === a.id);
-              return { 
-                  ...a, 
-                  ...calculated, 
-                  status: 'confirmed', 
-                  date: currentDate 
+              return {
+                  ...a,
+                  ...calculated,
+                  status: 'confirmed',
+                  date: currentDate
               };
           } else if (overflowIds.has(a.id)) {
-              return { 
-                  ...a, 
-                  status: 'pending', 
-                  date: undefined, 
-                  sequenceOrder: undefined, 
-                  startTime: undefined, 
-                  endTime: undefined 
+              return {
+                  ...a,
+                  status: 'pending',
+                  date: undefined,
+                  sequenceOrder: undefined,
+                  startTime: undefined,
+                  endTime: undefined
               };
           }
           return a;
@@ -595,7 +704,7 @@ function App() {
     } finally {
       setIsOptimizing(false);
     }
-  }, [allAppointments, currentDate, baseLocation, startTime, endTimeLimit]);
+  }, [allAppointments, currentDate, baseLocation, startTime, endTimeLimit, selectedTech]);
 
   const toggleSwapSelection = async (id: string) => {
     if (!isSwapMode) return;
@@ -608,12 +717,28 @@ function App() {
     } else {
       if (newSelection.length < 2) newSelection.push(id);
     }
-    
+
     setSelectedForSwap(newSelection);
 
     if (newSelection.length === 2) {
-      const currentDayAppointments = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate).sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
-      
+      const first = allAppointments.find(a => a.id === newSelection[0]);
+      const second = allAppointments.find(a => a.id === newSelection[1]);
+      if (!first || !second) return;
+
+      // Lo scambio ha senso solo all'interno del giro dello stesso tecnico
+      if (first.technicianId !== second.technicianId) {
+        alert("Puoi scambiare solo due tappe dello stesso tecnico.");
+        setSelectedForSwap([]);
+        return;
+      }
+
+      const routeTechId = first.technicianId;
+      const routeTech = techById(routeTechId);
+
+      const currentDayAppointments = allAppointments
+        .filter(a => a.status === 'confirmed' && a.date === currentDate && a.technicianId === routeTechId)
+        .sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
+
       const idx1 = currentDayAppointments.findIndex(a => a.id === newSelection[0]);
       const idx2 = currentDayAppointments.findIndex(a => a.id === newSelection[1]);
 
@@ -624,18 +749,30 @@ function App() {
 
       setIsOptimizing(true);
       try {
-        const startH = parseInt(startTime.split(':')[0]);
-        const startM = parseInt(startTime.split(':')[1]);
-        const endH = parseInt(endTimeLimit.split(':')[0]);
+        let dayStart = startTime;
+        let dayEnd = endTimeLimit;
+        let base = baseLocation?.coords || null;
+        if (routeTech) {
+            const window = workWindowOn(routeTech, currentDate);
+            if (window) { dayStart = window.start; dayEnd = window.end; }
+            base = routeTech.baseCoords || baseLocation?.coords || null;
+        }
+
+        const startH = parseInt(dayStart.split(':')[0]);
+        const startM = parseInt(dayStart.split(':')[1]);
+        const endH = parseInt(dayEnd.split(':')[0]);
+        const endM = parseInt(dayEnd.split(':')[1]) || 0;
 
         const { scheduled, overflow } = await calculateSchedule(
-            updatedList, 
-            baseLocation?.coords, 
-            startH, 
-            startM, 
-            endH
+            updatedList,
+            base,
+            startH,
+            startM,
+            endH,
+            20,
+            { maxEndTimeMinutes: endM, startFromBase: !!routeTech && !!routeTech.baseCoords }
         );
-        
+
         const scheduledIds = new Set(scheduled.map(a => a.id));
         const overflowIds = new Set(overflow.map(a => a.id));
 
@@ -648,9 +785,9 @@ function App() {
             }
             return a;
         }));
-        
+
         setSelectedForSwap([]);
-      } catch (e) { console.error(e); } 
+      } catch (e) { console.error(e); }
       finally { setIsOptimizing(false); }
     }
   };
@@ -659,11 +796,44 @@ function App() {
     setAllAppointments((prev: Appointment[]) => prev.filter((a: Appointment) => a.id !== id));
   };
 
-  const confirmedForDate = allAppointments.filter(a => a.status === 'confirmed' && a.date === currentDate).sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0) - (b.sequenceOrder||0));
+  // Riepilogo percorso: per il tecnico selezionato, o per il pool non
+  // assegnato quando la vista è "Tutti" (comportamento storico).
+  const confirmedForDate = allAppointments
+    .filter(a => a.status === 'confirmed' && a.date === currentDate && matchesTechFilter(a))
+    .filter(a => selectedTechId !== ALL_TECH ? true : !a.technicianId)
+    .sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0) - (b.sequenceOrder||0));
   const routeSummary = confirmedForDate.length > 0 ? calculateRouteSummary(confirmedForDate) : null;
 
-  const listPending = allAppointments.filter(a => a.status === 'pending');
-  const listStandby = allAppointments.filter(a => a.status === 'standby');
+  const listProposed = allAppointments.filter(a => a.status === 'proposed' && matchesTechFilter(a));
+  const listPending = allAppointments
+    .filter(a => a.status === 'pending' && matchesTechFilter(a))
+    .sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
+  const listStandby = allAppointments.filter(a => a.status === 'standby' && matchesTechFilter(a));
+
+  const pendingAll = allAppointments.filter(a => a.status === 'pending');
+
+  // Gruppi proposte per tecnico+data (ordinati)
+  const proposedGroups = (() => {
+    const groups = new Map<string, { techId?: string; date: string; items: Appointment[] }>();
+    for (const a of listProposed) {
+      const key = `${a.technicianId || 'none'}|${a.date || ''}`;
+      const g = groups.get(key) || { techId: a.technicianId, date: a.date || '', items: [] };
+      g.items.push(a);
+      groups.set(key, g);
+    }
+    return Array.from(groups.values())
+      .map(g => ({ ...g, items: g.items.sort((a, b) => (a.sequenceOrder||0)-(b.sequenceOrder||0)) }))
+      .sort((g1, g2) => g1.date.localeCompare(g2.date) || (g1.techId||'').localeCompare(g2.techId||''));
+  })();
+
+  // Carico di lavoro mostrato sul chip: in attesa + proposte + confermate da oggi in poi
+  const todayStr = new Date().toISOString().split('T')[0];
+  const countForTech = (techId: string): number =>
+    allAppointments.filter(a =>
+      a.technicianId === techId &&
+      (a.status === 'pending' || a.status === 'proposed' ||
+        (a.status === 'confirmed' && !!a.date && a.date >= todayStr))
+    ).length;
 
   // Small badge showing the AI call state on a card
   const CallBadge = ({ appt }: { appt: Appointment }) => {
@@ -673,12 +843,33 @@ function App() {
     return null;
   };
 
+  const UrgentBadge = ({ appt }: { appt: Appointment }) => {
+    if (!appt.urgent) return null;
+    return <span className="text-[10px] font-bold text-white bg-red-600 px-1.5 rounded">URGENTE</span>;
+  };
+
+  const TechBadge = ({ appt }: { appt: Appointment }) => {
+    const tech = techById(appt.technicianId);
+    if (tech) {
+      return (
+        <span className="text-[10px] font-bold text-white px-1.5 rounded inline-flex items-center gap-1" style={{ backgroundColor: tech.color }}>
+          {tech.name}
+        </span>
+      );
+    }
+    if (appt.status === 'pending') {
+      return <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">Da assegnare</span>;
+    }
+    return null;
+  };
+
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
       {/* --- ADD/EDIT APPOINTMENT MODAL --- */}
       {showApptModal && (
         <AppointmentModal
           initial={editingAppointment}
+          technicians={technicians}
           onSave={handleSaveAppointment}
           onClose={() => { setShowApptModal(false); setEditingAppointment(null); }}
         />
@@ -688,9 +879,31 @@ function App() {
       {callTarget && (
         <CallModal
           appointment={callTarget}
+          technicianName={techById(callTarget.technicianId)?.name}
           onClose={() => setCallTarget(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}
+        />
+      )}
+
+      {/* --- TECHNICIANS MODAL --- */}
+      {showTechModal && (
+        <TechnicianModal
+          technicians={technicians}
+          onChange={setTechnicians}
+          onClose={() => { setShowTechModal(false); setTechModalOpenId(null); }}
+          initialOpenId={techModalOpenId}
+        />
+      )}
+
+      {/* --- DISPATCH MODAL --- */}
+      {showDispatchModal && (
+        <DispatchModal
+          pending={pendingAll}
+          technicians={technicians}
+          fallbackBase={baseLocation?.coords || null}
+          onApply={handleApplyDispatch}
+          onClose={() => setShowDispatchModal(false)}
         />
       )}
 
@@ -719,7 +932,7 @@ function App() {
                             </p>
                         )}
                     </div>
-                    
+
                     {failedImports.length > 0 && (
                         <div className="flex-1 overflow-y-auto mb-4 bg-slate-50 rounded border border-slate-200 p-2 text-left">
                             <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Dettaglio errori:</p>
@@ -734,7 +947,7 @@ function App() {
                         </div>
                     )}
 
-                    <button 
+                    <button
                         onClick={closeImportModal}
                         className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition-colors shrink-0"
                     >
@@ -755,26 +968,35 @@ function App() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-800">OptiRoute</h1>
-            <p className="text-xs text-slate-500 hidden sm:block">Gestione Giornaliera e Stati</p>
+            <p className="text-xs text-slate-500 hidden sm:block">Gestione Sopralluoghi Multi-Tecnico</p>
           </div>
         </div>
-        
-        {/* Date & View Selector */}
-        <div className="flex flex-col sm:flex-row items-center gap-3 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          {/* Technicians Manager */}
+          <button
+            onClick={() => openTechModal()}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-colors"
+          >
+            <UsersIcon /> Tecnici
+          </button>
+
+          {/* Date & View Selector */}
+          <div className="flex flex-col sm:flex-row items-center gap-3 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
             <div className="flex gap-1">
-                <button 
+                <button
                     onClick={() => setViewMode('day')}
                     className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${viewMode === 'day' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
                 >
                     Giorno
                 </button>
-                <button 
+                <button
                     onClick={() => setViewMode('week')}
                     className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${viewMode === 'week' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
                 >
                     Settimana
                 </button>
-                <button 
+                <button
                     onClick={() => setViewMode('month')}
                     className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${viewMode === 'month' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
                 >
@@ -784,27 +1006,82 @@ function App() {
             <div className="h-4 w-px bg-slate-300 hidden sm:block"></div>
             <div className="flex items-center gap-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase hidden md:block">Data Rif:</label>
-                <input 
-                    type="date" 
-                    value={currentDate} 
+                <input
+                    type="date"
+                    value={currentDate}
                     onChange={(e) => setCurrentDate(e.target.value)}
                     className="px-2 py-1 bg-white border border-slate-200 rounded-md text-sm font-semibold focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700"
                 />
             </div>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
-        
+
         {/* Sidebar */}
         <aside className="w-full md:w-96 bg-white z-20 flex flex-col border-r border-slate-200 shadow-xl md:shadow-none">
-          
+
+           {/* Technician selector */}
+           <div className="p-2 bg-white border-b border-slate-200 flex gap-1.5 overflow-x-auto items-center">
+             <button
+                onClick={() => setSelectedTechId(ALL_TECH)}
+                className={`px-2.5 py-1 rounded-full text-xs font-bold border whitespace-nowrap transition-colors ${selectedTechId === ALL_TECH ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
+             >
+                Tutti
+             </button>
+             {technicians.filter(t => t.active).map(tech => (
+                <button
+                    key={tech.id}
+                    onClick={() => setSelectedTechId(tech.id)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold border whitespace-nowrap flex items-center gap-1.5 transition-colors ${selectedTechId === tech.id ? 'text-white' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
+                    style={selectedTechId === tech.id ? { backgroundColor: tech.color, borderColor: tech.color } : undefined}
+                >
+                    <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: selectedTechId === tech.id ? 'white' : tech.color }}></span>
+                    {tech.name.split(' ')[0]} ({countForTech(tech.id)})
+                </button>
+             ))}
+             <button
+                onClick={() => openTechModal()}
+                title="Gestisci tecnici"
+                className="px-2 py-1 rounded-full text-xs font-bold border border-dashed border-slate-300 text-slate-400 hover:text-indigo-600 hover:border-indigo-300 whitespace-nowrap"
+             >
+                +
+             </button>
+           </div>
+
+           {/* Selected technician info */}
+           {selectedTech && (
+             <div className="px-3 py-2 border-b border-slate-200 text-xs" style={{ backgroundColor: `${selectedTech.color}14` }}>
+                <div className="flex items-center justify-between gap-2">
+                    <span className="text-slate-600 truncate">
+                        🏠 <b>{selectedTech.baseAddress ? selectedTech.baseAddress.split(',')[0] : 'Base generale'}</b>
+                        {' '}· partenza <b>{selectedTech.workStart}</b> · fine <b>{selectedTech.workEnd}</b>
+                    </span>
+                    <button
+                        onClick={() => openTechModal(selectedTech.id)}
+                        className="font-bold shrink-0 hover:underline"
+                        style={{ color: selectedTech.color }}
+                    >
+                        Apri scheda →
+                    </button>
+                </div>
+                {isFullyUnavailable(selectedTech, currentDate) && (
+                    <p className="mt-1 text-red-600 font-bold">🚫 Non disponibile il {formatDayLabel(currentDate)}</p>
+                )}
+             </div>
+           )}
+
            {/* Filters Bar */}
            <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between gap-1 overflow-x-auto">
              <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-50 text-blue-800 border border-blue-100 cursor-pointer whitespace-nowrap">
                 <input type="checkbox" checked={filters.confirmed} onChange={e => setFilters(p => ({...p, confirmed: e.target.checked}))} className="rounded text-blue-600 focus:ring-0" />
-                Confermate ({allAppointments.filter(a => a.status === 'confirmed').length})
+                Confermate ({allAppointments.filter(a => a.status === 'confirmed' && matchesTechFilter(a)).length})
+             </label>
+             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-800 border border-indigo-100 cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={filters.proposed} onChange={e => setFilters(p => ({...p, proposed: e.target.checked}))} className="rounded text-indigo-600 focus:ring-0" />
+                Proposte ({listProposed.length})
              </label>
              <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-orange-50 text-orange-800 border border-orange-100 cursor-pointer whitespace-nowrap">
                 <input type="checkbox" checked={filters.pending} onChange={e => setFilters(p => ({...p, pending: e.target.checked}))} className="rounded text-orange-600 focus:ring-0" />
@@ -821,16 +1098,16 @@ function App() {
             {/* Base */}
             {!baseLocation ? (
                 <form onSubmit={handleSetBase} className="flex gap-2">
-                  <input type="text" value={baseInput} onChange={e => setBaseInput(e.target.value)} placeholder="Imposta Base..." className="flex-1 px-3 py-1.5 rounded-lg border text-sm" />
+                  <input type="text" value={baseInput} onChange={e => setBaseInput(e.target.value)} placeholder="Imposta Base Generale..." className="flex-1 px-3 py-1.5 rounded-lg border text-sm" />
                   <button type="submit" className="bg-red-500 text-white px-3 rounded-lg text-xs font-bold">SET</button>
                 </form>
             ) : (
                 <div className="flex items-center justify-between text-xs bg-white p-2 rounded border border-red-200">
-                    <span className="truncate flex-1 text-slate-700">🏠 Base: <b>{baseLocation.address.split(',')[0]}</b></span>
+                    <span className="truncate flex-1 text-slate-700">🏠 Base Generale: <b>{baseLocation.address.split(',')[0]}</b></span>
                     <button onClick={() => setBaseLocation(null)} className="text-red-500 ml-2"><TrashIcon /></button>
                 </div>
             )}
-            
+
             {/* Add */}
             <form onSubmit={handleAddAddress} className="flex gap-2">
               <input type="text" value={addressInput} onChange={e => setAddressInput(e.target.value)} placeholder="Aggiunta rapida (solo indirizzo)..." className="flex-1 px-3 py-2 rounded-lg border text-sm" />
@@ -842,34 +1119,43 @@ function App() {
               onClick={openNewApptModal}
               className="w-full text-xs py-1.5 rounded-lg border border-indigo-200 bg-white text-indigo-600 font-bold hover:bg-indigo-50 transition-colors flex items-center justify-center gap-1"
             >
-              <PlusIcon /> Nuovo completo (cliente, telefono, note)
+              <PlusIcon /> Nuovo completo (cliente, telefono, urgenza)
             </button>
 
-            {/* Time Limits */}
-            <div className="flex gap-2 text-xs">
-                <div className="flex-1">
-                    <span className="block text-slate-400 font-bold mb-0.5">INIZIO</span>
-                    <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-1 rounded border"/>
-                </div>
-                <div className="flex-1">
-                    <span className="block text-slate-400 font-bold mb-0.5">FINE</span>
-                    <input type="time" value={endTimeLimit} onChange={e => setEndTimeLimit(e.target.value)} className="w-full p-1 rounded border"/>
-                </div>
-            </div>
+            {/* Time Limits (usati per "Tutti"; ogni tecnico ha i suoi orari nella scheda) */}
+            {!selectedTech && (
+              <div className="flex gap-2 text-xs">
+                  <div className="flex-1">
+                      <span className="block text-slate-400 font-bold mb-0.5">INIZIO</span>
+                      <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-1 rounded border"/>
+                  </div>
+                  <div className="flex-1">
+                      <span className="block text-slate-400 font-bold mb-0.5">FINE</span>
+                      <input type="time" value={endTimeLimit} onChange={e => setEndTimeLimit(e.target.value)} className="w-full p-1 rounded border"/>
+                  </div>
+              </div>
+            )}
           </div>
 
           {/* Controls */}
           <div className="p-2 grid grid-cols-2 gap-2 bg-white border-b border-slate-100">
+             <button
+                onClick={() => setShowDispatchModal(true)}
+                disabled={pendingAll.length === 0}
+                className="col-span-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2"
+             >
+                <TruckIcon /> Smista pratiche per zona ({pendingAll.length})
+             </button>
              <button onClick={handleOptimize} className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
-                {isOptimizing ? "Calcolo..." : <><SparklesIcon /> Ottimizza {currentDate}</>}
+                {isOptimizing ? "Calcolo..." : <><SparklesIcon /> Ottimizza {currentDate}{selectedTech ? ` · ${selectedTech.name.split(' ')[0]}` : ''}</>}
              </button>
              {confirmedForDate.length > 0 && viewMode === 'day' && (
-                <button onClick={() => setIsSwapMode(!isSwapMode)} className={`text-xs py-1.5 border rounded flex items-center justify-center gap-1 ${isSwapMode ? 'bg-amber-100 text-amber-800' : 'text-slate-600'}`}>
+                <button onClick={() => setIsSwapMode(!isSwapMode)} className={`col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 ${isSwapMode ? 'bg-amber-100 text-amber-800' : 'text-slate-600'}`}>
                     <ArrowsRightLeftIcon /> Scambia Ordine
                 </button>
              )}
               <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".xlsx,.csv" className="hidden" />
-              
+
               <div className="col-span-2 grid grid-cols-2 gap-2">
                   <button onClick={() => fileInputRef.current?.click()} className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-slate-600 bg-white hover:bg-slate-50">
                       <UploadIcon /> Importa Excel
@@ -880,8 +1166,8 @@ function App() {
               </div>
 
               {/* Tasto Invia a N8N */}
-              <button 
-                onClick={handleSendToN8n} 
+              <button
+                onClick={handleSendToN8n}
                 disabled={isSendingToN8n}
                 className="col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-slate-800 hover:bg-slate-900 border-slate-900 transition-colors"
               >
@@ -891,8 +1177,80 @@ function App() {
 
           {/* List Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white">
-            
-            {/* 1. Confirmed */}
+
+            {/* 1. Proposed (da confermare) */}
+            {filters.proposed && listProposed.length > 0 && (
+                <div>
+                    <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 border-b border-indigo-100 pb-1">
+                        Proposte da confermare ({listProposed.length})
+                    </h3>
+                    <div className="space-y-3">
+                        {proposedGroups.map(group => {
+                            const tech = techById(group.techId);
+                            return (
+                                <div key={`${group.techId || 'none'}-${group.date}`} className="border border-indigo-100 rounded-lg overflow-hidden">
+                                    <div className="px-2.5 py-1.5 flex items-center justify-between gap-2" style={{ backgroundColor: tech ? `${tech.color}18` : '#eef2ff' }}>
+                                        <span className="text-xs font-bold capitalize" style={{ color: tech?.color || '#4f46e5' }}>
+                                            {tech ? tech.name : 'Senza tecnico'} — {formatDayLabel(group.date)}
+                                        </span>
+                                        <button
+                                            onClick={() => handleConfirmDay(group.techId, group.date)}
+                                            className="text-[10px] font-bold text-white px-2 py-0.5 rounded"
+                                            style={{ backgroundColor: tech?.color || '#4f46e5' }}
+                                            title="Conferma tutte le proposte di questa giornata"
+                                        >
+                                            ✓ Conferma giornata
+                                        </button>
+                                    </div>
+                                    <div className="divide-y divide-slate-100">
+                                        {group.items.map(appt => (
+                                            <div
+                                                key={appt.id}
+                                                id={`appt-${appt.id}`}
+                                                className={`p-2.5 bg-white flex justify-between items-start gap-2 ${selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-400' : ''}`}
+                                            >
+                                                <div className="min-w-0">
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-50 px-1 rounded shrink-0">
+                                                            {appt.startTime}
+                                                        </span>
+                                                        <UrgentBadge appt={appt} />
+                                                        <h4 className="text-sm font-semibold text-slate-800 leading-tight truncate">{appt.title}</h4>
+                                                    </div>
+                                                    <p className="text-xs text-slate-400 truncate">{appt.address}</p>
+                                                    <div className="mt-0.5 flex gap-1.5 items-center flex-wrap">
+                                                        {appt.phone && <span className="text-[11px] text-slate-400">📞 {appt.phone}</span>}
+                                                        <CallBadge appt={appt} />
+                                                    </div>
+                                                </div>
+                                                <div className="flex flex-col gap-1 shrink-0">
+                                                    <button
+                                                        onClick={() => handleStatusChange(appt.id, 'confirmed')}
+                                                        title="Conferma questa proposta"
+                                                        className="p-1 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200"
+                                                    ><CheckIcon /></button>
+                                                    <button
+                                                        onClick={() => handleStatusChange(appt.id, 'pending')}
+                                                        title="Rifiuta: torna in attesa"
+                                                        className="p-1 rounded bg-white text-slate-400 hover:bg-red-50 hover:text-red-500 border border-slate-200"
+                                                    ><XMarkIcon /></button>
+                                                    <button onClick={() => openEditModal(appt)} title="Modifica" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-2">
+                        Alla conferma, se c'è un numero di telefono, puoi far partire la chiamata AI
+                        (l'urgenza viene comunicata esplicitamente al cliente).
+                    </p>
+                </div>
+            )}
+
+            {/* 2. Confirmed */}
             {filters.confirmed && (
                 <div>
                     <h3 className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2 border-b border-blue-100 pb-1 flex justify-between">
@@ -905,29 +1263,38 @@ function App() {
                              if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
                              return (a.sequenceOrder||0) - (b.sequenceOrder||0);
                          })
-                         .map((appt) => (
+                         .map((appt) => {
+                            const tech = techById(appt.technicianId);
+                            return (
                             <React.Fragment key={appt.id}>
                                 {appt.hasLunchBreakBefore && viewMode === 'day' && (
                                     <div className="flex items-center gap-2 text-orange-600 text-[10px] font-bold py-1 justify-center bg-orange-50 rounded">
                                     <CoffeeIcon /> PAUSA PRANZO
                                     </div>
                                 )}
-                                <div 
+                                <div
                                     id={`appt-${appt.id}`}
-                                    onClick={() => toggleSwapSelection(appt.id)} 
+                                    onClick={() => toggleSwapSelection(appt.id)}
                                     className={`
-                                        relative p-3 rounded-lg border transition-all 
+                                        relative p-3 rounded-lg border transition-all
                                         ${isSwapMode && selectedForSwap.includes(appt.id) ? 'bg-amber-50 border-amber-500' : 'bg-blue-50 border-blue-100'}
                                         ${selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-500 shadow-md scale-[1.01]' : ''}
+                                        ${appt.urgent ? 'border-l-4 border-l-red-500' : ''}
                                     `}
                                 >
                                     <div className="flex justify-between items-start">
                                         <div className="flex gap-2">
-                                            <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold flex-shrink-0">
+                                            <div
+                                                className="w-6 h-6 rounded-full text-white flex items-center justify-center text-xs font-bold flex-shrink-0"
+                                                style={{ backgroundColor: tech?.color || '#2563eb' }}
+                                            >
                                                 {appt.sequenceOrder}
                                             </div>
                                             <div>
-                                                <h4 className="text-sm font-semibold text-slate-800 leading-tight">{appt.title}</h4>
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <h4 className="text-sm font-semibold text-slate-800 leading-tight">{appt.title}</h4>
+                                                    <UrgentBadge appt={appt} />
+                                                </div>
                                                 <p className="text-xs text-slate-500">{appt.address}</p>
                                                 {appt.phone && <p className="text-xs text-slate-500 mt-0.5">📞 {appt.phone}</p>}
                                                 <div className="mt-1 flex gap-2 flex-wrap items-center">
@@ -935,6 +1302,7 @@ function App() {
                                                     <span className="text-xs font-mono text-blue-700 bg-blue-100 inline-block px-1 rounded">
                                                         {appt.startTime} - {appt.endTime}
                                                     </span>
+                                                    {selectedTechId === ALL_TECH && <TechBadge appt={appt} />}
                                                     <CallBadge appt={appt} />
                                                 </div>
                                             </div>
@@ -951,13 +1319,13 @@ function App() {
                                     </div>
                                 </div>
                             </React.Fragment>
-                        ))}
+                         );})}
                         {visibleAppointments.filter(a => a.status === 'confirmed').length === 0 && <p className="text-xs text-slate-400 italic">Nessun appuntamento confermato nel periodo.</p>}
                     </div>
                 </div>
             )}
 
-            {/* 2. Pending */}
+            {/* 3. Pending */}
             {filters.pending && (
                 <div>
                     <h3 className="text-xs font-bold text-orange-500 uppercase tracking-wider mb-2 border-b border-orange-100 pb-1 mt-4">
@@ -965,20 +1333,28 @@ function App() {
                     </h3>
                     <div className="space-y-2 opacity-90">
                         {listPending.map(appt => (
-                             <div 
-                                key={appt.id} 
+                             <div
+                                key={appt.id}
                                 id={`appt-${appt.id}`}
                                 className={`
-                                    p-3 rounded-lg border border-orange-200 bg-white flex justify-between items-start transition-all
+                                    p-3 rounded-lg border bg-white flex justify-between items-start transition-all
+                                    ${appt.urgent ? 'border-red-300 border-l-4 border-l-red-500' : 'border-orange-200'}
                                     ${selectedAppointmentId === appt.id ? 'ring-2 ring-orange-400 shadow-md' : ''}
                                 `}
                              >
-                                 <div>
-                                     <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
+                                 <div className="min-w-0">
+                                     <div className="flex items-center gap-1.5 flex-wrap">
+                                        <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
+                                        <UrgentBadge appt={appt} />
+                                     </div>
                                      <p className="text-xs text-slate-400">{appt.address}</p>
                                      {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
                                      {appt.notes && <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-2">{appt.notes}</p>}
-                                     <div className="mt-1"><CallBadge appt={appt} /></div>
+                                     <div className="mt-1 flex gap-1.5 flex-wrap items-center">
+                                        {selectedTechId === ALL_TECH && <TechBadge appt={appt} />}
+                                        {appt.province && <span className="text-[10px] text-slate-400 border border-slate-200 px-1 rounded">{appt.province}</span>}
+                                        <CallBadge appt={appt} />
+                                     </div>
                                  </div>
                                  <div className="flex flex-col gap-1">
                                     <button onClick={() => handleStatusChange(appt.id, 'confirmed')} title="Forza Conferma Oggi" className="text-xs bg-blue-100 text-blue-600 px-1 py-0.5 rounded font-bold hover:bg-blue-200">
@@ -994,7 +1370,7 @@ function App() {
                 </div>
             )}
 
-            {/* 3. Standby */}
+            {/* 4. Standby */}
             {filters.standby && (
                 <div>
                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 border-b border-gray-200 pb-1 mt-4">
@@ -1002,8 +1378,8 @@ function App() {
                     </h3>
                     <div className="space-y-2 opacity-60">
                         {listStandby.map(appt => (
-                             <div 
-                                key={appt.id} 
+                             <div
+                                key={appt.id}
                                 id={`appt-${appt.id}`}
                                 className={`
                                     p-3 rounded-lg border border-slate-200 bg-slate-50 flex justify-between items-center transition-all
@@ -1011,7 +1387,10 @@ function App() {
                                 `}
                              >
                                  <div>
-                                     <h4 className="text-sm font-semibold text-slate-600">{appt.title}</h4>
+                                     <div className="flex items-center gap-1.5 flex-wrap">
+                                        <h4 className="text-sm font-semibold text-slate-600">{appt.title}</h4>
+                                        <UrgentBadge appt={appt} />
+                                     </div>
                                      <p className="text-xs text-slate-400">{appt.address}</p>
                                      {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
                                  </div>
@@ -1036,6 +1415,7 @@ function App() {
             center={mapCenter}
             routeSummary={viewMode === 'day' ? routeSummary : null}
             baseLocation={baseLocation}
+            technicians={technicians}
             onSelectAppointment={setSelectedAppointmentId}
             onStatusChange={handleStatusChange}
             onRequestCall={(id) => {
@@ -1043,11 +1423,16 @@ function App() {
               if (appt) requestCall(appt);
             }}
           />
-          
+
           <div className="absolute bottom-6 left-6 z-[400] bg-white/90 backdrop-blur px-4 py-2 rounded-lg shadow-lg border border-slate-200 hidden md:block">
             <div className="text-xs font-medium text-slate-600">
               <p>Riferimento: <span className="text-indigo-600 font-bold">{currentDate}</span></p>
               <p>Vista: <span className="text-slate-800 font-bold uppercase">{viewMode === 'day' ? 'Giornaliera' : viewMode === 'week' ? 'Settimanale' : 'Mensile'}</span></p>
+              {selectedTech && (
+                <p className="mt-1 font-bold" style={{ color: selectedTech.color }}>
+                  Tecnico: {selectedTech.name}
+                </p>
+              )}
               {baseLocation && <p className="text-red-500 mt-1">Base: {baseLocation.address.split(',')[0]}</p>}
             </div>
           </div>

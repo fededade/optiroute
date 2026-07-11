@@ -1,15 +1,21 @@
 import React, { useState } from 'react';
-import type { Appointment } from '../types';
+import type { Appointment, Technician } from '../types';
 import { geocodeAddress } from '../services/geocodingService';
 import { parseAddressInput } from '../services/geminiService';
+import { matchTechnician } from '../services/technicianService';
+import { provinceLabel } from '../utils/provinces';
 
 interface AppointmentModalProps {
   initial?: Appointment | null; // null/undefined = new appointment
+  technicians: Technician[];
   onSave: (appointment: Appointment) => void;
   onClose: () => void;
 }
 
-const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, onSave, onClose }) => {
+const AUTO_TECH = '__auto__';
+const NO_TECH = '__none__';
+
+const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technicians, onSave, onClose }) => {
   const isEdit = !!initial;
 
   const [title, setTitle] = useState(initial?.title || '');
@@ -17,6 +23,12 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, onSave, on
   const [address, setAddress] = useState(initial?.address || '');
   const [notes, setNotes] = useState(initial?.notes || '');
   const [duration, setDuration] = useState<string>(initial?.durationMinutes ? String(initial.durationMinutes) : '20');
+  const [urgent, setUrgent] = useState<boolean>(initial?.urgent === true);
+  const [technicianChoice, setTechnicianChoice] = useState<string>(
+    initial?.technicianId && technicians.some(t => t.id === initial.technicianId)
+      ? initial.technicianId
+      : AUTO_TECH
+  );
 
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
@@ -41,6 +53,8 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, onSave, on
     try {
       let coords = initial?.coords;
       let displayAddress = initial?.address || '';
+      let province = initial?.province;
+      let comune = initial?.comune;
 
       // Geocode only when the address is new or was changed
       const addressChanged = !initial || trimmedAddress !== initial.address;
@@ -54,9 +68,22 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, onSave, on
         }
         coords = result.coords;
         displayAddress = result.displayName;
+        province = result.province || province;
+        comune = result.comune || comune;
       }
 
       const parsedDuration = parseInt(duration, 10);
+
+      // Assegnazione tecnico: scelta manuale oppure automatica per zona
+      let technicianId: string | undefined;
+      if (technicianChoice === AUTO_TECH) {
+        const matched = matchTechnician({ coords: coords!, province }, technicians);
+        technicianId = matched?.id;
+      } else if (technicianChoice === NO_TECH) {
+        technicianId = undefined;
+      } else {
+        technicianId = technicianChoice;
+      }
 
       const appointment: Appointment = {
         ...(initial || { id: Date.now().toString(), status: 'pending' as const }),
@@ -66,6 +93,10 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, onSave, on
         durationMinutes: !isNaN(parsedDuration) && parsedDuration > 0 ? parsedDuration : undefined,
         address: displayAddress,
         coords: coords!,
+        province,
+        comune,
+        urgent: urgent || undefined,
+        technicianId,
       };
 
       onSave(appointment);
@@ -127,6 +158,9 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, onSave, on
               className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
               required
             />
+            {initial?.province && (
+              <p className="text-[11px] text-slate-400 mt-1">Provincia rilevata: {provinceLabel(initial.province)}</p>
+            )}
           </div>
 
           <div className="flex gap-3">
@@ -142,7 +176,36 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, onSave, on
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
               />
             </div>
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tecnico</label>
+              <select
+                value={technicianChoice}
+                onChange={e => setTechnicianChoice(e.target.value)}
+                className="w-full px-2 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+              >
+                <option value={AUTO_TECH}>Auto (per zona)</option>
+                {technicians.filter(t => t.active).map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+                <option value={NO_TECH}>Nessuno</option>
+              </select>
+            </div>
           </div>
+
+          <label className={`flex items-center gap-2 rounded-lg border p-2.5 cursor-pointer transition-colors ${urgent ? 'bg-red-50 border-red-300' : 'bg-slate-50 border-slate-200'}`}>
+            <input
+              type="checkbox"
+              checked={urgent}
+              onChange={e => setUrgent(e.target.checked)}
+              className="rounded text-red-600 focus:ring-red-500"
+            />
+            <span className={`text-sm font-bold ${urgent ? 'text-red-700' : 'text-slate-600'}`}>
+              🔴 Urgente
+            </span>
+            <span className="text-[11px] text-slate-400 leading-tight">
+              priorità nello smistamento; l'operatore AI lo dichiara in chiamata
+            </span>
+          </label>
 
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Note</label>

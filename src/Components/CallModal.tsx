@@ -4,6 +4,7 @@ import { startConfirmationCall } from '../services/callService';
 
 interface CallModalProps {
   appointment: Appointment;
+  technicianName?: string; // Nome del tecnico che effettuerà il sopralluogo
   onClose: () => void;
   onCallStarted: (id: string) => void;
   onCallResult: (id: string, ok: boolean, callId?: string) => void;
@@ -11,7 +12,7 @@ interface CallModalProps {
 
 type Phase = 'preview' | 'calling' | 'success' | 'error';
 
-const CallModal: React.FC<CallModalProps> = ({ appointment, onClose, onCallStarted, onCallResult }) => {
+const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, onClose, onCallStarted, onCallResult }) => {
   const [phase, setPhase] = useState<Phase>('preview');
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -19,7 +20,7 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, onClose, onCallStart
     setPhase('calling');
     onCallStarted(appointment.id);
 
-    const result = await startConfirmationCall(appointment);
+    const result = await startConfirmationCall(appointment, technicianName);
 
     if (result.ok) {
       setPhase('success');
@@ -48,6 +49,13 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, onClose, onCallStart
               L'operatore AI chiamerà il cliente per confermare l'appuntamento con questi dati:
             </p>
 
+            {appointment.urgent && (
+              <p className="text-xs font-bold text-red-700 bg-red-50 border border-red-200 rounded p-2 mb-3">
+                🔴 SOPRALLUOGO URGENTE — l'operatore AI lo dichiarerà esplicitamente al cliente
+                durante la chiamata.
+              </p>
+            )}
+
             <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm space-y-1.5 mb-4">
               <p><span className="font-bold text-slate-500">Cliente:</span> {appointment.title}</p>
               <p><span className="font-bold text-slate-500">Telefono:</span> {appointment.phone}</p>
@@ -59,6 +67,7 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, onClose, onCallStart
                   : 'Da definire'}
               </p>
               <p><span className="font-bold text-slate-500">Indirizzo:</span> {appointment.address}</p>
+              {technicianName && <p><span className="font-bold text-slate-500">Tecnico:</span> {technicianName}</p>}
               {appointment.notes && <p><span className="font-bold text-slate-500">Note:</span> {appointment.notes}</p>}
             </div>
 

@@ -163,13 +163,26 @@ export const computeDispatch = async (
       const window = workWindowOn(tech, date);
       if (!window) continue; // giorno di indisponibilità
 
-      // Le urgenti occupano sempre i primi slot del primo giorno utile
-      const urgents = queue.filter(a => a.urgent);
-      const normals = queue.filter(a => !a.urgent);
+      // Vincolo data di rientro (richiamo concordato / fine lavori): la pratica
+      // non viene mai proposta prima del suo followUpDate.
+      const deferred: Appointment[] = [];
+      const eligible: Appointment[] = [];
+      for (const a of queue) {
+        (a.followUpDate && a.followUpDate > date ? deferred : eligible).push(a);
+      }
+      if (eligible.length === 0) continue; // solo pratiche non ancora rientrate
+
+      // Ordine slot del giorno: urgenti, poi pratiche "rientrate" (il loro
+      // followUpDate è arrivato: vanno inserite appena possibile), poi le altre
+      const urgents = eligible.filter(a => a.urgent);
+      const dues = eligible.filter(a => !a.urgent && a.followUpDate);
+      const normals = eligible.filter(a => !a.urgent && !a.followUpDate);
       const urgentChain = nearestNeighborChain(urgents, base);
       const lastUrgent = urgentChain[urgentChain.length - 1];
-      const normalChain = nearestNeighborChain(normals, lastUrgent ? lastUrgent.coords : base);
-      const dayOrder = [...urgentChain, ...normalChain];
+      const dueChain = nearestNeighborChain(dues, lastUrgent ? lastUrgent.coords : base);
+      const lastDue = dueChain[dueChain.length - 1] || lastUrgent;
+      const normalChain = nearestNeighborChain(normals, lastDue ? lastDue.coords : base);
+      const dayOrder = [...urgentChain, ...dueChain, ...normalChain];
 
       const start = parseTime(window.start);
       const end = parseTime(window.end);
@@ -201,7 +214,8 @@ export const computeDispatch = async (
         updates.push(...dayAppointments);
       }
 
-      queue = overflow;
+      // Le rimandate (followUpDate futuro) restano in coda per i giorni successivi
+      queue = [...overflow, ...deferred];
     }
 
     if (queue.length > 0) {

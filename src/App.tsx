@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { Appointment, Coordinates, AppointmentStatus, Technician } from './types';
+import type { Appointment, Coordinates, AppointmentStatus, IssueType, Technician } from './types';
 import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow } from './services/excelService';
@@ -12,6 +12,7 @@ import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
 import TechnicianModal from './Components/TechnicianModal';
 import DispatchModal from './Components/DispatchModal';
+import KmzImportModal from './Components/KmzImportModal';
 
 // --- CONFIGURATION ---
 // URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
@@ -164,6 +165,9 @@ function App() {
   const [importStats, setImportStats] = useState({ success: 0, failed: 0 });
   const [failedImports, setFailedImports] = useState<string[]>([]);
 
+  // Import da Google My Maps (KMZ/KML)
+  const [kmzFile, setKmzFile] = useState<File | null>(null);
+
   // Settings & View
   const [currentDate, setCurrentDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [viewMode, setViewMode] = useState<ViewMode>('day');
@@ -184,14 +188,17 @@ function App() {
       confirmed: true,
       proposed: true,
       pending: true,
-      standby: true
+      standby: true,
+      issues: true,
+      cancelled: false
   });
 
-  // Swap Mode State
-  const [isSwapMode, setIsSwapMode] = useState(false);
-  const [selectedForSwap, setSelectedForSwap] = useState<string[]>([]);
+  // Drag & drop: riordino manuale del giro confermato (vista giorno)
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const kmzInputRef = useRef<HTMLInputElement>(null);
 
   const selectedTech: Technician | null =
     selectedTechId !== ALL_TECH ? technicians.find(t => t.id === selectedTechId) || null : null;
@@ -280,6 +287,8 @@ function App() {
           if (appt.status === 'proposed') return filters.proposed;
           if (appt.status === 'pending') return filters.pending;
           if (appt.status === 'standby') return filters.standby;
+          if (appt.status === 'issue') return filters.issues;
+          if (appt.status === 'cancelled') return filters.cancelled;
           return true;
       });
   }, [allAppointments, filters, currentDate, viewMode, matchesTechFilter]);
@@ -363,11 +372,6 @@ function App() {
   };
 
   const toggleSettingsPanel = () => {
-    // Chiudendo il pannello si esce dalla modalità scambio: il suo pulsante non sarebbe più visibile
-    if (settingsOpen) {
-      setIsSwapMode(false);
-      setSelectedForSwap([]);
-    }
     setSettingsOpen(!settingsOpen);
   };
 
@@ -474,6 +478,19 @@ function App() {
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  // --- Import da Google My Maps (KMZ/KML) ---
+  const handleKmzSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) setKmzFile(file);
+    if (kmzInputRef.current) kmzInputRef.current.value = '';
+  };
+
+  const handleKmzApply = (imported: Appointment[]) => {
+    if (imported.length === 0) return;
+    setAllAppointments(prev => [...prev, ...imported]);
+    setMapCenter(imported[0].coords);
   };
 
   const getExportPool = () => {
@@ -613,6 +630,11 @@ function App() {
             update.startTime = undefined;
             update.endTime = undefined;
         }
+        // Uscendo dalla categoria problematica, la categoria si azzera; il
+        // followUpDate resta: lo smistamento non proporrà date precedenti.
+        if (newStatus !== 'issue') {
+            update.issueType = undefined;
+        }
         return { ...a, ...update };
     }));
 
@@ -674,8 +696,6 @@ function App() {
     }
 
     setIsOptimizing(true);
-    setIsSwapMode(false);
-    setSelectedForSwap([]);
 
     try {
       const sorted = optimizeRoute(activePool, base);
@@ -728,91 +748,113 @@ function App() {
     }
   }, [allAppointments, currentDate, baseLocation, startTime, endTimeLimit, selectedTech]);
 
-  const toggleSwapSelection = async (id: string) => {
-    if (!isSwapMode) return;
-    const target = allAppointments.find(a => a.id === id);
-    if (!target || target.status !== 'confirmed' || target.date !== currentDate) return;
+  // Ricalcola orari e sequenza del giro (di un tecnico o del pool non
+  // assegnato) per la giornata corrente, rispettando l'ordine passato.
+  const rescheduleDay = async (orderedList: Appointment[], routeTechId?: string) => {
+    if (orderedList.length === 0) return;
+    const routeTech = techById(routeTechId);
 
-    let newSelection = [...selectedForSwap];
-    if (newSelection.includes(id)) {
-      newSelection = newSelection.filter(s => s !== id);
-    } else {
-      if (newSelection.length < 2) newSelection.push(id);
-    }
-
-    setSelectedForSwap(newSelection);
-
-    if (newSelection.length === 2) {
-      const first = allAppointments.find(a => a.id === newSelection[0]);
-      const second = allAppointments.find(a => a.id === newSelection[1]);
-      if (!first || !second) return;
-
-      // Lo scambio ha senso solo all'interno del giro dello stesso tecnico
-      if (first.technicianId !== second.technicianId) {
-        alert("Puoi scambiare solo due tappe dello stesso tecnico.");
-        setSelectedForSwap([]);
-        return;
+    setIsOptimizing(true);
+    try {
+      let dayStart = startTime;
+      let dayEnd = endTimeLimit;
+      let base = baseLocation?.coords || null;
+      if (routeTech) {
+          const window = workWindowOn(routeTech, currentDate);
+          if (window) { dayStart = window.start; dayEnd = window.end; }
+          base = routeTech.baseCoords || baseLocation?.coords || null;
       }
 
-      const routeTechId = first.technicianId;
-      const routeTech = techById(routeTechId);
+      const startH = parseInt(dayStart.split(':')[0]);
+      const startM = parseInt(dayStart.split(':')[1]);
+      const endH = parseInt(dayEnd.split(':')[0]);
+      const endM = parseInt(dayEnd.split(':')[1]) || 0;
 
-      const currentDayAppointments = allAppointments
-        .filter(a => a.status === 'confirmed' && a.date === currentDate && a.technicianId === routeTechId)
-        .sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
+      const { scheduled, overflow } = await calculateSchedule(
+          orderedList,
+          base,
+          startH,
+          startM,
+          endH,
+          20,
+          { maxEndTimeMinutes: endM, startFromBase: !!routeTech && !!routeTech.baseCoords }
+      );
 
-      const idx1 = currentDayAppointments.findIndex(a => a.id === newSelection[0]);
-      const idx2 = currentDayAppointments.findIndex(a => a.id === newSelection[1]);
+      const scheduledIds = new Set(scheduled.map(a => a.id));
+      const overflowIds = new Set(overflow.map(a => a.id));
 
-      if (idx1 === -1 || idx2 === -1) return;
-
-      const updatedList = [...currentDayAppointments];
-      [updatedList[idx1], updatedList[idx2]] = [updatedList[idx2], updatedList[idx1]];
-
-      setIsOptimizing(true);
-      try {
-        let dayStart = startTime;
-        let dayEnd = endTimeLimit;
-        let base = baseLocation?.coords || null;
-        if (routeTech) {
-            const window = workWindowOn(routeTech, currentDate);
-            if (window) { dayStart = window.start; dayEnd = window.end; }
-            base = routeTech.baseCoords || baseLocation?.coords || null;
-        }
-
-        const startH = parseInt(dayStart.split(':')[0]);
-        const startM = parseInt(dayStart.split(':')[1]);
-        const endH = parseInt(dayEnd.split(':')[0]);
-        const endM = parseInt(dayEnd.split(':')[1]) || 0;
-
-        const { scheduled, overflow } = await calculateSchedule(
-            updatedList,
-            base,
-            startH,
-            startM,
-            endH,
-            20,
-            { maxEndTimeMinutes: endM, startFromBase: !!routeTech && !!routeTech.baseCoords }
-        );
-
-        const scheduledIds = new Set(scheduled.map(a => a.id));
-        const overflowIds = new Set(overflow.map(a => a.id));
-
-        setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
-            if (scheduledIds.has(a.id)) {
-                const calculated = scheduled.find(s => s.id === a.id);
-                return { ...a, ...calculated, status: 'confirmed', date: currentDate };
-            } else if (overflowIds.has(a.id)) {
-                return { ...a, status: 'pending', date: undefined, sequenceOrder: undefined, startTime: undefined, endTime: undefined };
-            }
-            return a;
-        }));
-
-        setSelectedForSwap([]);
-      } catch (e) { console.error(e); }
-      finally { setIsOptimizing(false); }
-    }
+      setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
+          if (scheduledIds.has(a.id)) {
+              const calculated = scheduled.find(s => s.id === a.id);
+              return { ...a, ...calculated, status: 'confirmed', date: currentDate };
+          } else if (overflowIds.has(a.id)) {
+              return { ...a, status: 'pending', date: undefined, sequenceOrder: undefined, startTime: undefined, endTime: undefined };
+          }
+          return a;
+      }));
+    } catch (e) { console.error(e); }
+    finally { setIsOptimizing(false); }
   };
+
+  // --- Drag & drop: tieni premuto e trascina una scheda confermata per
+  // riordinare il giro; gli orari si ricalcolano subito. ---
+  const canDragReorder = viewMode === 'day' && !isOptimizing;
+
+  const sameRoute = (a?: Appointment, b?: Appointment): boolean =>
+    !!a && !!b && a.technicianId === b.technicianId && a.date === b.date;
+
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    // setData è necessario perché il drag parta anche su Firefox
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.effectAllowed = 'move';
+    setDragId(id);
+  };
+
+  const handleDragOverCard = (e: React.DragEvent, targetId: string) => {
+    if (!dragId) {
+      // Stato non ancora aggiornato (primissimo dragover): consenti il drop,
+      // sarà handleDropOnCard a validare il giro.
+      if (e.dataTransfer.types.includes('text/plain')) e.preventDefault();
+      return;
+    }
+    if (dragId === targetId) return;
+    const dragged = allAppointments.find(a => a.id === dragId);
+    const target = allAppointments.find(a => a.id === targetId);
+    // Riordino valido solo dentro il giro dello stesso tecnico, stessa giornata
+    if (!sameRoute(dragged, target)) return;
+    e.preventDefault(); // consente il drop
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverId !== targetId) setDragOverId(targetId);
+  };
+
+  const handleDropOnCard = async (e: React.DragEvent, targetId: string) => {
+    const draggedId = dragId || e.dataTransfer.getData('text/plain');
+    setDragId(null);
+    setDragOverId(null);
+    if (!draggedId || draggedId === targetId) return;
+
+    const dragged = allAppointments.find(a => a.id === draggedId);
+    const target = allAppointments.find(a => a.id === targetId);
+    if (!sameRoute(dragged, target)) return;
+
+    const dayList = allAppointments
+      .filter(a => a.status === 'confirmed' && a.date === dragged!.date && a.technicianId === dragged!.technicianId)
+      .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0));
+
+    const fromIdx = dayList.findIndex(a => a.id === draggedId);
+    const toIdx = dayList.findIndex(a => a.id === targetId);
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+
+    const reordered = [...dayList];
+    const [moved] = reordered.splice(fromIdx, 1);
+    // Trascinando verso il basso finisce dopo la scheda su cui si rilascia,
+    // verso l'alto ci finisce prima: comportamento naturale di una lista.
+    reordered.splice(toIdx, 0, moved);
+
+    await rescheduleDay(reordered, dragged!.technicianId);
+  };
+
+  const handleDragEnd = () => { setDragId(null); setDragOverId(null); };
 
   const handleRemove = (id: string) => {
     setAllAppointments((prev: Appointment[]) => prev.filter((a: Appointment) => a.id !== id));
@@ -831,8 +873,28 @@ function App() {
     .filter(a => a.status === 'pending' && matchesTechFilter(a))
     .sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
   const listStandby = allAppointments.filter(a => a.status === 'standby' && matchesTechFilter(a));
+  const listIssues = allAppointments.filter(a => a.status === 'issue' && matchesTechFilter(a));
+  const listCancelled = allAppointments.filter(a => a.status === 'cancelled' && matchesTechFilter(a));
 
   const pendingAll = allAppointments.filter(a => a.status === 'pending');
+
+  // Categorie delle pratiche con problematiche
+  const ISSUE_META: Record<IssueType, { label: string; icon: string; reentry: string }> = {
+    wrong_phone: { label: 'Numeri non corretti', icon: '📵', reentry: 'ricontatto' },
+    callback: { label: 'Da richiamare', icon: '📆', reentry: 'richiamo' },
+    works_pending: { label: 'Lavori da ultimare', icon: '🚧', reentry: 'fine lavori' },
+  };
+
+  // Alert "slot da riservare": pratiche problematiche che rientrano domani o
+  // prima (dal giorno precedente la data di richiamo / fine lavori).
+  const tomorrowStr = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  })();
+  const followUpAlerts = allAppointments
+    .filter(a => a.status === 'issue' && a.followUpDate && a.followUpDate <= tomorrowStr)
+    .sort((a, b) => (a.followUpDate || '').localeCompare(b.followUpDate || ''));
 
   // Gruppi proposte per tecnico+data (ordinati)
   const proposedGroups = (() => {
@@ -926,6 +988,17 @@ function App() {
           fallbackBase={baseLocation?.coords || null}
           onApply={handleApplyDispatch}
           onClose={() => setShowDispatchModal(false)}
+        />
+      )}
+
+      {/* --- KMZ IMPORT MODAL (Google My Maps) --- */}
+      {kmzFile && (
+        <KmzImportModal
+          file={kmzFile}
+          technicians={technicians}
+          existing={allAppointments}
+          onApply={handleKmzApply}
+          onClose={() => setKmzFile(null)}
         />
       )}
 
@@ -1113,7 +1186,45 @@ function App() {
                 <input type="checkbox" checked={filters.standby} onChange={e => setFilters(p => ({...p, standby: e.target.checked}))} className="rounded text-gray-500 focus:ring-0" />
                 Stand-by ({listStandby.length})
              </label>
+             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-rose-50 text-rose-800 border border-rose-100 cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={filters.issues} onChange={e => setFilters(p => ({...p, issues: e.target.checked}))} className="rounded text-rose-600 focus:ring-0" />
+                Problematiche ({listIssues.length})
+             </label>
+             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-slate-100 text-slate-500 border border-slate-200 cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={filters.cancelled} onChange={e => setFilters(p => ({...p, cancelled: e.target.checked}))} className="rounded text-slate-400 focus:ring-0" />
+                Annullate ({listCancelled.length})
+             </label>
            </div>
+
+           {/* Alert slot da riservare: richiami / fine lavori in arrivo */}
+           {followUpAlerts.length > 0 && (
+             <div className="px-3 py-2 bg-amber-50 border-b-2 border-amber-300">
+                <p className="text-xs font-bold text-amber-800 flex items-center gap-1 mb-1">
+                    🔔 Slot da riservare ({followUpAlerts.length})
+                </p>
+                <div className="space-y-1 max-h-36 overflow-y-auto">
+                  {followUpAlerts.map(a => (
+                    <div key={a.id} className="flex items-center justify-between gap-2 text-[11px] text-amber-900 bg-white/70 border border-amber-200 rounded px-2 py-1">
+                        <span className="truncate">
+                            <b className="capitalize">{formatDayLabel(a.followUpDate)}</b>
+                            {a.followUpDate! < todayStr && <b className="text-red-600"> (scaduta)</b>}
+                            {' '}· {ISSUE_META[a.issueType || 'callback'].reentry} · {a.title}
+                        </span>
+                        <button
+                            onClick={() => handleStatusChange(a.id, 'pending')}
+                            className="shrink-0 font-bold text-white bg-amber-600 hover:bg-amber-700 px-1.5 py-0.5 rounded"
+                            title="Rimetti tra le pratiche da pianificare (lo smistamento non proporrà date precedenti al rientro)"
+                        >
+                            → In attesa
+                        </button>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-amber-700 mt-1">
+                    Tieni slot liberi in quelle date: rimetti le pratiche "In attesa" e pianificale con Smista/Ottimizza insieme alle ordinarie.
+                </p>
+             </div>
+           )}
 
           {/* Toggle Impostazioni e azioni: click per chiudere/riaprire e liberare spazio per l'elenco */}
           <button
@@ -1188,30 +1299,31 @@ function App() {
              <button onClick={handleOptimize} className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
                 {isOptimizing ? "Calcolo..." : <><SparklesIcon /> Ottimizza {currentDate}{selectedTech ? ` · ${selectedTech.name.split(' ')[0]}` : ''}</>}
              </button>
-             {confirmedForDate.length > 0 && viewMode === 'day' && (
-                <button onClick={() => setIsSwapMode(!isSwapMode)} className={`col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 ${isSwapMode ? 'bg-amber-100 text-amber-800' : 'text-slate-600'}`}>
-                    <ArrowsRightLeftIcon /> Scambia Ordine
-                </button>
-             )}
               <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".xlsx,.csv" className="hidden" />
+              <input type="file" ref={kmzInputRef} onChange={handleKmzSelect} accept=".kmz,.kml" className="hidden" />
 
               <div className="col-span-2 grid grid-cols-2 gap-2">
                   <button onClick={() => fileInputRef.current?.click()} className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-slate-600 bg-white hover:bg-slate-50">
                       <UploadIcon /> Importa Excel
                   </button>
+                  <button
+                    onClick={() => kmzInputRef.current?.click()}
+                    title="Importa la mappa di Google My Maps (KMZ/KML) con tutti i livelli"
+                    className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100"
+                  >
+                      <UploadIcon /> Importa Maps
+                  </button>
                   <button onClick={handleExport} className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-indigo-600 border-indigo-200 bg-indigo-50 hover:bg-indigo-100">
                       <DownloadIcon /> Esporta Excel
                   </button>
+                  <button
+                    onClick={handleSendToN8n}
+                    disabled={isSendingToN8n}
+                    className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-slate-800 hover:bg-slate-900 border-slate-900 transition-colors"
+                  >
+                     {isSendingToN8n ? 'Invio...' : <><PaperAirplaneIcon /> Invia Report</>}
+                  </button>
               </div>
-
-              {/* Tasto Invia a N8N */}
-              <button
-                onClick={handleSendToN8n}
-                disabled={isSendingToN8n}
-                className="col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-slate-800 hover:bg-slate-900 border-slate-900 transition-colors"
-              >
-                 {isSendingToN8n ? 'Invio in corso...' : <><PaperAirplaneIcon /> Invia Report Email</>}
-              </button>
           </div>
           </>
           )}
@@ -1298,6 +1410,11 @@ function App() {
                         <span>Confermate ({visibleAppointments.filter(a => a.status === 'confirmed').length})</span>
                         <span className="text-slate-400 font-normal normal-case">{viewMode === 'day' ? 'Giorno' : viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
                     </h3>
+                    {viewMode === 'day' && visibleAppointments.filter(a => a.status === 'confirmed').length > 1 && (
+                        <p className="text-[11px] text-slate-400 mb-2 flex items-center gap-1">
+                            <ArrowsRightLeftIcon /> Trascina una scheda (tieni premuto il clic) per riordinare il giro: orari e mappa si ricalcolano.
+                        </p>
+                    )}
                     <div className="space-y-2">
                         {visibleAppointments.filter(a => a.status === 'confirmed')
                          .sort((a,b) => {
@@ -1315,10 +1432,16 @@ function App() {
                                 )}
                                 <div
                                     id={`appt-${appt.id}`}
-                                    onClick={() => toggleSwapSelection(appt.id)}
+                                    draggable={canDragReorder}
+                                    onDragStart={(e) => handleDragStart(e, appt.id)}
+                                    onDragOver={(e) => handleDragOverCard(e, appt.id)}
+                                    onDrop={(e) => handleDropOnCard(e, appt.id)}
+                                    onDragEnd={handleDragEnd}
                                     className={`
-                                        relative p-3 rounded-lg border transition-all
-                                        ${isSwapMode && selectedForSwap.includes(appt.id) ? 'bg-amber-50 border-amber-500' : 'bg-blue-50 border-blue-100'}
+                                        relative p-3 rounded-lg border transition-all bg-blue-50 border-blue-100
+                                        ${canDragReorder ? 'cursor-grab active:cursor-grabbing' : ''}
+                                        ${dragId === appt.id ? 'opacity-40' : ''}
+                                        ${dragOverId === appt.id ? 'ring-2 ring-indigo-500 ring-offset-1' : ''}
                                         ${selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-500 shadow-md scale-[1.01]' : ''}
                                         ${appt.urgent ? 'border-l-4 border-l-red-500' : ''}
                                     `}
@@ -1439,6 +1562,98 @@ function App() {
                                      <button onClick={() => openEditModal(appt)} title="Modifica" className="text-indigo-400 hover:bg-indigo-50 p-1 rounded"><PencilIcon/></button>
                                      <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Riattiva" className="text-green-600 hover:bg-green-50 p-1 rounded"><ClockIcon/></button>
                                      <button onClick={() => handleRemove(appt.id)} className="text-red-400 hover:bg-red-50 p-1 rounded"><TrashIcon/></button>
+                                 </div>
+                             </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* 5. Problematiche (numeri non corretti / da richiamare / lavori da ultimare) */}
+            {filters.issues && listIssues.length > 0 && (
+                <div>
+                    <h3 className="text-xs font-bold text-rose-600 uppercase tracking-wider mb-2 border-b border-rose-100 pb-1 mt-4">
+                        Problematiche ({listIssues.length})
+                    </h3>
+                    {(Object.keys(ISSUE_META) as IssueType[]).map(type => {
+                        const items = listIssues.filter(a => (a.issueType || 'callback') === type);
+                        if (items.length === 0) return null;
+                        return (
+                            <div key={type} className="mb-3">
+                                <h4 className="text-[11px] font-bold text-rose-500 uppercase mb-1.5">
+                                    {ISSUE_META[type].icon} {ISSUE_META[type].label} ({items.length})
+                                </h4>
+                                <div className="space-y-2">
+                                    {items.map(appt => (
+                                        <div
+                                            key={appt.id}
+                                            id={`appt-${appt.id}`}
+                                            className={`
+                                                p-3 rounded-lg border border-rose-200 bg-rose-50/60 flex justify-between items-start transition-all
+                                                ${selectedAppointmentId === appt.id ? 'ring-2 ring-rose-400 shadow-md' : ''}
+                                            `}
+                                        >
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
+                                                    <UrgentBadge appt={appt} />
+                                                </div>
+                                                <p className="text-xs text-slate-400">{appt.address}</p>
+                                                {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
+                                                {appt.followUpDate && (
+                                                    <p className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 mt-1 inline-block capitalize">
+                                                        🔔 {ISSUE_META[type].reentry}: {formatDayLabel(appt.followUpDate)}
+                                                    </p>
+                                                )}
+                                                {appt.notes && <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-2">{appt.notes}</p>}
+                                                <div className="mt-1 flex gap-1.5 flex-wrap items-center">
+                                                    {selectedTechId === ALL_TECH && <TechBadge appt={appt} />}
+                                                    {appt.province && <span className="text-[10px] text-slate-400 border border-slate-200 px-1 rounded">{appt.province}</span>}
+                                                    <CallBadge appt={appt} />
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-col gap-1 shrink-0">
+                                                <button onClick={() => openEditModal(appt)} title="Modifica (categoria, data di rientro)" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
+                                                <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Rimetti in attesa (torna pianificabile)" className="p-1 hover:bg-orange-100 rounded text-orange-400"><ClockIcon/></button>
+                                                <button onClick={() => handleRemove(appt.id)} title="Elimina" className="p-1 hover:bg-red-50 rounded text-red-300"><TrashIcon/></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })}
+                    <p className="text-[11px] text-slate-400">
+                        Imposta la <b>data di rientro</b> (richiamo o fine lavori) dalla matita: dal giorno prima
+                        comparirà l'alert per riservare gli slot.
+                    </p>
+                </div>
+            )}
+
+            {/* 6. Annullate (archivio) */}
+            {filters.cancelled && listCancelled.length > 0 && (
+                <div>
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 border-b border-slate-200 pb-1 mt-4">
+                        Annullate ({listCancelled.length})
+                    </h3>
+                    <div className="space-y-2 opacity-60">
+                        {listCancelled.map(appt => (
+                             <div
+                                key={appt.id}
+                                id={`appt-${appt.id}`}
+                                className={`
+                                    p-2.5 rounded-lg border border-slate-200 bg-slate-50 flex justify-between items-center transition-all
+                                    ${selectedAppointmentId === appt.id ? 'ring-2 ring-slate-400' : ''}
+                                `}
+                             >
+                                 <div className="min-w-0">
+                                     <h4 className="text-sm font-semibold text-slate-500 line-through">{appt.title}</h4>
+                                     <p className="text-xs text-slate-400 truncate">{appt.address}</p>
+                                     {appt.notes && <p className="text-xs text-slate-300 italic truncate">{appt.notes.split('\n')[0]}</p>}
+                                 </div>
+                                 <div className="flex gap-1 shrink-0">
+                                     <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Ripristina in attesa" className="text-green-600 hover:bg-green-50 p-1 rounded"><ClockIcon/></button>
+                                     <button onClick={() => handleRemove(appt.id)} title="Elimina definitivamente" className="text-red-400 hover:bg-red-50 p-1 rounded"><TrashIcon/></button>
                                  </div>
                              </div>
                         ))}

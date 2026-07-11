@@ -8,7 +8,10 @@ export interface CallResult {
   error?: string;
 }
 
-export const startConfirmationCall = async (appointment: Appointment): Promise<CallResult> => {
+export const startConfirmationCall = async (
+  appointment: Appointment,
+  technicianName?: string
+): Promise<CallResult> => {
   if (!appointment.phone) {
     return { ok: false, error: 'Nessun numero di telefono per questo appuntamento.' };
   }
@@ -25,6 +28,8 @@ export const startConfirmationCall = async (appointment: Appointment): Promise<C
         endTime: appointment.endTime,
         address: appointment.address,
         notes: appointment.notes,
+        urgent: appointment.urgent === true,
+        technicianName: technicianName || undefined,
       }),
     });
 

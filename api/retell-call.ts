@@ -57,7 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const { phone, clientName, date, startTime, endTime, address, notes } = req.body || {};
+  const { phone, clientName, date, startTime, endTime, address, notes, urgent, technicianName } = req.body || {};
 
   if (!phone) {
     return res.status(400).json({ error: 'Numero di telefono mancante.' });
@@ -70,21 +70,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const dateSpoken = formatDateItalian(date);
   const timeSpoken = startTime ? `alle ore ${startTime}` : 'in orario da definire';
+  const isUrgent = urgent === true || urgent === 'true';
 
   // Ready-to-speak Italian script: the Retell agent prompt can simply
   // reference {{call_script}}, or use the granular variables below.
   const callScript = [
     `Sei l'assistente telefonico di ${COMPANY_NAME}.`,
-    `Stai chiamando ${clientName || 'un cliente'} per confermare un appuntamento.`,
+    `Stai chiamando ${clientName || 'un cliente'} per confermare un appuntamento per un sopralluogo.`,
+    isUrgent
+      ? `ATTENZIONE: questo sopralluogo è contrassegnato come URGENTE. Devi dirlo esplicitamente al cliente durante la chiamata: comunica che si tratta di un sopralluogo urgente e che è necessario effettuarlo il prima possibile.`
+      : null,
     `Dettagli dell'appuntamento:`,
     dateSpoken ? `- Data: ${dateSpoken}` : null,
     startTime ? `- Orario di arrivo previsto: ${startTime}${endTime ? ` (fine prevista ${endTime})` : ''}` : `- Orario: da definire, comunica che verrà confermato a breve`,
     address ? `- Indirizzo: ${address}` : null,
+    technicianName ? `- Il sopralluogo sarà effettuato da ${technicianName}.` : null,
+    isUrgent ? `- Priorità: URGENTE (comunicalo chiaramente al cliente).` : null,
     notes ? `- Note: ${notes}` : null,
     ``,
     `Istruzioni: saluta cortesemente, presentati a nome di ${COMPANY_NAME}, verifica di parlare con la persona giusta, ` +
-    `comunica data, orario e luogo dell'appuntamento, chiedi conferma della presenza. ` +
-    `Se il cliente chiede di spostare l'appuntamento, prendi nota della preferenza e comunica che verrà ricontattato per la nuova data. ` +
+    (isUrgent
+      ? `comunica subito che si tratta di un sopralluogo URGENTE da svolgere il prima possibile, poi indica data, orario e luogo dell'appuntamento` +
+        (technicianName ? ` e il nome di chi effettuerà il sopralluogo (${technicianName})` : '') + `, chiedi conferma della presenza. `
+      : `comunica data, orario e luogo dell'appuntamento` +
+        (technicianName ? ` e il nome di chi effettuerà il sopralluogo (${technicianName})` : '') + `, chiedi conferma della presenza. `) +
+    `Se il cliente chiede di spostare l'appuntamento, prendi nota della preferenza e comunica che verrà ricontattato per la nuova data` +
+    (isUrgent ? `, ricordando che vista l'urgenza sarebbe preferibile anticipare e non posticipare` : '') + `. ` +
     `Ringrazia e saluta prima di chiudere la chiamata.`,
   ].filter(line => line !== null).join('\n');
 
@@ -100,11 +111,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       appointment_end_time: endTime || '',
       appointment_address: address || '',
       appointment_notes: notes || '',
+      appointment_urgent: isUrgent ? 'URGENTE' : 'normale',
+      urgency_notice: isUrgent
+        ? "Questo sopralluogo è URGENTE: dillo esplicitamente al cliente e spiega che va effettuato il prima possibile."
+        : '',
+      technician_name: technicianName || '',
       call_script: callScript,
     },
     metadata: {
       source: 'optiroute',
       appointment_date: date || '',
+      urgent: isUrgent,
     },
   };
 

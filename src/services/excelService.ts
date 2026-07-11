@@ -24,6 +24,21 @@ export const extractPhoneFromRow = (row: ExcelRow): string | undefined => {
   return undefined;
 };
 
+// Tag "urgente" da colonne tipo Urgente/Urgenza/Priorità: valori accettati
+// sì/si/x/1/true/urgente/alta
+export const extractUrgentFromRow = (row: ExcelRow): boolean => {
+  const candidates = ['Urgente', 'Urgenza', 'Priorità', 'Priorita', 'Urgent'];
+  for (const col of candidates) {
+    const value = row[col];
+    if (value === undefined || value === null) continue;
+    const s = `${value}`.trim().toLowerCase();
+    if (['sì', 'si', 'x', '1', 'true', 'urgente', 'urgent', 'alta', 'yes'].includes(s)) {
+      return true;
+    }
+  }
+  return false;
+};
+
 export const parseExcelFile = async (file: File): Promise<ExcelRow[]> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -53,8 +68,18 @@ export const parseExcelFile = async (file: File): Promise<ExcelRow[]> => {
   });
 };
 
+const statusLabel = (a: Appointment): string => {
+  if (a.status === 'confirmed') return 'Confermato';
+  if (a.status === 'proposed') return 'Proposto (da confermare)';
+  if (a.status === 'standby') return 'Stand-by';
+  return 'In Attesa';
+};
+
 // Helper function to create the workbook structure
-const createWorkbook = (appointments: Appointment[]) => {
+const createWorkbook = (
+  appointments: Appointment[],
+  technicianNameById: Record<string, string> = {}
+) => {
   // Format data for export
   const callStatusLabel = (a: Appointment): string => {
     if (a.callStatus === 'called') return 'Effettuata';
@@ -65,14 +90,17 @@ const createWorkbook = (appointments: Appointment[]) => {
 
   const dataToExport = appointments.map(a => ({
     'Data': a.date || 'Da definire',
+    'Tecnico': (a.technicianId && technicianNameById[a.technicianId]) || '-',
+    'Urgente': a.urgent ? 'SÌ' : 'No',
     'Ordine': a.sequenceOrder || '-',
     'Ora Arrivo': a.startTime || '-',
     'Ora Partenza': a.endTime || '-',
     'Cliente/Intestatario': a.title,
     'Telefono': a.phone || '-',
     'Indirizzo Completo': a.address,
+    'Prov.': a.province || '-',
     'Note': a.notes || '',
-    'Stato': a.status === 'confirmed' ? 'Confermato' : (a.status === 'standby' ? 'Stand-by' : 'In Attesa'),
+    'Stato': statusLabel(a),
     'Chiamata AI': callStatusLabel(a),
     'Distanza da prec. (km)': a.distanceFromPrev || 0,
     'Tempo viaggio (min)': a.travelTimeFromPrev || 0,
@@ -84,14 +112,17 @@ const createWorkbook = (appointments: Appointment[]) => {
   // Auto-width for columns (simple approximation)
   const wscols = [
     { wch: 12 }, // Date
+    { wch: 18 }, // Technician
+    { wch: 9 },  // Urgent
     { wch: 8 },  // Order
     { wch: 10 }, // Start
     { wch: 10 }, // End
     { wch: 30 }, // Name
     { wch: 16 }, // Phone
     { wch: 50 }, // Address
+    { wch: 7 },  // Province
     { wch: 30 }, // Notes
-    { wch: 12 }, // Status
+    { wch: 22 }, // Status
     { wch: 12 }, // AI call
     { wch: 15 }, // Dist
     { wch: 15 }, // Time
@@ -105,8 +136,11 @@ const createWorkbook = (appointments: Appointment[]) => {
 };
 
 // Generate a Blob object directly (for sending via API)
-export const generateExcelBlob = async (appointments: Appointment[]): Promise<Blob> => {
-  const workbook = createWorkbook(appointments);
+export const generateExcelBlob = async (
+  appointments: Appointment[],
+  technicianNameById: Record<string, string> = {}
+): Promise<Blob> => {
+  const workbook = createWorkbook(appointments, technicianNameById);
   const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
   return new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 };
@@ -124,7 +158,11 @@ export const blobToBase64 = (blob: Blob): Promise<string> => {
 };
 
 // Trigger a browser download
-export const exportAppointmentsToExcel = (appointments: Appointment[], filename: string) => {
-  const workbook = createWorkbook(appointments);
+export const exportAppointmentsToExcel = (
+  appointments: Appointment[],
+  filename: string,
+  technicianNameById: Record<string, string> = {}
+) => {
+  const workbook = createWorkbook(appointments, technicianNameById);
   XLSX.writeFile(workbook, filename);
 };

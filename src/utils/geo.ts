@@ -101,9 +101,49 @@ export const optimizeRoute = (
   }
 };
 
+// Catena "nearest neighbor" a partire da un punto: usata dallo smistamento
+// per costruire l'ordine del giorno (prima le urgenti, poi le altre).
+export const nearestNeighborChain = (
+  appointments: Appointment[],
+  startFrom?: Coordinates | null
+): Appointment[] => {
+  if (appointments.length <= 1) return [...appointments];
+
+  const remaining = [...appointments];
+  const chain: Appointment[] = [];
+  let reference = startFrom || remaining[0].coords;
+
+  while (remaining.length > 0) {
+    let nearestIndex = 0;
+    let minDistance = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const dist = calculateDistance(reference, remaining[i].coords);
+      if (dist < minDistance) {
+        minDistance = dist;
+        nearestIndex = i;
+      }
+    }
+    const next = remaining.splice(nearestIndex, 1)[0];
+    chain.push(next);
+    reference = next.coords;
+  }
+  return chain;
+};
+
 interface ScheduleResult {
   scheduled: Appointment[];
   overflow: Appointment[];
+}
+
+export interface ScheduleOptions {
+  // true: usa solo stime haversine (nessuna chiamata di rete). Usato dallo
+  // smistamento automatico, dove servono proposte rapide su molti giorni.
+  useEstimates?: boolean;
+  // true: il primo appuntamento inizia dopo il viaggio base -> prima tappa
+  // (startTime = orario di partenza dalla base, non di arrivo alla prima tappa).
+  startFromBase?: boolean;
+  // Minuti del limite di fine giornata (es. 17:30 -> maxEndTimeHours=17, qui 30).
+  maxEndTimeMinutes?: number;
 }
 
 // Async Schedule Calculation using Real Roads
@@ -113,7 +153,8 @@ export const calculateSchedule = async (
   startTimeHours: number = 9,
   startTimeMinutes: number = 0,
   maxEndTimeHours: number = 18,
-  durationMinutes: number = 20
+  durationMinutes: number = 20,
+  options: ScheduleOptions = {}
 ): Promise<ScheduleResult> => {
   let currentTime = new Date();
   currentTime.setHours(startTimeHours, startTimeMinutes, 0, 0);
@@ -126,6 +167,20 @@ export const calculateSchedule = async (
   const overflow: Appointment[] = [];
   let isOverflowing = false;
 
+  const getLeg = async (
+    from: Coordinates,
+    to: Coordinates
+  ): Promise<{ distance: number; travelTime: number }> => {
+    if (!options.useEstimates) {
+      const routeData = await getRoadRoute(from, to);
+      if (routeData) {
+        return { distance: routeData.distanceKm, travelTime: routeData.durationMinutes };
+      }
+    }
+    const distance = parseFloat(calculateDistance(from, to).toFixed(2));
+    return { distance, travelTime: estimateTravelTimeMinutes(distance) };
+  };
+
   for (let i = 0; i < sortedAppointments.length; i++) {
     if (isOverflowing) {
       overflow.push({ ...sortedAppointments[i], sequenceOrder: undefined, startTime: undefined, endTime: undefined });
@@ -137,22 +192,20 @@ export const calculateSchedule = async (
     let distance = 0;
 
     if (i > 0) {
-      const prev = scheduled[i - 1]; 
-      
-      const routeData = await getRoadRoute(prev.coords, appt.coords);
-      
-      if (routeData) {
-        distance = routeData.distanceKm;
-        travelTime = routeData.durationMinutes;
-      } else {
-        distance = parseFloat(calculateDistance(prev.coords, appt.coords).toFixed(2));
-        travelTime = estimateTravelTimeMinutes(distance);
-      }
+      const prev = scheduled[i - 1];
+
+      const leg = await getLeg(prev.coords, appt.coords);
+      distance = leg.distance;
+      travelTime = leg.travelTime;
 
       currentTime = new Date(currentTime.getTime() + travelTime * 60000);
     } else {
-      if (baseLocation) {
-         currentTime.setHours(startTimeHours, startTimeMinutes, 0, 0);
+      currentTime.setHours(startTimeHours, startTimeMinutes, 0, 0);
+      if (baseLocation && options.startFromBase) {
+        const leg = await getLeg(baseLocation, appt.coords);
+        distance = leg.distance;
+        travelTime = leg.travelTime;
+        currentTime = new Date(currentTime.getTime() + travelTime * 60000);
       }
     }
 
@@ -171,9 +224,9 @@ export const calculateSchedule = async (
     const startString = formatTime(currentTime);
     const endTime = new Date(currentTime.getTime() + apptDuration * 60000);
     const endString = formatTime(endTime);
-    
+
     const limitDate = new Date(currentTime);
-    limitDate.setHours(maxEndTimeHours, 0, 0, 0);
+    limitDate.setHours(maxEndTimeHours, options.maxEndTimeMinutes ?? 0, 0, 0);
 
     if (endTime > limitDate) {
       isOverflowing = true;

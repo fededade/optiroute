@@ -14,6 +14,8 @@ export interface StoredBase {
 export interface StoredSettings {
   startTime: string;
   endTimeLimit: string;
+  /** Pannello "Impostazioni e azioni" della sidebar aperto/chiuso */
+  settingsOpen?: boolean;
 }
 
 const safeParse = <T>(raw: string | null): T | null => {

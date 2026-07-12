@@ -47,6 +47,34 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
 
 I numeri italiani senza prefisso internazionale vengono normalizzati automaticamente a `+39`.
 
+### Esito automatico delle chiamate (post-call analysis)
+
+Dopo l'avvio di una chiamata, OptiRoute interroga Retell (`api/retell-call-status.ts`, polling ogni
+10 secondi fino a 30 minuti) e quando la conversazione è conclusa e analizzata **applica da solo
+l'esito alla pratica**:
+
+- *confermato* → badge "✓ Chiamato · confermato" (l'appuntamento resta pianificato)
+- *da richiamare* → la pratica passa in 📆 **Da richiamare**, con la data indicata dal cliente come data di rientro (alert + vincoli di smistamento)
+- *numero errato* → 📵 **Numeri non corretti** (anche quando Retell segnala numero non componibile)
+- *lavori non ultimati* → 🚧 **Lavori da ultimare**, con la data di fine lavori come rientro
+- *annullato* → pratica **Annullata** (archivio)
+- *nessuna risposta / segreteria* → badge "✗ Nessuna risposta" (nessun cambio di stato)
+
+Il riassunto AI della conversazione viene salvato sulla pratica (tooltip sul badge e popup mappa).
+Gli spostamenti di categoria scattano solo dall'esito esplicito dell'analisi; in assenza, cambia solo il badge.
+
+**Configurazione necessaria sull'agente Retell** (Dashboard → Agent → *Post-Call Analysis*), aggiungi due campi custom:
+
+1. `esito_chiamata` — tipo *Selector*, opzioni esatte:
+   `confermato`, `da_richiamare`, `numero_errato`, `lavori_non_ultimati`, `annullato`, `nessuna_risposta`
+   - descrizione suggerita: *"Esito della chiamata di conferma del sopralluogo"*
+2. `data_rientro` — tipo *Text*
+   - descrizione suggerita: *"Se il cliente ha indicato una data in cui richiamarlo o in cui i lavori saranno finiti, riportala in formato AAAA-MM-GG (accettato anche GG/MM); altrimenti lascia vuoto"*
+
+Lo script inviato all'agente istruisce già l'operatore a chiedere e annotare queste informazioni
+durante la chiamata. Senza i campi custom l'automazione resta prudente: aggiorna solo il badge
+(usando `call_successful`/voicemail) e l'esito si registra a mano dalla finestra di chiamata.
+
 ## Altre variabili d'ambiente
 
 Vedi `.env.example`: `GOOGLE_MAPS_API_KEY` (tempi di viaggio con traffico), `VITE_N8N_WEBHOOK_URL` (invio report via n8n), `VITE_GEMINI_API_KEY` (pulizia AI degli indirizzi, opzionale).

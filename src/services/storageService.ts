@@ -30,10 +30,14 @@ const safeParse = <T>(raw: string | null): T | null => {
 export const loadAppointments = (): Appointment[] => {
   const data = safeParse<Appointment[]>(localStorage.getItem(APPOINTMENTS_KEY));
   if (!Array.isArray(data)) return [];
-  // Reset transient "calling" states left over from a closed session
+  // Reset transient "calling" states left over from a closed session.
+  // Con un callId la chiamata era partita davvero: si passa a 'called' così
+  // il polling dell'esito (post-call analysis) può riprendere da dove era.
   return data
     .filter(a => a && a.id && a.coords)
-    .map(a => (a.callStatus === 'calling' ? { ...a, callStatus: 'failed' as const } : a));
+    .map(a => (a.callStatus === 'calling'
+      ? { ...a, callStatus: a.callId ? ('called' as const) : ('failed' as const) }
+      : a));
 };
 
 export const saveAppointments = (appointments: Appointment[]): void => {

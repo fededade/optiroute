@@ -362,6 +362,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
                     {appt.followUpDate && appt.status === 'issue' && (
                       <p className="mt-1 text-xs font-bold text-amber-700">🔔 Rientra il {appt.followUpDate}</p>
                     )}
+                    {appt.callSummary && (
+                      <p className="mt-1 text-xs text-slate-500 italic">🤖 {appt.callSummary}</p>
+                    )}
 
                     {isScheduled && appt.startTime && (
                         <div className="mt-2 text-xs bg-slate-100 p-1 rounded">

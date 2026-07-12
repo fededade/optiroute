@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { Appointment, Coordinates, AppointmentStatus, IssueType, Technician } from './types';
+import type { Appointment, Coordinates, AppointmentStatus, CallOutcome, IssueType, Technician } from './types';
+import { fetchCallStatus, interpretCallOutcome, type CallOutcomeResult } from './services/callService';
 import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow } from './services/excelService';
@@ -412,6 +413,76 @@ function App() {
       : a
     ));
   };
+
+  // Applica l'esito rilevato dalla post-call analysis di Retell
+  const applyCallOutcome = useCallback((id: string, r: CallOutcomeResult) => {
+    setAllAppointments(prev => prev.map(a => {
+      if (a.id !== id) return a;
+
+      const updated: Appointment = {
+        ...a,
+        callOutcome: r.outcome,
+        callSummary: r.summary || a.callSummary,
+        callStatus: r.outcome === 'no_answer' ? 'failed' : 'called',
+      };
+
+      const issueType: IssueType | null =
+        r.outcome === 'callback' ? 'callback'
+        : r.outcome === 'wrong_phone' ? 'wrong_phone'
+        : r.outcome === 'works_pending' ? 'works_pending'
+        : null;
+
+      if (issueType) {
+        updated.status = 'issue';
+        updated.issueType = issueType;
+        updated.followUpDate = r.followUpDate || a.followUpDate;
+        updated.date = undefined;
+        updated.sequenceOrder = undefined;
+        updated.startTime = undefined;
+        updated.endTime = undefined;
+      } else if (r.outcome === 'cancelled') {
+        updated.status = 'cancelled';
+        updated.issueType = undefined;
+        updated.date = undefined;
+        updated.sequenceOrder = undefined;
+        updated.startTime = undefined;
+        updated.endTime = undefined;
+      }
+      return updated;
+    }));
+  }, []);
+
+  // Polling degli esiti: finché una chiamata avviata non ha un esito, interroga
+  // Retell (via /api/retell-call-status) e applica il risultato da solo.
+  const outcomePollInFlight = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const CUTOFF_MS = 30 * 60 * 1000; // dopo 30 minuti si smette di controllare
+    const pendingCalls = allAppointments.filter(a =>
+      a.callId && !a.callOutcome &&
+      (a.callStatus === 'calling' || a.callStatus === 'called') &&
+      a.calledAt && (Date.now() - new Date(a.calledAt).getTime()) < CUTOFF_MS
+    );
+    if (pendingCalls.length === 0) return;
+
+    const tick = async () => {
+      for (const appt of pendingCalls) {
+        if (outcomePollInFlight.current.has(appt.id)) continue;
+        outcomePollInFlight.current.add(appt.id);
+        try {
+          const status = await fetchCallStatus(appt.callId!);
+          if (!status) continue;
+          const result = interpretCallOutcome(status);
+          if (result) applyCallOutcome(appt.id, result);
+        } finally {
+          outcomePollInFlight.current.delete(appt.id);
+        }
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 10000);
+    return () => clearInterval(interval);
+  }, [allAppointments, applyCallOutcome]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -938,10 +1009,21 @@ function App() {
     ).length;
 
   // Small badge showing the AI call state on a card
+  const CALL_OUTCOME_LABEL: Record<CallOutcome, string> = {
+    confirmed: 'confermato',
+    callback: 'da richiamare',
+    wrong_phone: 'numero errato',
+    works_pending: 'lavori da ultimare',
+    cancelled: 'annullato',
+    no_answer: 'nessuna risposta',
+    unknown: 'esito da verificare',
+  };
+
   const CallBadge = ({ appt }: { appt: Appointment }) => {
-    if (appt.callStatus === 'called') return <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato</span>;
+    const outcome = appt.callOutcome ? ` · ${CALL_OUTCOME_LABEL[appt.callOutcome]}` : '';
+    if (appt.callStatus === 'called') return <span title={appt.callSummary} className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato{outcome}</span>;
     if (appt.callStatus === 'calling') return <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 In chiamata...</span>;
-    if (appt.callStatus === 'failed') return <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1 rounded">✗ Chiamata fallita</span>;
+    if (appt.callStatus === 'failed') return <span title={appt.callSummary} className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1 rounded">✗ {appt.callOutcome === 'no_answer' ? 'Nessuna risposta' : 'Chiamata fallita'}</span>;
     return null;
   };
 

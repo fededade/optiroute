@@ -395,6 +395,24 @@ function App() {
     ));
   };
 
+  // Esito della telefonata -> categoria problematica (la pratica esce dalla
+  // pianificazione; con la data di rientro scatteranno alert e vincoli)
+  const handleMarkIssueFromCall = (id: string, issueType: IssueType, followUpDate?: string) => {
+    setAllAppointments(prev => prev.map(a => a.id === id
+      ? {
+          ...a,
+          status: 'issue',
+          issueType,
+          followUpDate: followUpDate || a.followUpDate,
+          date: undefined,
+          sequenceOrder: undefined,
+          startTime: undefined,
+          endTime: undefined,
+        }
+      : a
+    ));
+  };
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -967,6 +985,7 @@ function App() {
           onClose={() => setCallTarget(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}
+          onMarkIssue={handleMarkIssueFromCall}
         />
       )}
 

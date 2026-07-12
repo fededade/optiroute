@@ -95,6 +95,16 @@ const CheckIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
   </svg>
 );
+const ChevronUpIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
+    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 15.75 7.5-7.5 7.5 7.5" />
+  </svg>
+);
+const ChevronDownIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
+    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+  </svg>
+);
 const XMarkIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -636,6 +646,70 @@ function App() {
     ));
   };
 
+  // Sposta una proposta prima/dopo l'altra nel giro del suo tecnico+giorno e
+  // ricalcola gli orari (stime, come lo smistamento: nessuna rete, istantaneo).
+  const moveProposed = async (appt: Appointment, direction: -1 | 1) => {
+    if (isOptimizing) return;
+
+    const group = allAppointments
+      .filter(a => a.status === 'proposed' && a.technicianId === appt.technicianId && a.date === appt.date)
+      .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0));
+
+    const idx = group.findIndex(a => a.id === appt.id);
+    const targetIdx = idx + direction;
+    if (idx === -1 || targetIdx < 0 || targetIdx >= group.length) return;
+
+    const reordered = [...group];
+    [reordered[idx], reordered[targetIdx]] = [reordered[targetIdx], reordered[idx]];
+
+    // Orari e base del tecnico del giro (fallback: impostazioni generali)
+    const tech = techById(appt.technicianId);
+    let dayStart = startTime;
+    let dayEnd = endTimeLimit;
+    let base = baseLocation?.coords || null;
+    if (tech) {
+      const window = workWindowOn(tech, appt.date!);
+      if (window) { dayStart = window.start; dayEnd = window.end; }
+      base = tech.baseCoords || baseLocation?.coords || null;
+    }
+
+    setIsOptimizing(true);
+    try {
+      const [startH, startM] = dayStart.split(':').map(n => parseInt(n, 10));
+      const [endH, endM] = dayEnd.split(':').map(n => parseInt(n, 10));
+
+      const { scheduled, overflow } = await calculateSchedule(
+        reordered,
+        base,
+        startH,
+        startM || 0,
+        endH,
+        20,
+        { useEstimates: true, startFromBase: true, maxEndTimeMinutes: endM || 0 }
+      );
+
+      const scheduledById = new Map(scheduled.map(s => [s.id, s]));
+      const overflowIds = new Set(overflow.map(o => o.id));
+
+      setAllAppointments(prev => prev.map(a => {
+        const calculated = scheduledById.get(a.id);
+        if (calculated) return { ...a, ...calculated, status: 'proposed', date: appt.date };
+        if (overflowIds.has(a.id)) {
+          return { ...a, status: 'pending', date: undefined, sequenceOrder: undefined, startTime: undefined, endTime: undefined };
+        }
+        return a;
+      }));
+
+      if (overflow.length > 0) {
+        alert(`Con questo ordine ${overflow.length === 1 ? 'un sopralluogo non rientra' : `${overflow.length} sopralluoghi non rientrano`} più nell'orario di lavoro: ${overflow.length === 1 ? 'è tornato' : 'sono tornati'} "In Attesa".`);
+      }
+    } catch (error) {
+      console.error('Reorder failed', error);
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
+
   // Applica gli esiti dello smistamento automatico (stato 'proposed' + assegnazioni)
   const handleApplyDispatch = (updates: Appointment[]) => {
     const byId = new Map(updates.map(u => [u.id, u]));
@@ -830,6 +904,11 @@ function App() {
     .filter(a => selectedTechId !== ALL_TECH ? true : !a.technicianId)
     .sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0) - (b.sequenceOrder||0));
   const routeSummary = confirmedForDate.length > 0 ? calculateRouteSummary(confirmedForDate) : null;
+
+  // "Scambia Ordine" deve comparire anche per i giri smistati ai tecnici
+  // (confirmedForDate in vista "Tutti" copre solo il pool non assegnato)
+  const swappableConfirmedCount = allAppointments
+    .filter(a => a.status === 'confirmed' && a.date === currentDate && matchesTechFilter(a)).length;
 
   const listProposed = allAppointments.filter(a => a.status === 'proposed' && matchesTechFilter(a));
   const listPending = allAppointments
@@ -1223,7 +1302,7 @@ function App() {
              <button onClick={handleOptimize} className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
                 {isOptimizing ? "Calcolo..." : <><SparklesIcon /> Ottimizza {currentDate}{selectedTech ? ` · ${selectedTech.name.split(' ')[0]}` : ''}</>}
              </button>
-             {confirmedForDate.length > 0 && viewMode === 'day' && (
+             {swappableConfirmedCount >= 2 && viewMode === 'day' && (
                 <button onClick={() => setIsSwapMode(!isSwapMode)} className={`col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 ${isSwapMode ? 'bg-amber-100 text-amber-800' : 'text-slate-600'}`}>
                     <ArrowsRightLeftIcon /> Scambia Ordine
                 </button>
@@ -1297,7 +1376,7 @@ function App() {
                                         </div>
                                     </div>
                                     <div className="divide-y divide-slate-100">
-                                        {group.items.map(appt => (
+                                        {group.items.map((appt, itemIdx) => (
                                             <div
                                                 key={appt.id}
                                                 id={`appt-${appt.id}`}
@@ -1319,6 +1398,20 @@ function App() {
                                                     </div>
                                                 </div>
                                                 <div className="flex flex-col gap-1 shrink-0">
+                                                    <div className="flex gap-1" title="Sposta il sopralluogo prima o dopo un altro: gli orari del giro si ricalcolano">
+                                                        <button
+                                                            onClick={() => moveProposed(appt, -1)}
+                                                            disabled={itemIdx === 0 || isOptimizing}
+                                                            title="Sposta prima (su)"
+                                                            className="flex-1 p-0.5 rounded border border-slate-200 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-25 disabled:pointer-events-none flex items-center justify-center"
+                                                        ><ChevronUpIcon /></button>
+                                                        <button
+                                                            onClick={() => moveProposed(appt, 1)}
+                                                            disabled={itemIdx === group.items.length - 1 || isOptimizing}
+                                                            title="Sposta dopo (giù)"
+                                                            className="flex-1 p-0.5 rounded border border-slate-200 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-25 disabled:pointer-events-none flex items-center justify-center"
+                                                        ><ChevronDownIcon /></button>
+                                                    </div>
                                                     <button
                                                         onClick={() => handleStatusChange(appt.id, 'confirmed')}
                                                         title="Conferma questa proposta"
@@ -1346,9 +1439,10 @@ function App() {
                         })}
                     </div>
                     <p className="text-[11px] text-slate-400 mt-2">
-                        Con "Chiama tutte" (o il tasto 📞 su gruppo/pratica) l'operatore AI chiama i clienti
-                        per confermare data e orario proposti, senza bisogno di confermare prima a mano.
-                        L'urgenza viene comunicata esplicitamente al cliente.
+                        Con le frecce ↑/↓ sposti un sopralluogo prima o dopo un altro nel giro
+                        (gli orari si ricalcolano). Con "Chiama tutte" (o il tasto 📞 su gruppo/pratica)
+                        l'operatore AI chiama i clienti per confermare data e orario proposti, senza
+                        bisogno di confermare prima a mano. L'urgenza viene comunicata al cliente.
                     </p>
                 </div>
             )}

@@ -121,7 +121,10 @@ const BulkCallModal: React.FC<BulkCallModalProps> = ({
       >
         <div className="flex items-center gap-2 mb-1 shrink-0">
           <span className="text-2xl">📞</span>
-          <h3 className="text-lg font-bold text-slate-800">Chiamate di conferma AI</h3>
+          <h3 className="text-lg font-bold text-slate-800 flex-1">Chiamate di conferma AI</h3>
+          {phase !== 'running' && (
+            <button onClick={onClose} title="Chiudi" className="text-slate-400 hover:text-slate-600 text-xl leading-none px-1">✕</button>
+          )}
         </div>
 
         {phase === 'preview' && (

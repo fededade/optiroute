@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import type { Appointment, Coordinates, Technician } from '../types';
 import {
   computeDispatch,
@@ -44,6 +44,14 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
   const [proposal, setProposal] = useState<DispatchProposal | null>(null);
   const [error, setError] = useState('');
 
+  // La finestra deve restare SEMPRE chiudibile, anche a calcolo in corso:
+  // alla chiusura il risultato del calcolo (ancora in volo) viene scartato.
+  const closedRef = useRef(false);
+  const handleClose = () => {
+    closedRef.current = true;
+    onClose();
+  };
+
   const preview = useMemo(() => previewDispatch(pending, technicians), [pending, technicians]);
   const urgentCount = pending.filter(a => a.urgent).length;
 
@@ -62,11 +70,13 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
         technicians,
         fallbackBase,
         { startDate, horizonDays: horizon, includeWeekends },
-        setProgress
+        (msg) => { if (!closedRef.current) setProgress(msg); }
       );
+      if (closedRef.current) return; // finestra chiusa durante il calcolo
       setProposal(result);
       setPhase('result');
     } catch (err) {
+      if (closedRef.current) return;
       console.error('Dispatch error', err);
       setError('Errore durante il calcolo dello smistamento. Riprova.');
       setPhase('setup');
@@ -84,16 +94,16 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
     : 0;
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4" onClick={phase !== 'computing' ? onClose : undefined}>
+    // Overlay: il click fuori non chiude durante il calcolo (per evitare
+    // chiusure accidentali), ma la ✕ e "Annulla calcolo" restano sempre attivi
+    <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4" onClick={phase !== 'computing' ? handleClose : undefined}>
       <div
         className="bg-white rounded-2xl shadow-2xl p-6 max-w-2xl w-full max-h-[90vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-1 shrink-0">
           <h3 className="text-lg font-bold text-slate-800">🚚 Smista pratiche per zona</h3>
-          {phase !== 'computing' && (
-            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none px-1">✕</button>
-          )}
+          <button onClick={handleClose} title="Chiudi" className="text-slate-400 hover:text-slate-600 text-xl leading-none px-1">✕</button>
         </div>
 
         {phase === 'setup' && (
@@ -161,7 +171,7 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
 
             <div className="flex gap-2">
               <button
-                onClick={onClose}
+                onClick={handleClose}
                 className="flex-1 py-2 rounded-lg border border-slate-300 text-sm font-bold text-slate-600 hover:bg-slate-50"
               >
                 Annulla
@@ -182,6 +192,15 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
             <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mx-auto mb-4"></div>
             <h3 className="text-lg font-bold text-slate-800 mb-1">Smistamento in corso...</h3>
             <p className="text-sm text-slate-500">{progress}</p>
+            <button
+              onClick={handleClose}
+              className="mt-6 px-4 py-2 rounded-lg border border-slate-300 text-sm font-bold text-slate-600 hover:bg-slate-50"
+            >
+              Annulla calcolo
+            </button>
+            <p className="text-[11px] text-slate-400 mt-2">
+              Chiudendo, la proposta in corso viene scartata: nessuna pratica viene modificata.
+            </p>
           </div>
         )}
 

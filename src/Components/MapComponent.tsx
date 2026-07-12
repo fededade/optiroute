@@ -318,6 +318,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
                       )}
                     </div>
                     <p className="mt-1">{appt.address}</p>
+                    {appt.approximate && (
+                      <p className="mt-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                        ≈ Posizione approssimativa: pin al centro del comune (indirizzo esatto non trovato)
+                      </p>
+                    )}
                     {appt.phone && <p className="mt-1 text-xs text-slate-500">📞 {appt.phone}</p>}
 
                     {isScheduled && appt.startTime && (

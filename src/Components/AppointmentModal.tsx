@@ -55,6 +55,7 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
       let displayAddress = initial?.address || '';
       let province = initial?.province;
       let comune = initial?.comune;
+      let approximate = initial?.approximate;
 
       // Geocode only when the address is new or was changed
       const addressChanged = !initial || trimmedAddress !== initial.address;
@@ -70,6 +71,7 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
         displayAddress = result.displayName;
         province = result.province || province;
         comune = result.comune || comune;
+        approximate = undefined; // indirizzo trovato con precisione: via il flag
       }
 
       const parsedDuration = parseInt(duration, 10);
@@ -96,6 +98,7 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
         province,
         comune,
         urgent: urgent || undefined,
+        approximate,
         technicianId,
       };
 
@@ -160,6 +163,12 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
             />
             {initial?.province && (
               <p className="text-[11px] text-slate-400 mt-1">Provincia rilevata: {provinceLabel(initial.province)}</p>
+            )}
+            {initial?.approximate && (
+              <p className="text-[11px] text-amber-600 mt-1">
+                ≈ Posizione approssimativa (centro del comune): l'indirizzo esatto non è stato trovato
+                sulle mappe. Modificalo (es. controlla via e civico) per riposizionare il pin.
+              </p>
             )}
           </div>
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { Appointment, Coordinates, AppointmentStatus, Technician } from './types';
-import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
+import { geocodeAddress, geocodeAddressParts } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow } from './services/excelService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
@@ -10,6 +10,7 @@ import { provinceToCode } from './utils/provinces';
 import MapComponent from './Components/MapComponent';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
+import BulkCallModal from './Components/BulkCallModal';
 import TechnicianModal from './Components/TechnicianModal';
 import DispatchModal from './Components/DispatchModal';
 
@@ -150,8 +151,9 @@ function App() {
   // Import Modal State
   const [showImportModal, setShowImportModal] = useState(false);
   const [importFinished, setImportFinished] = useState(false);
-  const [importStats, setImportStats] = useState({ success: 0, failed: 0 });
+  const [importStats, setImportStats] = useState({ success: 0, failed: 0, approx: 0 });
   const [failedImports, setFailedImports] = useState<string[]>([]);
+  const [approxImports, setApproxImports] = useState<string[]>([]);
 
   // Settings & View
   const [currentDate, setCurrentDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -163,8 +165,9 @@ function App() {
   const [showApptModal, setShowApptModal] = useState(false);
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
 
-  // AI call modal (Retell)
+  // AI call modal (Retell): singola pratica o coda "Chiama tutte"
   const [callTarget, setCallTarget] = useState<Appointment | null>(null);
+  const [bulkCallList, setBulkCallList] = useState<Appointment[] | null>(null);
 
   // Filters
   const [filters, setFilters] = useState({
@@ -358,6 +361,16 @@ function App() {
     setCallTarget(appt);
   };
 
+  // Chiamate in blocco (es. tutte le proposte dopo lo smistamento)
+  const requestBulkCall = (appts: Appointment[]) => {
+    if (appts.length === 0) return;
+    if (!appts.some(a => a.phone)) {
+      alert("Nessuna di queste pratiche ha un numero di telefono. Aggiungilo con il tasto Modifica.");
+      return;
+    }
+    setBulkCallList(appts);
+  };
+
   const handleCallStarted = (id: string) => {
     setAllAppointments(prev => prev.map(a => a.id === id ? { ...a, callStatus: 'calling' } : a));
   };
@@ -376,14 +389,16 @@ function App() {
     // Reset Import State
     setShowImportModal(true);
     setImportFinished(false);
-    setImportStats({ success: 0, failed: 0 });
+    setImportStats({ success: 0, failed: 0, approx: 0 });
     setFailedImports([]);
+    setApproxImports([]);
     setUploadProgress('Lettura file in corso...');
 
     try {
       const rows = await parseExcelFile(file);
       const newAppointments: Appointment[] = [];
       const failures: string[] = [];
+      const approximates: string[] = [];
 
       let processedCount = 0;
       const validRows = rows.filter(r => r.Indirizzo && r.Comune);
@@ -404,22 +419,31 @@ function App() {
         const notes = row.Note ? `${row.Note}`.trim() : undefined;
         const urgent = extractUrgentFromRow(row);
 
-        // Rate limit strictness for Nominatim (skipped for cached/duplicate addresses)
-        if (!hasCachedGeocode(fullAddress)) {
-          await new Promise(resolve => setTimeout(resolve, 1100));
-        }
-
         try {
-          const result = await geocodeAddress(fullAddress);
+          // Geocoding con fallback: prova l'indirizzo esatto, poi varianti
+          // (senza civico, senza prefisso via/piazza) e infine il centro del
+          // comune. Il rate limit Nominatim è gestito dal servizio.
+          const result = await geocodeAddressParts({
+            street: `${row.Indirizzo}`,
+            civic: row['N.Civ.'] !== undefined && row['N.Civ.'] !== null ? `${row['N.Civ.']}` : undefined,
+            comune: `${row.Comune}`,
+            province: row['Prov.'] ? `${row['Prov.']}` : undefined,
+          });
           if (result) {
             // Provincia: la colonna "Prov." del file è più affidabile del geocoding
             const province = provinceToCode(row['Prov.'] ? `${row['Prov.']}` : undefined) || result.province;
             const comune = row.Comune ? `${row.Comune}`.trim() : result.comune;
             const matched = matchTechnician({ coords: result.coords, province }, technicians);
 
+            if (result.approximate) {
+              approximates.push(`${fullAddress} (${title})`);
+            }
+
             newAppointments.push({
               id: Date.now() + Math.random().toString(),
-              address: result.displayName,
+              // Se la posizione è approssimativa manteniamo l'indirizzo del
+              // file (quello del comune sarebbe fuorviante per il tecnico)
+              address: result.approximate ? fullAddress : result.displayName,
               title: title,
               phone: phone,
               notes: notes,
@@ -427,6 +451,7 @@ function App() {
               province,
               comune,
               urgent: urgent || undefined,
+              approximate: result.approximate || undefined,
               technicianId: matched?.id,
               status: 'pending' // Import as pending
             });
@@ -441,8 +466,9 @@ function App() {
 
       setAllAppointments(prev => [...prev, ...newAppointments]);
 
-      setImportStats({ success: newAppointments.length, failed: failures.length });
+      setImportStats({ success: newAppointments.length, failed: failures.length, approx: approximates.length });
       setFailedImports(failures);
+      setApproxImports(approximates);
       setImportFinished(true);
       setUploadProgress('Completato!');
 
@@ -567,8 +593,9 @@ function App() {
   const closeImportModal = () => {
       setShowImportModal(false);
       setImportFinished(false);
-      setImportStats({ success: 0, failed: 0 });
+      setImportStats({ success: 0, failed: 0, approx: 0 });
       setFailedImports([]);
+      setApproxImports([]);
   };
 
   const handleStatusChange = (id: string, newStatus: AppointmentStatus) => {
@@ -848,6 +875,19 @@ function App() {
     return <span className="text-[10px] font-bold text-white bg-red-600 px-1.5 rounded">URGENTE</span>;
   };
 
+  // Indirizzo non trovato con precisione: pin al centro del comune
+  const ApproxBadge = ({ appt }: { appt: Appointment }) => {
+    if (!appt.approximate) return null;
+    return (
+      <span
+        className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded"
+        title="Indirizzo esatto non trovato sulle mappe: la pratica è posizionata al centro del comune. Correggi l'indirizzo con il tasto Modifica per il punto esatto."
+      >
+        ≈ centro comune
+      </span>
+    );
+  };
+
   const TechBadge = ({ appt }: { appt: Appointment }) => {
     const tech = techById(appt.technicianId);
     if (tech) {
@@ -881,6 +921,17 @@ function App() {
           appointment={callTarget}
           technicianName={techById(callTarget.technicianId)?.name}
           onClose={() => setCallTarget(null)}
+          onCallStarted={handleCallStarted}
+          onCallResult={handleCallResult}
+        />
+      )}
+
+      {/* --- BULK AI CALL MODAL (Chiama tutte) --- */}
+      {bulkCallList && (
+        <BulkCallModal
+          appointments={bulkCallList}
+          technicianNameById={technicianNameById}
+          onClose={() => setBulkCallList(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}
         />
@@ -926,6 +977,12 @@ function App() {
                     <h3 className="text-xl font-bold text-slate-800 mb-2 shrink-0">Fatto!</h3>
                     <div className="mb-4 space-y-2 shrink-0">
                         <p className="text-md text-slate-600">N. <span className="font-bold text-indigo-600">{importStats.success}</span> Pratiche importate!</p>
+                        {importStats.approx > 0 && (
+                            <p className="text-sm text-amber-700 bg-amber-50 p-2 rounded">
+                                ≈ {importStats.approx} {importStats.approx === 1 ? 'indirizzo posizionato' : 'indirizzi posizionati'} al centro del comune
+                                (numero civico o via non trovati sulle mappe).
+                            </p>
+                        )}
                         {importStats.failed > 0 && (
                             <p className="text-sm text-red-500 bg-red-50 p-2 rounded">
                                 ⚠️ {importStats.failed} indirizzi non trovati.
@@ -933,17 +990,34 @@ function App() {
                         )}
                     </div>
 
-                    {failedImports.length > 0 && (
+                    {(failedImports.length > 0 || approxImports.length > 0) && (
                         <div className="flex-1 overflow-y-auto mb-4 bg-slate-50 rounded border border-slate-200 p-2 text-left">
-                            <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Dettaglio errori:</p>
-                            <ul className="text-xs text-red-600 space-y-1">
-                                {failedImports.map((failStr, i) => (
-                                    <li key={i} className="flex gap-1.5 items-start">
-                                        <span className="shrink-0">•</span>
-                                        <span>{failStr}</span>
-                                    </li>
-                                ))}
-                            </ul>
+                            {approxImports.length > 0 && (
+                                <>
+                                    <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Posizione approssimativa (verifica o correggi con Modifica):</p>
+                                    <ul className="text-xs text-amber-700 space-y-1 mb-2">
+                                        {approxImports.map((approxStr, i) => (
+                                            <li key={i} className="flex gap-1.5 items-start">
+                                                <span className="shrink-0">≈</span>
+                                                <span>{approxStr}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </>
+                            )}
+                            {failedImports.length > 0 && (
+                                <>
+                                    <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Dettaglio errori:</p>
+                                    <ul className="text-xs text-red-600 space-y-1">
+                                        {failedImports.map((failStr, i) => (
+                                            <li key={i} className="flex gap-1.5 items-start">
+                                                <span className="shrink-0">•</span>
+                                                <span>{failStr}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </>
+                            )}
                         </div>
                     )}
 
@@ -1181,8 +1255,17 @@ function App() {
             {/* 1. Proposed (da confermare) */}
             {filters.proposed && listProposed.length > 0 && (
                 <div>
-                    <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 border-b border-indigo-100 pb-1">
-                        Proposte da confermare ({listProposed.length})
+                    <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 border-b border-indigo-100 pb-1 flex justify-between items-center gap-2">
+                        <span>Proposte da confermare ({listProposed.length})</span>
+                        {listProposed.some(a => a.phone) && (
+                            <button
+                                onClick={() => requestBulkCall(listProposed)}
+                                title="Avvia la chiamata AI di conferma per tutte le proposte con telefono"
+                                className="normal-case tracking-normal text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1 shrink-0"
+                            >
+                                <PhoneIcon /> Chiama tutte
+                            </button>
+                        )}
                     </h3>
                     <div className="space-y-3">
                         {proposedGroups.map(group => {
@@ -1193,14 +1276,25 @@ function App() {
                                         <span className="text-xs font-bold capitalize" style={{ color: tech?.color || '#4f46e5' }}>
                                             {tech ? tech.name : 'Senza tecnico'} — {formatDayLabel(group.date)}
                                         </span>
-                                        <button
-                                            onClick={() => handleConfirmDay(group.techId, group.date)}
-                                            className="text-[10px] font-bold text-white px-2 py-0.5 rounded"
-                                            style={{ backgroundColor: tech?.color || '#4f46e5' }}
-                                            title="Conferma tutte le proposte di questa giornata"
-                                        >
-                                            ✓ Conferma giornata
-                                        </button>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                            {group.items.some(a => a.phone) && (
+                                                <button
+                                                    onClick={() => requestBulkCall(group.items)}
+                                                    className="text-[10px] font-bold text-emerald-700 bg-white/80 border border-emerald-200 hover:bg-emerald-50 px-1.5 py-0.5 rounded flex items-center"
+                                                    title="Chiama tutte le proposte di questa giornata (AI)"
+                                                >
+                                                    <PhoneIcon />
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => handleConfirmDay(group.techId, group.date)}
+                                                className="text-[10px] font-bold text-white px-2 py-0.5 rounded"
+                                                style={{ backgroundColor: tech?.color || '#4f46e5' }}
+                                                title="Conferma tutte le proposte di questa giornata"
+                                            >
+                                                ✓ Conferma giornata
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="divide-y divide-slate-100">
                                         {group.items.map(appt => (
@@ -1220,6 +1314,7 @@ function App() {
                                                     <p className="text-xs text-slate-400 truncate">{appt.address}</p>
                                                     <div className="mt-0.5 flex gap-1.5 items-center flex-wrap">
                                                         {appt.phone && <span className="text-[11px] text-slate-400">📞 {appt.phone}</span>}
+                                                        <ApproxBadge appt={appt} />
                                                         <CallBadge appt={appt} />
                                                     </div>
                                                 </div>
@@ -1229,6 +1324,13 @@ function App() {
                                                         title="Conferma questa proposta"
                                                         className="p-1 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200"
                                                     ><CheckIcon /></button>
+                                                    {appt.phone && appt.callStatus !== 'calling' && (
+                                                        <button
+                                                            onClick={() => requestCall(appt)}
+                                                            title="Chiama il cliente per conferma (AI)"
+                                                            className={`p-1 rounded ${appt.callStatus === 'called' ? 'text-emerald-500 hover:bg-emerald-50' : 'text-emerald-600 hover:bg-emerald-100 bg-emerald-50'}`}
+                                                        ><PhoneIcon /></button>
+                                                    )}
                                                     <button
                                                         onClick={() => handleStatusChange(appt.id, 'pending')}
                                                         title="Rifiuta: torna in attesa"
@@ -1244,8 +1346,9 @@ function App() {
                         })}
                     </div>
                     <p className="text-[11px] text-slate-400 mt-2">
-                        Alla conferma, se c'è un numero di telefono, puoi far partire la chiamata AI
-                        (l'urgenza viene comunicata esplicitamente al cliente).
+                        Con "Chiama tutte" (o il tasto 📞 su gruppo/pratica) l'operatore AI chiama i clienti
+                        per confermare data e orario proposti, senza bisogno di confermare prima a mano.
+                        L'urgenza viene comunicata esplicitamente al cliente.
                     </p>
                 </div>
             )}
@@ -1253,9 +1356,20 @@ function App() {
             {/* 2. Confirmed */}
             {filters.confirmed && (
                 <div>
-                    <h3 className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2 border-b border-blue-100 pb-1 flex justify-between">
+                    <h3 className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2 border-b border-blue-100 pb-1 flex justify-between items-center gap-2">
                         <span>Confermate ({visibleAppointments.filter(a => a.status === 'confirmed').length})</span>
-                        <span className="text-slate-400 font-normal normal-case">{viewMode === 'day' ? 'Giorno' : viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
+                        <span className="flex items-center gap-2 shrink-0">
+                            {visibleAppointments.some(a => a.status === 'confirmed' && a.phone) && (
+                                <button
+                                    onClick={() => requestBulkCall(visibleAppointments.filter(a => a.status === 'confirmed'))}
+                                    title="Avvia la chiamata AI di conferma per tutte le confermate con telefono"
+                                    className="normal-case tracking-normal text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1"
+                                >
+                                    <PhoneIcon /> Chiama tutte
+                                </button>
+                            )}
+                            <span className="text-slate-400 font-normal normal-case">{viewMode === 'day' ? 'Giorno' : viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
+                        </span>
                     </h3>
                     <div className="space-y-2">
                         {visibleAppointments.filter(a => a.status === 'confirmed')
@@ -1294,6 +1408,7 @@ function App() {
                                                 <div className="flex items-center gap-1.5 flex-wrap">
                                                     <h4 className="text-sm font-semibold text-slate-800 leading-tight">{appt.title}</h4>
                                                     <UrgentBadge appt={appt} />
+                                                    <ApproxBadge appt={appt} />
                                                 </div>
                                                 <p className="text-xs text-slate-500">{appt.address}</p>
                                                 {appt.phone && <p className="text-xs text-slate-500 mt-0.5">📞 {appt.phone}</p>}
@@ -1346,6 +1461,7 @@ function App() {
                                      <div className="flex items-center gap-1.5 flex-wrap">
                                         <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
                                         <UrgentBadge appt={appt} />
+                                        <ApproxBadge appt={appt} />
                                      </div>
                                      <p className="text-xs text-slate-400">{appt.address}</p>
                                      {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}

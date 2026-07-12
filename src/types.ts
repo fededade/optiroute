@@ -31,6 +31,7 @@ export interface Appointment {
   province?: string;     // Sigla provincia (es. "MI"), da Excel o dal geocoding
   comune?: string;       // Comune, quando noto
   urgent?: boolean;      // Tag "urgente": priorità nello smistamento e annuncio in chiamata
+  approximate?: boolean; // Indirizzo esatto non trovato: coordinate al centro del comune
 
   // Client & appointment details
   phone?: string;           // Client phone number for the AI confirmation call

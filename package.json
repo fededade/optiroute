@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.35.0",
+    "fflate": "^0.8.3",
     "leaflet": "^1.9.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

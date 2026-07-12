@@ -68,10 +68,18 @@ export const parseExcelFile = async (file: File): Promise<ExcelRow[]> => {
   });
 };
 
+const ISSUE_EXPORT_LABEL: Record<string, string> = {
+  wrong_phone: 'Numero non corretto',
+  callback: 'Da richiamare',
+  works_pending: 'Lavori da ultimare',
+};
+
 const statusLabel = (a: Appointment): string => {
   if (a.status === 'confirmed') return 'Confermato';
   if (a.status === 'proposed') return 'Proposto (da confermare)';
   if (a.status === 'standby') return 'Stand-by';
+  if (a.status === 'issue') return `Problema: ${ISSUE_EXPORT_LABEL[a.issueType || ''] || 'da gestire'}`;
+  if (a.status === 'cancelled') return 'Annullata';
   return 'In Attesa';
 };
 
@@ -101,6 +109,7 @@ const createWorkbook = (
     'Prov.': a.province || '-',
     'Note': a.notes || '',
     'Stato': statusLabel(a),
+    'Rientro previsto': a.followUpDate || '-',
     'Chiamata AI': callStatusLabel(a),
     'Distanza da prec. (km)': a.distanceFromPrev || 0,
     'Tempo viaggio (min)': a.travelTimeFromPrev || 0,
@@ -122,7 +131,8 @@ const createWorkbook = (
     { wch: 50 }, // Address
     { wch: 7 },  // Province
     { wch: 30 }, // Notes
-    { wch: 22 }, // Status
+    { wch: 26 }, // Status
+    { wch: 14 }, // Follow-up
     { wch: 12 }, // AI call
     { wch: 15 }, // Dist
     { wch: 15 }, // Time

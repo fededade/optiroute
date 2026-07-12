@@ -5,10 +5,26 @@ export interface Coordinates {
 
 // 'proposed' = data/ora ipotizzate dallo smistamento automatico,
 // in attesa di conferma da parte dell'operatore.
-export type AppointmentStatus = 'confirmed' | 'proposed' | 'pending' | 'standby';
+// 'issue' = pratica con problematica (vedi issueType), esclusa dalla pianificazione
+// finché non torna "in attesa". 'cancelled' = pratica annullata (solo archivio).
+export type AppointmentStatus = 'confirmed' | 'proposed' | 'pending' | 'standby' | 'issue' | 'cancelled';
+
+// Categorie delle pratiche con problematiche
+export type IssueType = 'wrong_phone' | 'callback' | 'works_pending';
 
 // Status of the AI confirmation call (Retell AI)
 export type CallStatus = 'calling' | 'called' | 'failed';
+
+// Esito della chiamata rilevato automaticamente dalla post-call analysis
+// di Retell (o registrato a mano dalla finestra di chiamata).
+export type CallOutcome =
+  | 'confirmed'      // il cliente ha confermato l'appuntamento
+  | 'callback'       // chiede di essere richiamato (followUpDate se indicata)
+  | 'wrong_phone'    // numero errato / persona sbagliata
+  | 'works_pending'  // immobile non pronto / lavori da ultimare
+  | 'cancelled'      // pratica annullata dal cliente
+  | 'no_answer'      // nessuna risposta / segreteria
+  | 'unknown';       // esito non determinabile: verificare a mano
 
 export interface Appointment {
   id: string;
@@ -32,6 +48,12 @@ export interface Appointment {
   comune?: string;       // Comune, quando noto
   urgent?: boolean;      // Tag "urgente": priorità nello smistamento e annuncio in chiamata
 
+  // Gestione problematiche (status === 'issue')
+  issueType?: IssueType;  // Categoria della problematica
+  followUpDate?: string;  // YYYY-MM-DD: data richiamo / fine lavori prevista. Lo
+                          // smistamento non propone mai date precedenti; dal giorno
+                          // prima compare l'alert "slot da riservare".
+
   // Client & appointment details
   phone?: string;           // Client phone number for the AI confirmation call
   notes?: string;           // Free notes, also passed to the AI operator
@@ -41,6 +63,8 @@ export interface Appointment {
   callStatus?: CallStatus;
   callId?: string;   // Retell call id
   calledAt?: string; // ISO timestamp of last call attempt
+  callOutcome?: CallOutcome; // Esito (auto da post-call analysis Retell)
+  callSummary?: string;      // Riassunto AI della conversazione
 }
 
 // --- Tecnici / soggetti che effettuano i sopralluoghi ---

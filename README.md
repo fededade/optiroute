@@ -25,6 +25,9 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
   - *Inserimento completo*: pulsante "Nuovo completo" per cliente, telefono, indirizzo, note, durata, urgenza e tecnico.
   - *Modifica*: icona matita su qualsiasi appuntamento.
   - *Import Excel*: colonne supportate `Intestatario`, `Indirizzo`, `N.Civ.`, `Comune`, `Prov.` e in più `Telefono` (o `Tel`/`Cellulare`), `Note` e `Urgente` (sì/x/1).
+  - *Import da Google My Maps* ("Importa Maps", file `.kmz`/`.kml`): ogni **livello** della mappa viene mappato su una destinazione (confermate con data, in attesa, stand-by, categorie problematiche, annullate) con proposta automatica dal nome del livello (es. "9/07" → confermate al 9 luglio, "annullate" → archivio). Dalle schede vengono estratti intestatari, telefono, riferimento pratica (ISP/CER/…), note, orario ("ore 9:00") e tecnico ("slp Federica"); niente geocoding, le coordinate arrivano dal file. I duplicati vengono saltati.
+- **Riordino del giro con drag & drop**: in vista Giorno tieni premuto il clic su una scheda confermata e trascinala su un'altra tappa dello stesso tecnico: sequenza, orari e percorso in mappa si ricalcolano subito.
+- **Categorie problematiche**: ogni pratica può essere smistata in 📵 *Numeri non corretti*, 📆 *Da richiamare*, 🚧 *Lavori da ultimare*, oppure segnata *Annullata* (archivio, filtro spento di default). Ci si arriva dal form di modifica, in automatico dall'import Maps, oppure **direttamente dalla finestra di chiamata** ("Registra esito della telefonata": un clic per numero errato, da richiamare o lavori da ultimare, con data di rientro). Con **data di rientro** (richiamo concordato / fine lavori): dal giorno prima compare l'alert 🔔 **"Slot da riservare"** in cima alla sidebar, con azione rapida "→ In attesa"; lo smistamento automatico dà priorità alle pratiche rientrate e **non propone mai date precedenti al rientro**.
 - **Persistenza locale**: appuntamenti, tecnici, base di partenza e orari di lavoro sopravvivono al refresh (localStorage).
 - **Ottimizzazione**: percorso "furthest first", orari con traffico (Google Directions con fallback OSRM), pausa pranzo automatica, durata personalizzabile per appuntamento. Con un tecnico selezionato, "Ottimizza" usa base, orari e indisponibilità della sua scheda. Le tratte già calcolate sono in cache: ri-ottimizzare o scambiare l'ordine è quasi istantaneo.
 - **Chiamata AI di conferma (Retell)**: alla conferma di un appuntamento con numero di telefono si apre la finestra di chiamata; puoi anche avviarla in ogni momento con l'icona 📞 sulla card o dal popup sulla mappa. L'operatore AI riceve tutti i dati dell'appuntamento (cliente, data, orario, indirizzo, note, tecnico) e, per le pratiche urgenti, **dichiara esplicitamente l'urgenza durante la chiamata**.
@@ -43,6 +46,34 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
    - `RETELL_COMPANY_NAME` — (opzionale) nome aziendale pronunciato dall'operatore
 
 I numeri italiani senza prefisso internazionale vengono normalizzati automaticamente a `+39`.
+
+### Esito automatico delle chiamate (post-call analysis)
+
+Dopo l'avvio di una chiamata, OptiRoute interroga Retell (`api/retell-call-status.ts`, polling ogni
+10 secondi fino a 30 minuti) e quando la conversazione è conclusa e analizzata **applica da solo
+l'esito alla pratica**:
+
+- *confermato* → badge "✓ Chiamato · confermato" (l'appuntamento resta pianificato)
+- *da richiamare* → la pratica passa in 📆 **Da richiamare**, con la data indicata dal cliente come data di rientro (alert + vincoli di smistamento)
+- *numero errato* → 📵 **Numeri non corretti** (anche quando Retell segnala numero non componibile)
+- *lavori non ultimati* → 🚧 **Lavori da ultimare**, con la data di fine lavori come rientro
+- *annullato* → pratica **Annullata** (archivio)
+- *nessuna risposta / segreteria* → badge "✗ Nessuna risposta" (nessun cambio di stato)
+
+Il riassunto AI della conversazione viene salvato sulla pratica (tooltip sul badge e popup mappa).
+Gli spostamenti di categoria scattano solo dall'esito esplicito dell'analisi; in assenza, cambia solo il badge.
+
+**Configurazione necessaria sull'agente Retell** (Dashboard → Agent → *Post-Call Analysis*), aggiungi due campi custom:
+
+1. `esito_chiamata` — tipo *Selector*, opzioni esatte:
+   `confermato`, `da_richiamare`, `numero_errato`, `lavori_non_ultimati`, `annullato`, `nessuna_risposta`
+   - descrizione suggerita: *"Esito della chiamata di conferma del sopralluogo"*
+2. `data_rientro` — tipo *Text*
+   - descrizione suggerita: *"Se il cliente ha indicato una data in cui richiamarlo o in cui i lavori saranno finiti, riportala in formato AAAA-MM-GG (accettato anche GG/MM); altrimenti lascia vuoto"*
+
+Lo script inviato all'agente istruisce già l'operatore a chiedere e annotare queste informazioni
+durante la chiamata. Senza i campi custom l'automazione resta prudente: aggiorna solo il badge
+(usando `call_successful`/voicemail) e l'esito si registra a mano dalla finestra di chiamata.
 
 ## Altre variabili d'ambiente
 

@@ -80,8 +80,13 @@ const createWorkbook = (
   appointments: Appointment[],
   technicianNameById: Record<string, string> = {}
 ) => {
-  // Format data for export
+  // Format data for export (l'esito della conversazione ha la precedenza)
   const callStatusLabel = (a: Appointment): string => {
+    if (a.callOutcome === 'confirmed') return 'Confermata dal cliente';
+    if (a.callOutcome === 'reschedule') return 'Da riprogrammare';
+    if (a.callOutcome === 'declined') return 'Annullata dal cliente';
+    if (a.callOutcome === 'no_answer') return 'Non risponde';
+    if (a.callOutcome === 'unclear') return 'Esito da verificare';
     if (a.callStatus === 'called') return 'Effettuata';
     if (a.callStatus === 'calling') return 'In corso';
     if (a.callStatus === 'failed') return 'Fallita';

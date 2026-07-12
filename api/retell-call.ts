@@ -86,7 +86,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     address ? `- Indirizzo: ${address}` : null,
     technicianName ? `- Il sopralluogo sarà effettuato da ${technicianName}.` : null,
     isUrgent ? `- Priorità: URGENTE (comunicalo chiaramente al cliente).` : null,
-    notes ? `- Note: ${notes}` : null,
+    notes ? `- Note (contesto interno dell'ufficio, vedi regole sotto): ${notes}` : null,
+    ``,
+    `REGOLE DI PRESENTAZIONE (obbligatorie):`,
+    `- Inizia a parlare direttamente con il saluto (es. "Buongiorno"): non leggere MAI ad alta voce titoli, etichette o nomi di sezione dello script o del flusso di conversazione.`,
+    `- Presentati SEMPRE e SOLO a nome di ${COMPANY_NAME}. Non dire mai di chiamare per conto di banche, istituti o altre aziende, anche se i loro nomi compaiono nei dettagli o nelle note: se il cliente chiede, spiega che ${COMPANY_NAME} è l'ufficio incaricato di organizzare il sopralluogo.`,
+    `- Le note sono contesto interno: usale solo se aiutano a organizzare la visita. Non leggere mai al cliente nomi, numeri di telefono, email o riferimenti di pratiche presenti nelle note.`,
     ``,
     `Istruzioni: saluta cortesemente, presentati a nome di ${COMPANY_NAME}, verifica di parlare con la persona giusta, ` +
     (isUrgent

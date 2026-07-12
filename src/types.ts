@@ -10,6 +10,10 @@ export type AppointmentStatus = 'confirmed' | 'proposed' | 'pending' | 'standby'
 // Status of the AI confirmation call (Retell AI)
 export type CallStatus = 'calling' | 'called' | 'failed';
 
+// Esito della conversazione (post-call analysis Retell, via polling):
+// determina automaticamente lo stato della pratica.
+export type CallOutcome = 'confirmed' | 'reschedule' | 'declined' | 'no_answer' | 'unclear';
+
 export interface Appointment {
   id: string;
   address: string;
@@ -42,6 +46,8 @@ export interface Appointment {
   callStatus?: CallStatus;
   callId?: string;   // Retell call id
   calledAt?: string; // ISO timestamp of last call attempt
+  callOutcome?: CallOutcome; // esito della conversazione (arriva col polling)
+  callSummary?: string;      // riassunto AI della chiamata
 }
 
 // --- Tecnici / soggetti che effettuano i sopralluoghi ---

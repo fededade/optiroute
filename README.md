@@ -27,7 +27,7 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
   - *Import Excel*: colonne supportate `Intestatario`, `Indirizzo`, `N.Civ.`, `Comune`, `Prov.` e in più `Telefono` (o `Tel`/`Cellulare`), `Note` e `Urgente` (sì/x/1).
 - **Persistenza locale**: appuntamenti, tecnici, base di partenza e orari di lavoro sopravvivono al refresh (localStorage).
 - **Ottimizzazione**: percorso "furthest first", orari con traffico (Google Directions con fallback OSRM), pausa pranzo automatica, durata personalizzabile per appuntamento. Con un tecnico selezionato, "Ottimizza" usa base, orari e indisponibilità della sua scheda. Le tratte già calcolate sono in cache: ri-ottimizzare o scambiare l'ordine è quasi istantaneo.
-- **Chiamata AI di conferma (Retell)**: alla conferma di un appuntamento con numero di telefono si apre la finestra di chiamata; puoi anche avviarla in ogni momento con l'icona 📞 sulla card o dal popup sulla mappa. L'operatore AI riceve tutti i dati dell'appuntamento (cliente, data, orario, indirizzo, note, tecnico) e, per le pratiche urgenti, **dichiara esplicitamente l'urgenza durante la chiamata**.
+- **Chiamata AI di conferma (Retell)**: alla conferma di un appuntamento con numero di telefono si apre la finestra di chiamata; puoi anche avviarla in ogni momento con l'icona 📞 sulla card o dal popup sulla mappa, oppure in blocco con "Chiama tutte" sulle proposte smistate. L'operatore AI riceve tutti i dati dell'appuntamento (cliente, data, orario, indirizzo, note, tecnico) e, per le pratiche urgenti, **dichiara esplicitamente l'urgenza durante la chiamata**. A fine conversazione **l'esito torna nell'app e aggiorna da solo lo stato della pratica** (confermata, da riprogrammare, non risponde: vedi sezione dedicata).
 
 ## Configurazione chiamate AI (Retell)
 
@@ -40,9 +40,37 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
    - `RETELL_API_KEY` — API key Retell
    - `RETELL_FROM_NUMBER` — numero in uscita in formato E.164 (es. `+39...`)
    - `RETELL_AGENT_ID` — (opzionale) per forzare un agente specifico
-   - `RETELL_COMPANY_NAME` — (opzionale) nome aziendale pronunciato dall'operatore
+   - `RETELL_COMPANY_NAME` — nome aziendale pronunciato dall'operatore. **Impostalo**: senza,
+     l'agente si presenta con un generico "il nostro ufficio" e può risultare vago o improvvisare.
 
 I numeri italiani senza prefisso internazionale vengono normalizzati automaticamente a `+39`.
+
+### Esito automatico della chiamata → stato della pratica
+
+Dopo l'avvio di una chiamata l'app interroga Retell (`api/call-status.ts`) finché la
+conversazione termina, poi **aggiorna da sola la pratica** in base alla risposta del cliente:
+
+| Esito conversazione | Effetto sulla pratica |
+|---|---|
+| Confermato | La proposta passa in **Confermate** (data/orario mantenuti) + badge "✅ Confermato dal cliente" |
+| Chiede di spostare | Torna **In Attesa** con la preferenza del cliente nelle note + badge "📅 Da riprogrammare" |
+| Rifiuta | Passa in **Stand-by** + badge "🚫 Annullato dal cliente" |
+| Non risponde / segreteria | Stato invariato + badge "📵 Non risponde · da richiamare" |
+| Esito non chiaro | Stato invariato + badge "❓ Esito da verificare" (il riassunto AI è nel tooltip del badge) |
+
+Perché l'esito sia affidabile, configura sull'agente Retell (scheda **Post-Call Analysis**)
+questi due campi personalizzati:
+
+- `esito_appuntamento` (tipo *Enum/Text*) — descrizione consigliata: *"Esito della richiesta di
+  conferma dell'appuntamento. Rispondi con uno solo di questi valori: confermato,
+  da_riprogrammare, rifiutato, non_raggiunto."*
+- `data_preferita` (tipo *Text*) — descrizione consigliata: *"Se il cliente ha chiesto di
+  spostare l'appuntamento, la data o fascia oraria che preferisce (testo libero). Altrimenti
+  lascia vuoto."*
+
+Senza questi campi l'app usa comunque i segnali standard (segreteria, mancata risposta) e per
+il resto mostra "Esito da verificare" senza toccare lo stato: meglio un dubbio esplicito che
+una conferma sbagliata. Il polling si ferma da solo 30 minuti dopo l'avvio della chiamata.
 
 ## Altre variabili d'ambiente
 

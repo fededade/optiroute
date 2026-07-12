@@ -6,6 +6,7 @@ import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBas
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
 import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings } from './services/storageService';
 import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, workWindowOn } from './services/technicianService';
+import { fetchCallStatus, type CallStatusInfo } from './services/callService';
 import { provinceToCode } from './utils/provinces';
 import MapComponent from './Components/MapComponent';
 import AppointmentModal from './Components/AppointmentModal';
@@ -382,7 +383,11 @@ function App() {
   };
 
   const handleCallStarted = (id: string) => {
-    setAllAppointments(prev => prev.map(a => a.id === id ? { ...a, callStatus: 'calling' } : a));
+    // Nuova chiamata: azzera l'esito precedente, verrà rilevato dal polling
+    setAllAppointments(prev => prev.map(a => a.id === id
+      ? { ...a, callStatus: 'calling', callOutcome: undefined, callSummary: undefined }
+      : a
+    ));
   };
 
   const handleCallResult = (id: string, ok: boolean, callId?: string) => {
@@ -391,6 +396,78 @@ function App() {
       : a
     ));
   };
+
+  // --- Esito chiamata via polling: la risposta del cliente determina lo stato ---
+
+  const CALL_POLL_INTERVAL_MS = 8000;
+  const CALL_POLL_MAX_AGE_MS = 30 * 60 * 1000; // dopo 30 min si smette di interrogare
+
+  const awaitingCallOutcome = useCallback((a: Appointment): boolean =>
+    a.callStatus === 'called' && !!a.callId && !a.callOutcome &&
+    !!a.calledAt && (Date.now() - new Date(a.calledAt).getTime()) < CALL_POLL_MAX_AGE_MS,
+  []);
+
+  // Applica l'esito della conversazione alla pratica:
+  // confermato -> Confermata (data/orario proposti mantenuti)
+  // da riprogrammare -> In Attesa, con la preferenza del cliente nelle note
+  // rifiutato -> Stand-by · non risponde / esito dubbio -> solo badge
+  const applyCallOutcome = useCallback((id: string, info: CallStatusInfo) => {
+    setAllAppointments(prev => prev.map(a => {
+      if (a.id !== id) return a;
+
+      const update: Partial<Appointment> = {
+        callOutcome: info.outcome || 'unclear',
+        callSummary: info.summary || a.callSummary,
+      };
+
+      if (info.outcome === 'confirmed' && a.status === 'proposed') {
+        update.status = 'confirmed';
+      } else if (info.outcome === 'reschedule') {
+        update.status = 'pending';
+        update.date = undefined;
+        update.sequenceOrder = undefined;
+        update.startTime = undefined;
+        update.endTime = undefined;
+        if (info.preferredDate) {
+          const nota = `Preferenza cliente: ${info.preferredDate}`;
+          update.notes = a.notes ? `${a.notes} · ${nota}` : nota;
+        }
+      } else if (info.outcome === 'declined') {
+        update.status = 'standby';
+      }
+
+      return { ...a, ...update };
+    }));
+  }, []);
+
+  // Riferimento sempre aggiornato: il polling legge da qui senza dover
+  // ricreare il timer a ogni modifica della lista.
+  const appointmentsRef = useRef<Appointment[]>(allAppointments);
+  useEffect(() => { appointmentsRef.current = allAppointments; }, [allAppointments]);
+
+  // Chiave stabile: cambia solo quando cambia l'insieme delle chiamate da monitorare
+  const callPollKey = allAppointments.filter(awaitingCallOutcome).map(a => a.id).sort().join('|');
+
+  useEffect(() => {
+    if (!callPollKey) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      const targets = appointmentsRef.current.filter(awaitingCallOutcome);
+      for (const appt of targets) {
+        if (cancelled) return;
+        const info = await fetchCallStatus(appt.callId!);
+        if (cancelled) return;
+        if (info && info.ended) {
+          applyCallOutcome(appt.id, info);
+        }
+      }
+    };
+
+    const firstCheck = setTimeout(tick, 4000); // primo controllo poco dopo l'avvio
+    const timer = setInterval(tick, CALL_POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearTimeout(firstCheck); clearInterval(timer); };
+  }, [callPollKey, awaitingCallOutcome, applyCallOutcome]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -941,9 +1018,20 @@ function App() {
         (a.status === 'confirmed' && !!a.date && a.date >= todayStr))
     ).length;
 
-  // Small badge showing the AI call state on a card
+  // Small badge showing the AI call state on a card.
+  // L'esito della conversazione (quando arriva col polling) ha la precedenza.
   const CallBadge = ({ appt }: { appt: Appointment }) => {
-    if (appt.callStatus === 'called') return <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato</span>;
+    const summaryTitle = appt.callSummary || undefined;
+    if (appt.callOutcome === 'confirmed') return <span title={summaryTitle} className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 rounded">✅ Confermato dal cliente</span>;
+    if (appt.callOutcome === 'reschedule') return <span title={summaryTitle} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">📅 Da riprogrammare</span>;
+    if (appt.callOutcome === 'declined') return <span title={summaryTitle} className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 rounded">🚫 Annullato dal cliente</span>;
+    if (appt.callOutcome === 'no_answer') return <span title={summaryTitle} className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">📵 Non risponde · da richiamare</span>;
+    if (appt.callOutcome === 'unclear') return <span title={summaryTitle || 'Esito non chiaro: controlla la dashboard Retell'} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">❓ Esito da verificare</span>;
+    if (appt.callStatus === 'called') {
+      return awaitingCallOutcome(appt)
+        ? <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 Chiamato · esito in arrivo...</span>
+        : <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato</span>;
+    }
     if (appt.callStatus === 'calling') return <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 In chiamata...</span>;
     if (appt.callStatus === 'failed') return <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1 rounded">✗ Chiamata fallita</span>;
     return null;

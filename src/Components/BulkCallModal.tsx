@@ -203,7 +203,8 @@ const BulkCallModal: React.FC<BulkCallModalProps> = ({
             <p className="text-sm text-slate-600 mb-3 shrink-0">
               {phase === 'running'
                 ? 'Chiamate in corso, una alla volta. Non chiudere questa finestra.'
-                : `Completato: ${okCount} avviate${failedCount ? `, ${failedCount} fallite` : ''}${skippedCount ? `, ${skippedCount} annullate` : ''}.`}
+                : `Completato: ${okCount} avviate${failedCount ? `, ${failedCount} fallite` : ''}${skippedCount ? `, ${skippedCount} annullate` : ''}. ` +
+                  `Gli esiti delle conversazioni compariranno sulle pratiche a fine chiamata, aggiornandone lo stato.`}
             </p>
 
             <div className="flex-1 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 mb-3">

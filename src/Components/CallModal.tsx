@@ -108,7 +108,9 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, onCl
             <div className="text-4xl mb-3">✅</div>
             <h3 className="text-lg font-bold text-slate-800 mb-1">Chiamata avviata!</h3>
             <p className="text-sm text-slate-500 mb-4">
-              L'operatore AI sta chiamando {appointment.title}. L'esito sarà visibile nella dashboard Retell.
+              L'operatore AI sta chiamando {appointment.title}. A fine conversazione l'esito
+              comparirà da solo sulla pratica (confermato, da riprogrammare, non risponde...)
+              e lo stato si aggiornerà di conseguenza.
             </p>
             <button
               onClick={onClose}

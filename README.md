@@ -43,8 +43,12 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
    - `RETELL_API_KEY` — API key Retell
    - `RETELL_FROM_NUMBER` — numero in uscita in formato E.164 (es. `+39...`)
    - `RETELL_AGENT_ID` — (opzionale) per forzare un agente specifico
-   - `RETELL_COMPANY_NAME` — nome aziendale pronunciato dall'operatore. **Impostalo**: senza,
-     l'agente si presenta con un generico "il nostro ufficio" e può risultare vago o improvvisare.
+   - `RETELL_COMPANY_NAME` — nome della società che chiama (default "Effetre Properties")
+   - `RETELL_AGENT_NAME` — nome dell'operatrice AI (default "Misi")
+   - `RETELL_MANDANTE` — mandante citato nella presentazione ufficiale (default
+     "Prelios - Banca Intesa"): l'apertura è sempre "sono {nome} di {società}, incaricata
+     per conto di {mandante} per la perizia relativa all'immobile di ..." — così la
+     presentazione è coerente in ogni chiamata
 
 I numeri italiani senza prefisso internazionale vengono normalizzati automaticamente a `+39`.
 
@@ -89,6 +93,21 @@ certi (segreteria, mancata risposta, numero non componibile) e per il resto most
 "❓ Esito da verificare" senza toccare lo stato; l'esito si può registrare a mano dalla
 finestra di chiamata ("Registra esito della telefonata").
 
+
+## Pratiche MISI/Prelios e gestionale
+
+- **Import elenco pratiche MISI**: "Importa Excel" accetta anche l'export grezzo dell'elenco
+  perizie (Prelios/Intesa): vengono tenute solo le pratiche **FULL - Acquisto**, con codice,
+  intestatario, indirizzo, progetto e note gestore. Le pratiche già presenti (stesso codice)
+  vengono **aggiornate** (telefono/note/progetto), non duplicate.
+- **Bridge Prelios (`prelios-bridge/`)**: app Python separata che parte dall'elenco pratiche,
+  entra su Prelios (login manuale con MFA), recupera il telefono del cliente per ogni perizia
+  e produce l'Excel arricchito pronto per l'import. Vedi `prelios-bridge/README.md`
+  (`python run_giro.py elenco.xlsx --out giro_arricchito.xlsx`).
+- **Sync verso il gestionale Effetre**: i sopralluoghi **confermati** (dal cliente in chiamata,
+  o senza telefono) con orario calcolato vengono inviati al gestionale (Firestore, collection
+  `optiroute_sync`) col pulsante "Sync gestionale" e in automatico **ogni ora**. Ambiente di
+  default: collaudo; produzione con `VITE_SYNC_ENV=production`.
 
 ## Altre variabili d'ambiente
 

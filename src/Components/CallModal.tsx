@@ -5,6 +5,7 @@ import { startConfirmationCall } from '../services/callService';
 interface CallModalProps {
   appointment: Appointment;
   technicianName?: string; // Nome del tecnico che effettuerà il sopralluogo
+  daySchedule?: string;    // Agenda del giorno per l'agente AI (fasce impegnate)
   onClose: () => void;
   onCallStarted: (id: string) => void;
   onCallResult: (id: string, ok: boolean, callId?: string) => void;
@@ -14,7 +15,7 @@ interface CallModalProps {
 
 type Phase = 'preview' | 'calling' | 'success' | 'error';
 
-const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, onClose, onCallStarted, onCallResult, onMarkIssue }) => {
+const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, daySchedule, onClose, onCallStarted, onCallResult, onMarkIssue }) => {
   const [phase, setPhase] = useState<Phase>('preview');
   const [errorMessage, setErrorMessage] = useState('');
   const [outcome, setOutcome] = useState<IssueType | null>(null);
@@ -24,7 +25,7 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, onCl
     setPhase('calling');
     onCallStarted(appointment.id);
 
-    const result = await startConfirmationCall(appointment, technicianName);
+    const result = await startConfirmationCall(appointment, technicianName, daySchedule);
 
     if (result.ok) {
       setPhase('success');
@@ -111,8 +112,17 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, onCl
             )}
 
             <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm space-y-1.5 mb-4">
-              <p><span className="font-bold text-slate-500">Cliente:</span> {appointment.title}</p>
+              {appointment.contactPerson ? (
+                <>
+                  <p><span className="font-bold text-slate-500">Da contattare:</span> {appointment.contactPerson}</p>
+                  {appointment.referredBy && <p className="text-xs text-slate-400">indicato da {appointment.referredBy}</p>}
+                  <p><span className="font-bold text-slate-500">Intestatario:</span> {appointment.title}</p>
+                </>
+              ) : (
+                <p><span className="font-bold text-slate-500">Cliente:</span> {appointment.title}</p>
+              )}
               <p><span className="font-bold text-slate-500">Telefono:</span> {appointment.phone}</p>
+              {appointment.periziaCode && <p><span className="font-bold text-slate-500">Pratica:</span> #{appointment.periziaCode}</p>}
               <p><span className="font-bold text-slate-500">Data:</span> {appointment.date || 'Da definire'}</p>
               <p>
                 <span className="font-bold text-slate-500">Orario:</span>{' '}

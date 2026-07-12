@@ -9,6 +9,8 @@ import { startConfirmationCall } from '../services/callService';
 interface BulkCallModalProps {
   appointments: Appointment[];
   technicianNameById: Record<string, string>;
+  // Agenda del giorno (fasce impegnate del giro) da passare all'agente AI
+  buildDaySchedule?: (appt: Appointment) => string;
   onClose: () => void;
   onCallStarted: (id: string) => void;
   onCallResult: (id: string, ok: boolean, callId?: string) => void;
@@ -34,7 +36,7 @@ const formatWhen = (a: Appointment): string => {
 };
 
 const BulkCallModal: React.FC<BulkCallModalProps> = ({
-  appointments, technicianNameById, onClose, onCallStarted, onCallResult,
+  appointments, technicianNameById, buildDaySchedule, onClose, onCallStarted, onCallResult,
 }) => {
   const [phase, setPhase] = useState<Phase>('preview');
   const [selected, setSelected] = useState<Set<string>>(
@@ -77,7 +79,7 @@ const BulkCallModal: React.FC<BulkCallModalProps> = ({
       onCallStarted(appt.id);
 
       const technicianName = appt.technicianId ? technicianNameById[appt.technicianId] : undefined;
-      const result = await startConfirmationCall(appt, technicianName);
+      const result = await startConfirmationCall(appt, technicianName, buildDaySchedule?.(appt));
 
       if (result.ok) {
         setItem(appt.id, { outcome: 'ok' });

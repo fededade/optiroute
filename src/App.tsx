@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { Appointment, Coordinates, AppointmentStatus, CallOutcome, IssueType, Technician } from './types';
 import { geocodeAddress, geocodeAddressParts } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
-import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow } from './services/excelService';
+import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
+import { syncConfirmedToGestionale, getSyncableAppointments, getSyncEnvName } from './services/syncService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
 import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings } from './services/storageService';
 import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, workWindowOn } from './services/technicianService';
@@ -138,6 +139,25 @@ const DEFAULT_CENTER: Coordinates = { lat: 41.9028, lng: 12.4964 }; // Rome
 
 type ViewMode = 'day' | 'week' | 'month';
 
+// Normalized row produced by any of the supported import formats
+interface ImportRow {
+  title: string;
+  street?: string;       // via (per il geocoding con fallback)
+  civic?: string;
+  fullAddress: string;
+  shortAddress?: string; // via + civico (pronunciato in chiamata e per il gestionale)
+  comune?: string;
+  province?: string;
+  phone?: string;
+  notes?: string;
+  urgent?: boolean;
+  codice?: string;       // codice pratica/perizia (per merge e link Prelios)
+  project?: string;
+}
+
+const appendNote = (notes: string | undefined, extra: string): string =>
+  notes ? `${notes} | ${extra}` : extra;
+
 const ALL_TECH = 'all';
 
 const formatDayLabel = (iso?: string): string => {
@@ -196,6 +216,10 @@ function App() {
   // AI call modal (Retell): singola pratica o coda "Chiama tutte"
   const [callTarget, setCallTarget] = useState<Appointment | null>(null);
   const [bulkCallList, setBulkCallList] = useState<Appointment[] | null>(null);
+
+  // Sync verso il gestionale (Firestore Effetre)
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
 
   // Filters
   const [filters, setFilters] = useState({
@@ -589,6 +613,56 @@ function App() {
     return () => { cancelled = true; clearTimeout(firstCheck); clearInterval(timer); };
   }, [callPollKey, awaitingCallOutcome, applyCallOutcome]);
 
+  // Agenda del giorno per l'agente AI: fasce già impegnate del giro dello
+  // stesso tecnico, così al telefono può rispondere onesto sulle richieste
+  // di spostamento senza impegnare slot in diretta.
+  const buildDaySchedule = (appt: Appointment): string => {
+    const day = appt.date || currentDate;
+    const tech = techById(appt.technicianId);
+    let windowStart = startTime;
+    let windowEnd = endTimeLimit;
+    if (tech) {
+      const window = workWindowOn(tech, day);
+      if (window) { windowStart = window.start; windowEnd = window.end; }
+    }
+    const impegni = appointmentsRef.current
+      .filter(a =>
+        (a.status === 'confirmed' || a.status === 'proposed') &&
+        a.date === day && a.id !== appt.id && !!a.startTime &&
+        a.technicianId === appt.technicianId)
+      .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0))
+      .map(a => `${a.startTime}-${a.endTime || '?'}${a.comune ? ` (zona ${a.comune})` : ''}`);
+    return `Giornata lavorativa ${windowStart}-${windowEnd}. ` +
+      (impegni.length ? `Fasce già impegnate: ${impegni.join('; ')}.` : 'Nessun altro appuntamento fissato.');
+  };
+
+  // --- Sync verso il gestionale Effetre (Firestore) ---
+  const handleSyncGestionale = useCallback(async (automatic = false) => {
+    const syncable = getSyncableAppointments(appointmentsRef.current);
+    if (syncable.length === 0) {
+      if (!automatic) alert("Nessun sopralluogo confermato da sincronizzare.\n(Vengono inviati solo i confermati dal cliente o senza telefono, con orario calcolato.)");
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      const result = await syncConfirmedToGestionale(appointmentsRef.current);
+      const when = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+      setLastSyncInfo(`${when}: ${result.sent} inviate (${result.envName})${result.failed ? `, ${result.failed} errori` : ''}`);
+      if (result.failed > 0) console.warn('Sync gestionale, errori:', result.errors);
+      if (!automatic && result.failed > 0) {
+        alert(`Sync completata con errori: ${result.sent} inviate, ${result.failed} fallite.\n${result.errors.slice(0, 3).join('\n')}`);
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  }, []);
+
+  // Sync automatica ogni ora (il gestionale importa a sua volta ogni ora)
+  useEffect(() => {
+    const interval = setInterval(() => { handleSyncGestionale(true); }, 60 * 60000);
+    return () => clearInterval(interval);
+  }, [handleSyncGestionale]);
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -602,82 +676,152 @@ function App() {
     setUploadProgress('Lettura file in corso...');
 
     try {
-      const rows = await parseExcelFile(file);
-      const newAppointments: Appointment[] = [];
-      const failures: string[] = [];
-      const approximates: string[] = [];
+      // 1) Formato strutturato: colonne Intestatario/Indirizzo/Comune
+      //    (+ Telefono/Note/Urgente/Codice). È anche il formato prodotto dal
+      //    bridge Prelios (giro arricchito).
+      let importRows: ImportRow[] = [];
+      let excludedInfo = '';
 
-      let processedCount = 0;
+      const rows = await parseExcelFile(file);
       const validRows = rows.filter(r => r.Indirizzo && r.Comune);
 
-      if (validRows.length === 0) {
-        setUploadProgress("Errore: Nessuna riga valida trovata.");
-        setTimeout(() => setShowImportModal(false), 2000);
+      if (validRows.length > 0) {
+        importRows = validRows.map(row => ({
+          title: row.Intestatario || `${row.Indirizzo} ${row['N.Civ.'] || ''}`.trim(),
+          street: `${row.Indirizzo}`,
+          civic: row['N.Civ.'] !== undefined && row['N.Civ.'] !== null ? `${row['N.Civ.']}` : undefined,
+          fullAddress: `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim(),
+          shortAddress: `${row.Indirizzo} ${row['N.Civ.'] || ''}`.trim(),
+          comune: row.Comune ? `${row.Comune}`.trim() : undefined,
+          province: row['Prov.'] ? `${row['Prov.']}` : undefined,
+          phone: extractPhoneFromRow(row),
+          notes: row.Note ? `${row.Note}`.trim() : undefined,
+          urgent: extractUrgentFromRow(row),
+          codice: extractCodiceFromRow(row),
+        }));
+      } else {
+        // 2) Elenco pratiche MISI grezzo (export Prelios): SOLO tipologia FULL - Acquisto
+        const { selected, excluded } = await parsePraticheMisi(file);
+        importRows = selected.map(p => ({
+          title: p.intestatario || `${p.via} ${p.civico}`.trim(),
+          street: p.via,
+          civic: p.civico || undefined,
+          fullAddress: `${p.via} ${p.civico}, ${p.comune}, ${p.provincia}`.trim(),
+          shortAddress: `${p.via} ${p.civico}`.trim(),
+          comune: p.comune,
+          province: p.provincia || undefined,
+          notes: p.noteGestore || undefined,
+          codice: p.codice,
+          project: p.progetto || undefined,
+        }));
+        if (excluded > 0) excludedInfo = ` — ${excluded} escluse (non FULL - Acquisto)`;
+      }
+
+      if (importRows.length === 0) {
+        setUploadProgress("Errore: Nessuna riga valida trovata (formati supportati: elenco pratiche MISI o colonne Indirizzo/Comune).");
+        setTimeout(() => setShowImportModal(false), 3000);
         return;
       }
 
-      for (const row of validRows) {
-        processedCount++;
-        setUploadProgress(`Elaborazione pratica ${processedCount} di ${validRows.length}...`);
+      // Merge per codice pratica: le pratiche già presenti vengono AGGIORNATE
+      // (telefono/note/progetto) invece di essere duplicate — è il flusso del
+      // file arricchito dal bridge Prelios.
+      const byCode = new Map<string, Appointment>();
+      allAppointments.forEach(a => { if (a.periziaCode) byCode.set(a.periziaCode, a); });
 
-        const fullAddress = `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim();
-        const title = row.Intestatario || fullAddress;
-        const phone = extractPhoneFromRow(row);
-        const notes = row.Note ? `${row.Note}`.trim() : undefined;
-        const urgent = extractUrgentFromRow(row);
+      const newAppointments: Appointment[] = [];
+      const updates = new Map<string, Partial<Appointment>>();
+      const failures: string[] = [];
+      const approximates: string[] = [];
+      const seenCodes = new Set<string>();
+      let processedCount = 0;
+
+      for (const row of importRows) {
+        processedCount++;
+        setUploadProgress(`Elaborazione pratica ${processedCount} di ${importRows.length}...${excludedInfo}`);
+
+        // Dedupe righe duplicate nello stesso file
+        if (row.codice) {
+          if (seenCodes.has(row.codice)) continue;
+          seenCodes.add(row.codice);
+        }
+
+        const existing = row.codice ? byCode.get(row.codice) : undefined;
+        if (existing) {
+          updates.set(existing.id, {
+            phone: row.phone || existing.phone,
+            // Le note operative locali (esiti, richieste cliente) NON vanno
+            // sovrascritte dal file: si appende solo contenuto nuovo
+            notes: !existing.notes
+              ? row.notes
+              : (row.notes && !existing.notes.includes(row.notes)
+                  ? appendNote(existing.notes, row.notes)
+                  : existing.notes),
+            project: row.project || existing.project,
+          });
+          continue;
+        }
 
         try {
-          // Geocoding con fallback: prova l'indirizzo esatto, poi varianti
-          // (senza civico, senza prefisso via/piazza) e infine il centro del
-          // comune. Il rate limit Nominatim è gestito dal servizio.
+          // Geocoding con fallback: indirizzo esatto, poi varianti (senza
+          // civico, senza prefisso via/piazza) e infine centro del comune.
+          // Il rate limit Nominatim è gestito dentro il servizio.
           const result = await geocodeAddressParts({
-            street: `${row.Indirizzo}`,
-            civic: row['N.Civ.'] !== undefined && row['N.Civ.'] !== null ? `${row['N.Civ.']}` : undefined,
-            comune: `${row.Comune}`,
-            province: row['Prov.'] ? `${row['Prov.']}` : undefined,
+            street: row.street,
+            civic: row.civic,
+            comune: row.comune,
+            province: row.province,
           });
           if (result) {
-            // Provincia: la colonna "Prov." del file è più affidabile del geocoding
-            const province = provinceToCode(row['Prov.'] ? `${row['Prov.']}` : undefined) || result.province;
-            const comune = row.Comune ? `${row.Comune}`.trim() : result.comune;
+            // Provincia: la colonna del file è più affidabile del geocoding
+            const province = provinceToCode(row.province) || result.province;
+            const comune = row.comune || result.comune;
             const matched = matchTechnician({ coords: result.coords, province }, technicians);
 
             if (result.approximate) {
-              approximates.push(`${fullAddress} (${title})`);
+              approximates.push(`${row.fullAddress} (${row.title})`);
             }
 
             newAppointments.push({
               id: Date.now() + Math.random().toString(),
               // Se la posizione è approssimativa manteniamo l'indirizzo del
               // file (quello del comune sarebbe fuorviante per il tecnico)
-              address: result.approximate ? fullAddress : result.displayName,
-              title: title,
-              phone: phone,
-              notes: notes,
+              address: result.approximate ? row.fullAddress : result.displayName,
+              shortAddress: row.shortAddress,
+              title: row.title,
+              phone: row.phone,
+              notes: row.notes,
               coords: result.coords,
               province,
               comune,
-              urgent: urgent || undefined,
+              urgent: row.urgent || undefined,
               approximate: result.approximate || undefined,
+              periziaCode: row.codice,
+              project: row.project,
               technicianId: matched?.id,
               status: 'pending' // Import as pending
             });
           } else {
-            failures.push(`${fullAddress} (${title})`);
+            failures.push(`${row.fullAddress} (${row.title})`);
           }
         } catch (err) {
           console.error(err);
-          failures.push(`${fullAddress} (Errore di rete)`);
+          failures.push(`${row.fullAddress} (Errore di rete)`);
         }
       }
 
-      setAllAppointments(prev => [...prev, ...newAppointments]);
+      setAllAppointments(prev => [
+        ...prev.map(a => updates.has(a.id) ? { ...a, ...updates.get(a.id) } : a),
+        ...newAppointments
+      ]);
 
-      setImportStats({ success: newAppointments.length, failed: failures.length, approx: approximates.length });
+      setImportStats({ success: newAppointments.length + updates.size, failed: failures.length, approx: approximates.length });
       setFailedImports(failures);
       setApproxImports(approximates);
       setImportFinished(true);
-      setUploadProgress('Completato!');
+      setUploadProgress(updates.size > 0
+        ? `Completato! ${newAppointments.length} nuove, ${updates.size} aggiornate (telefono/note).${excludedInfo}`
+        : `Completato!${excludedInfo}`);
 
     } catch (error) {
       console.error(error);
@@ -1238,6 +1382,16 @@ function App() {
     return <span className="text-[10px] font-bold text-white bg-red-600 px-1.5 rounded">URGENTE</span>;
   };
 
+  // Codice pratica/perizia (tooltip: progetto/committente)
+  const CodeChip = ({ appt }: { appt: Appointment }) => {
+    if (!appt.periziaCode) return null;
+    return (
+      <span title={appt.project || undefined} className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 rounded">
+        #{appt.periziaCode}
+      </span>
+    );
+  };
+
   // Indirizzo non trovato con precisione: pin al centro del comune
   const ApproxBadge = ({ appt }: { appt: Appointment }) => {
     if (!appt.approximate) return null;
@@ -1283,6 +1437,7 @@ function App() {
         <CallModal
           appointment={callTarget}
           technicianName={techById(callTarget.technicianId)?.name}
+          daySchedule={buildDaySchedule(callTarget)}
           onClose={() => setCallTarget(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}
@@ -1295,6 +1450,7 @@ function App() {
         <BulkCallModal
           appointments={bulkCallList}
           technicianNameById={technicianNameById}
+          buildDaySchedule={buildDaySchedule}
           onClose={() => setBulkCallList(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}
@@ -1678,6 +1834,19 @@ function App() {
                      {isSendingToN8n ? 'Invio...' : <><PaperAirplaneIcon /> Invia Report</>}
                   </button>
               </div>
+
+              {/* Sync verso il gestionale Effetre (anche automatica, ogni ora) */}
+              <button
+                onClick={() => handleSyncGestionale(false)}
+                disabled={isSyncing}
+                title="Invia al gestionale i sopralluoghi confermati (dal cliente o senza telefono) con orario calcolato"
+                className="w-full mt-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-sky-700 border-sky-200 bg-sky-50 hover:bg-sky-100 disabled:opacity-60"
+              >
+                {isSyncing ? 'Sync in corso...' : `🔄 Sync gestionale (${getSyncableAppointments(allAppointments).length} confermate — ${getSyncEnvName()})`}
+              </button>
+              {lastSyncInfo && (
+                <p className="text-[10px] text-slate-400 text-center mt-1">Ultima sync {lastSyncInfo}</p>
+              )}
           </div>
           </>
           )}
@@ -1747,6 +1916,7 @@ function App() {
                                                     <p className="text-xs text-slate-400 truncate">{appt.address}</p>
                                                     <div className="mt-0.5 flex gap-1.5 items-center flex-wrap">
                                                         {appt.phone && <span className="text-[11px] text-slate-400">📞 {appt.phone}</span>}
+                                                        <CodeChip appt={appt} />
                                                         <ApproxBadge appt={appt} />
                                                         <CallBadge appt={appt} />
                                                     </div>
@@ -1867,6 +2037,7 @@ function App() {
                                                 <div className="flex items-center gap-1.5 flex-wrap">
                                                     <h4 className="text-sm font-semibold text-slate-800 leading-tight">{appt.title}</h4>
                                                     <UrgentBadge appt={appt} />
+                                                    <CodeChip appt={appt} />
                                                     <ApproxBadge appt={appt} />
                                                 </div>
                                                 <p className="text-xs text-slate-500">{appt.address}</p>
@@ -1920,6 +2091,7 @@ function App() {
                                      <div className="flex items-center gap-1.5 flex-wrap">
                                         <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
                                         <UrgentBadge appt={appt} />
+                                        <CodeChip appt={appt} />
                                         <ApproxBadge appt={appt} />
                                      </div>
                                      <p className="text-xs text-slate-400">{appt.address}</p>

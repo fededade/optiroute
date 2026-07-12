@@ -1,6 +1,7 @@
 import type { Appointment, CallOutcome } from '../types';
 
-// Client for the /api/retell-call serverless endpoint (Retell AI outbound call).
+// Client for the /api/retell-call serverless endpoint (Retell AI outbound call)
+// e per /api/call-status (esito della conversazione via polling).
 
 export interface CallResult {
   ok: boolean;
@@ -10,7 +11,8 @@ export interface CallResult {
 
 export const startConfirmationCall = async (
   appointment: Appointment,
-  technicianName?: string
+  technicianName?: string,
+  daySchedule?: string
 ): Promise<CallResult> => {
   if (!appointment.phone) {
     return { ok: false, error: 'Nessun numero di telefono per questo appuntamento.' };
@@ -27,9 +29,16 @@ export const startConfirmationCall = async (
         startTime: appointment.startTime,
         endTime: appointment.endTime,
         address: appointment.address,
+        shortAddress: appointment.shortAddress,
+        comune: appointment.comune,
         notes: appointment.notes,
         urgent: appointment.urgent === true,
         technicianName: technicianName || undefined,
+        periziaCode: appointment.periziaCode,
+        project: appointment.project,
+        contactPerson: appointment.contactPerson,
+        referredBy: appointment.referredBy,
+        daySchedule: daySchedule || undefined,
       }),
     });
 
@@ -48,52 +57,91 @@ export const startConfirmationCall = async (
 
 // --- Esito chiamata (polling di /api/call-status) ---
 
-export interface CallStatusInfo {
-  ended: boolean;            // la chiamata è terminata (esito disponibile)
-  outcome?: CallOutcome;
-  preferredDate?: string;    // preferenza del cliente se chiede di spostare
-  summary?: string;          // riassunto AI della conversazione
+export interface CallOutcomePoll {
+  pending: boolean;      // true: chiamata/analisi non conclusa, si continua a interrogare
+  outcome?: CallOutcome; // presente quando pending === false
+  error?: string;
 }
 
-// Traduce l'analisi post-chiamata Retell in un esito per la pratica.
-// Priorità al campo personalizzato "esito_appuntamento" (configurato
-// sull'agente, vedi README); in mancanza usa segnali standard
-// (segreteria, mancata risposta) e altrimenti chiede verifica manuale.
-const mapOutcome = (d: any): { outcome: CallOutcome; preferredDate?: string; summary?: string } => {
-  const custom = d.custom || {};
-  const esito = `${custom.esito_appuntamento ?? custom.esito ?? ''}`.toLowerCase();
-  const preferredRaw = `${custom.data_preferita ?? custom.nuova_data ?? ''}`.trim();
-  const preferredDate = preferredRaw && preferredRaw.toLowerCase() !== 'null' ? preferredRaw : undefined;
-  const summary = typeof d.summary === 'string' && d.summary ? d.summary : undefined;
+const pad = (n: number) => String(n).padStart(2, '0');
 
-  let outcome: CallOutcome = 'unclear';
-  if (esito.includes('conferm')) outcome = 'confirmed';
-  else if (esito.includes('riprogramm') || esito.includes('sposta') || esito.includes('rimand')) outcome = 'reschedule';
-  else if (esito.includes('rifiut') || esito.includes('annull') || esito.includes('disdet')) outcome = 'declined';
-  else if (esito.includes('non_raggiunto') || esito.includes('non raggiunto') || esito.includes('segreteria')) outcome = 'no_answer';
-  else if (d.inVoicemail === true) outcome = 'no_answer';
-  else if (['dial_no_answer', 'dial_busy', 'dial_failed', 'voicemail_reached', 'machine_detected'].includes(d.disconnectionReason)) {
-    outcome = 'no_answer';
+// Data indicata dal cliente: accetta YYYY-MM-DD, GG/MM/AAAA o GG/MM.
+// Senza anno si sceglie la prossima occorrenza futura (un richiamo è sempre avanti).
+export const parseFollowUpDate = (raw: string): string | undefined => {
+  if (!raw) return undefined;
+
+  const iso = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
+  if (iso) {
+    const y = parseInt(iso[1], 10);
+    const m = parseInt(iso[2], 10);
+    const d = parseInt(iso[3], 10);
+    const date = new Date(y, m - 1, d);
+    if (date.getMonth() === m - 1 && date.getDate() === d) return `${y}-${pad(m)}-${pad(d)}`;
+    return undefined;
   }
 
-  return { outcome, preferredDate, summary };
+  const dmy = /(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/.exec(raw);
+  if (!dmy) return undefined;
+  const d = parseInt(dmy[1], 10);
+  const m = parseInt(dmy[2], 10);
+  if (d < 1 || d > 31 || m < 1 || m > 12) return undefined;
+
+  const today = new Date();
+  let y: number;
+  if (dmy[3]) {
+    y = parseInt(dmy[3], 10);
+    if (y < 100) y += 2000;
+  } else {
+    y = today.getFullYear();
+    const candidate = new Date(y, m - 1, d);
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    if (candidate < startOfToday) y += 1;
+  }
+  const date = new Date(y, m - 1, d);
+  if (date.getMonth() !== m - 1 || date.getDate() !== d) return undefined;
+  return `${y}-${pad(m)}-${pad(d)}`;
 };
 
-export const fetchCallStatus = async (callId: string): Promise<CallStatusInfo | null> => {
+// Interroga /api/call-status. Su errori transitori (rete, 429, 5xx) ritorna
+// pending: il polling riproverà; il taglio a "sconosciuto" dopo la finestra
+// massima lo decide il chiamante.
+export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll> => {
   try {
-    const response = await fetch(`/api/call-status?id=${encodeURIComponent(callId)}`);
-    if (!response.ok) return null;
-    const data = await response.json();
+    const response = await fetch(`/api/call-status?callId=${encodeURIComponent(callId)}`);
 
-    if (data.callStatus === 'error') {
-      return { ended: true, outcome: 'no_answer', summary: data.summary || 'Chiamata non riuscita (errore telefonico).' };
+    if (!response.ok) {
+      return { pending: true, error: `HTTP ${response.status}` };
     }
-    if (data.callStatus !== 'ended') {
-      return { ended: false }; // ancora in corso: si continua il polling
+
+    const data = await response.json();
+    if (data.pending || !data.outcome) {
+      return { pending: true };
     }
-    return { ended: true, ...mapOutcome(data) };
+
+    const o = data.outcome;
+    const followUpDate =
+      parseFollowUpDate(`${o.followUpRaw || ''}`) ||
+      ((o.result === 'da_richiamare' || o.result === 'lavori_non_ultimati')
+        ? parseFollowUpDate(`${o.requestedDate || ''}`)
+        : undefined);
+
+    const outcome: CallOutcome = {
+      result: o.result || 'sconosciuto',
+      requestedDate: o.requestedDate || undefined,
+      requestedTime: o.requestedTime || undefined,
+      followUpDate,
+      clientNotes: o.clientNotes || undefined,
+      newContactName: o.newContactName || undefined,
+      newContactPhone: o.newContactPhone || undefined,
+      newContactRole: o.newContactRole || undefined,
+      summary: o.summary || undefined,
+      sentiment: o.sentiment || undefined,
+      receivedAt: new Date().toISOString(),
+    };
+
+    return { pending: false, outcome };
   } catch (error) {
     console.error('Call status polling error:', error);
-    return null; // errore di rete transitorio: riproverà il prossimo giro
+    return { pending: true, error: 'network' }; // transitorio: si riprova
   }
 };

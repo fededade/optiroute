@@ -99,8 +99,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         (technicianName ? ` e il nome di chi effettuerà il sopralluogo (${technicianName})` : '') + `, chiedi conferma della presenza. `
       : `comunica data, orario e luogo dell'appuntamento` +
         (technicianName ? ` e il nome di chi effettuerà il sopralluogo (${technicianName})` : '') + `, chiedi conferma della presenza. `) +
-    `Se il cliente chiede di spostare l'appuntamento, prendi nota della preferenza e comunica che verrà ricontattato per la nuova data` +
+    `Se il cliente chiede di spostare l'appuntamento o di essere richiamato più avanti, chiedi esplicitamente in quale data preferisce e prendine nota` +
     (isUrgent ? `, ricordando che vista l'urgenza sarebbe preferibile anticipare e non posticipare` : '') + `. ` +
+    `Se il cliente dice che l'immobile non è pronto o che i lavori non sono ultimati, chiedi quando saranno finiti e prendi nota della data. ` +
+    `Se la persona dice che il numero è sbagliato o non c'entra con la pratica, scusati e prendi nota che il numero non è corretto. ` +
+    `Se il cliente comunica che il sopralluogo non serve più (vendita saltata, pratica annullata), prendine nota. ` +
     `Ringrazia e saluta prima di chiudere la chiamata.`,
   ].filter(line => line !== null).join('\n');
 

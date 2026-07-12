@@ -68,10 +68,18 @@ export const parseExcelFile = async (file: File): Promise<ExcelRow[]> => {
   });
 };
 
+const ISSUE_EXPORT_LABEL: Record<string, string> = {
+  wrong_phone: 'Numero non corretto',
+  callback: 'Da richiamare',
+  works_pending: 'Lavori da ultimare',
+};
+
 const statusLabel = (a: Appointment): string => {
   if (a.status === 'confirmed') return 'Confermato';
   if (a.status === 'proposed') return 'Proposto (da confermare)';
   if (a.status === 'standby') return 'Stand-by';
+  if (a.status === 'issue') return `Problema: ${ISSUE_EXPORT_LABEL[a.issueType || ''] || 'da gestire'}`;
+  if (a.status === 'cancelled') return 'Annullata';
   return 'In Attesa';
 };
 
@@ -81,12 +89,20 @@ const createWorkbook = (
   technicianNameById: Record<string, string> = {}
 ) => {
   // Format data for export (l'esito della conversazione ha la precedenza)
+  const OUTCOME_EXPORT_LABEL: Record<string, string> = {
+    confermato: 'Confermata dal cliente',
+    riprogrammare: 'Da riprogrammare',
+    da_richiamare: 'Da richiamare',
+    numero_errato: 'Numero errato',
+    lavori_non_ultimati: 'Lavori da ultimare',
+    annullato: 'Annullata dal cliente',
+    rifiutato: 'Rifiutata dal cliente',
+    altro_referente: 'Indicato altro referente',
+    non_risposto: 'Non risponde',
+    sconosciuto: 'Esito da verificare',
+  };
   const callStatusLabel = (a: Appointment): string => {
-    if (a.callOutcome === 'confirmed') return 'Confermata dal cliente';
-    if (a.callOutcome === 'reschedule') return 'Da riprogrammare';
-    if (a.callOutcome === 'declined') return 'Annullata dal cliente';
-    if (a.callOutcome === 'no_answer') return 'Non risponde';
-    if (a.callOutcome === 'unclear') return 'Esito da verificare';
+    if (a.callOutcome) return OUTCOME_EXPORT_LABEL[a.callOutcome.result] || 'Esito da verificare';
     if (a.callStatus === 'called') return 'Effettuata';
     if (a.callStatus === 'calling') return 'In corso';
     if (a.callStatus === 'failed') return 'Fallita';
@@ -106,6 +122,7 @@ const createWorkbook = (
     'Prov.': a.province || '-',
     'Note': a.notes || '',
     'Stato': statusLabel(a),
+    'Rientro previsto': a.followUpDate || '-',
     'Chiamata AI': callStatusLabel(a),
     'Distanza da prec. (km)': a.distanceFromPrev || 0,
     'Tempo viaggio (min)': a.travelTimeFromPrev || 0,
@@ -127,7 +144,8 @@ const createWorkbook = (
     { wch: 50 }, // Address
     { wch: 7 },  // Province
     { wch: 30 }, // Notes
-    { wch: 22 }, // Status
+    { wch: 26 }, // Status
+    { wch: 14 }, // Follow-up
     { wch: 12 }, // AI call
     { wch: 15 }, // Dist
     { wch: 15 }, // Time

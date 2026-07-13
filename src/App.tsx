@@ -1,17 +1,21 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { Appointment, Coordinates, AppointmentStatus, Technician } from './types';
-import { geocodeAddress, hasCachedGeocode } from './services/geocodingService';
+import type { Appointment, Coordinates, AppointmentStatus, CallOutcome, IssueType, Technician } from './types';
+import { geocodeAddress, geocodeAddressParts } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
-import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow } from './services/excelService';
+import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
+import { syncConfirmedToGestionale, getSyncableAppointments, getSyncEnvName } from './services/syncService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
 import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings } from './services/storageService';
 import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, workWindowOn } from './services/technicianService';
+import { fetchCallOutcome } from './services/callService';
 import { provinceToCode } from './utils/provinces';
 import MapComponent from './Components/MapComponent';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
+import BulkCallModal from './Components/BulkCallModal';
 import TechnicianModal from './Components/TechnicianModal';
 import DispatchModal from './Components/DispatchModal';
+import KmzImportModal from './Components/KmzImportModal';
 
 // --- CONFIGURATION ---
 // URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
@@ -109,10 +113,40 @@ const ExclamationCircleIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
   </svg>
 );
+const CogIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+  </svg>
+);
+const ChevronDownIcon = ({ open }: { open: boolean }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className={`w-4 h-4 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+  </svg>
+);
 
 const DEFAULT_CENTER: Coordinates = { lat: 41.9028, lng: 12.4964 }; // Rome
 
 type ViewMode = 'day' | 'week' | 'month';
+
+// Normalized row produced by any of the supported import formats
+interface ImportRow {
+  title: string;
+  street?: string;       // via (per il geocoding con fallback)
+  civic?: string;
+  fullAddress: string;
+  shortAddress?: string; // via + civico (pronunciato in chiamata e per il gestionale)
+  comune?: string;
+  province?: string;
+  phone?: string;
+  notes?: string;
+  urgent?: boolean;
+  codice?: string;       // codice pratica/perizia (per merge e link Prelios)
+  project?: string;
+}
+
+const appendNote = (notes: string | undefined, extra: string): string =>
+  notes ? `${notes} | ${extra}` : extra;
 
 const ALL_TECH = 'all';
 
@@ -150,35 +184,49 @@ function App() {
   // Import Modal State
   const [showImportModal, setShowImportModal] = useState(false);
   const [importFinished, setImportFinished] = useState(false);
-  const [importStats, setImportStats] = useState({ success: 0, failed: 0 });
+  const [importStats, setImportStats] = useState({ success: 0, failed: 0, approx: 0 });
   const [failedImports, setFailedImports] = useState<string[]>([]);
+  const [approxImports, setApproxImports] = useState<string[]>([]);
+
+  // Import da Google My Maps (KMZ/KML)
+  const [kmzFile, setKmzFile] = useState<File | null>(null);
 
   // Settings & View
   const [currentDate, setCurrentDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [viewMode, setViewMode] = useState<ViewMode>('day');
   const [startTime, setStartTime] = useState(() => loadSettings()?.startTime || "09:00");
   const [endTimeLimit, setEndTimeLimit] = useState(() => loadSettings()?.endTimeLimit || "18:00");
+  // Pannello impostazioni/azioni della sidebar: richiudibile per dare spazio all'elenco
+  const [settingsOpen, setSettingsOpen] = useState<boolean>(() => loadSettings()?.settingsOpen ?? true);
 
   // Appointment add/edit modal
   const [showApptModal, setShowApptModal] = useState(false);
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
 
-  // AI call modal (Retell)
+  // AI call modal (Retell): singola pratica o coda "Chiama tutte"
   const [callTarget, setCallTarget] = useState<Appointment | null>(null);
+  const [bulkCallList, setBulkCallList] = useState<Appointment[] | null>(null);
+
+  // Sync verso il gestionale (Firestore Effetre)
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
 
   // Filters
   const [filters, setFilters] = useState({
       confirmed: true,
       proposed: true,
       pending: true,
-      standby: true
+      standby: true,
+      issues: true,
+      cancelled: false
   });
 
-  // Swap Mode State
-  const [isSwapMode, setIsSwapMode] = useState(false);
-  const [selectedForSwap, setSelectedForSwap] = useState<string[]>([]);
+  // Drag & drop: riordino manuale del giro confermato (vista giorno)
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const kmzInputRef = useRef<HTMLInputElement>(null);
 
   const selectedTech: Technician | null =
     selectedTechId !== ALL_TECH ? technicians.find(t => t.id === selectedTechId) || null : null;
@@ -206,7 +254,7 @@ function App() {
   // Persist state locally so a page reload never loses the planning
   useEffect(() => { saveAppointments(allAppointments); }, [allAppointments]);
   useEffect(() => { saveBase(baseLocation); }, [baseLocation]);
-  useEffect(() => { saveSettings({ startTime, endTimeLimit }); }, [startTime, endTimeLimit]);
+  useEffect(() => { saveSettings({ startTime, endTimeLimit, settingsOpen }); }, [startTime, endTimeLimit, settingsOpen]);
   useEffect(() => { saveTechnicians(technicians); }, [technicians]);
 
   // Se il tecnico selezionato viene eliminato, torna a "Tutti"
@@ -267,6 +315,8 @@ function App() {
           if (appt.status === 'proposed') return filters.proposed;
           if (appt.status === 'pending') return filters.pending;
           if (appt.status === 'standby') return filters.standby;
+          if (appt.status === 'issue') return filters.issues;
+          if (appt.status === 'cancelled') return filters.cancelled;
           return true;
       });
   }, [allAppointments, filters, currentDate, viewMode, matchesTechFilter]);
@@ -349,6 +399,10 @@ function App() {
     setShowTechModal(true);
   };
 
+  const toggleSettingsPanel = () => {
+    setSettingsOpen(!settingsOpen);
+  };
+
   // --- AI Call (Retell) handlers ---
   const requestCall = (appt: Appointment) => {
     if (!appt.phone) {
@@ -358,8 +412,22 @@ function App() {
     setCallTarget(appt);
   };
 
+  // Chiamate in blocco (es. tutte le proposte dopo lo smistamento)
+  const requestBulkCall = (appts: Appointment[]) => {
+    if (appts.length === 0) return;
+    if (!appts.some(a => a.phone)) {
+      alert("Nessuna di queste pratiche ha un numero di telefono. Aggiungilo con il tasto Modifica.");
+      return;
+    }
+    setBulkCallList(appts);
+  };
+
   const handleCallStarted = (id: string) => {
-    setAllAppointments(prev => prev.map(a => a.id === id ? { ...a, callStatus: 'calling' } : a));
+    // Nuova chiamata: azzera l'esito precedente, verrà rilevato dal polling
+    setAllAppointments(prev => prev.map(a => a.id === id
+      ? { ...a, callStatus: 'calling', callOutcome: undefined, callSummary: undefined }
+      : a
+    ));
   };
 
   const handleCallResult = (id: string, ok: boolean, callId?: string) => {
@@ -369,6 +437,225 @@ function App() {
     ));
   };
 
+  // Esito della telefonata -> categoria problematica (la pratica esce dalla
+  // pianificazione; con la data di rientro scatteranno alert e vincoli)
+  const handleMarkIssueFromCall = (id: string, issueType: IssueType, followUpDate?: string) => {
+    setAllAppointments(prev => prev.map(a => a.id === id
+      ? {
+          ...a,
+          status: 'issue',
+          issueType,
+          followUpDate: followUpDate || a.followUpDate,
+          date: undefined,
+          sequenceOrder: undefined,
+          startTime: undefined,
+          endTime: undefined,
+        }
+      : a
+    ));
+  };
+
+  // --- Esito chiamata via polling: la risposta del cliente determina lo stato ---
+
+  const CALL_POLL_INTERVAL_MS = 12000;
+  const CALL_POLL_MAX_AGE_MS = 45 * 60 * 1000; // oltre: ultimo recupero reale, poi "sconosciuto"
+
+  const awaitingCallOutcome = useCallback((a: Appointment): boolean =>
+    !!a.callId && !a.callOutcome && !!a.calledAt &&
+    (a.callStatus === 'calling' || a.callStatus === 'called'),
+  []);
+
+  const isOutcomePastCutoff = (a: Appointment): boolean =>
+    !!a.calledAt && (Date.now() - new Date(a.calledAt).getTime()) >= CALL_POLL_MAX_AGE_MS;
+
+  // Applica l'esito della conversazione alla pratica:
+  //  confermato          -> proposta => Confermata (data/orario mantenuti)
+  //  riprogrammare       -> In Attesa, preferenza del cliente nelle note
+  //  da_richiamare       -> Problematica 📆 con data di rientro
+  //  numero_errato       -> Problematica 📵
+  //  lavori_non_ultimati -> Problematica 🚧 con data fine lavori
+  //  annullato           -> Annullata (archivio)
+  //  rifiutato           -> Stand-by
+  //  altro_referente     -> aggiorna telefono/referente e rimette in coda chiamate
+  //  non_risposto / sconosciuto -> solo badge
+  const applyCallOutcome = useCallback((id: string, outcome: CallOutcome, expectedCallId?: string) => {
+    setAllAppointments(prev => prev.map(a => {
+      if (a.id !== id || a.callOutcome) return a;
+      if (expectedCallId && a.callId !== expectedCallId) return a; // nel frattempo è partita un'altra chiamata
+
+      const updated: Appointment = {
+        ...a,
+        callOutcome: outcome,
+        callSummary: outcome.summary || a.callSummary,
+        callStatus: outcome.result === 'non_risposto' ? 'failed' : 'called',
+      };
+      const clearPlanning = () => {
+        updated.date = undefined;
+        updated.sequenceOrder = undefined;
+        updated.startTime = undefined;
+        updated.endTime = undefined;
+      };
+      const addNote = (nota: string) => {
+        updated.notes = updated.notes ? `${updated.notes} · ${nota}` : nota;
+      };
+
+      switch (outcome.result) {
+        case 'confermato':
+          if (a.status === 'proposed') updated.status = 'confirmed';
+          break;
+        case 'riprogrammare': {
+          updated.status = 'pending';
+          clearPlanning();
+          // Se la data richiesta è interpretabile diventa "rientro": compare
+          // nell'alert Slot da riservare e lo smistamento non propone prima
+          updated.followUpDate = outcome.followUpDate || a.followUpDate;
+          const quando = [outcome.requestedDate, outcome.requestedTime].filter(Boolean).join(' ');
+          addNote(quando ? `Da riprogrammare — richiesta cliente: ${quando}` : 'Da riprogrammare (nessuna preferenza indicata)');
+          break;
+        }
+        case 'da_richiamare':
+          updated.status = 'issue';
+          updated.issueType = 'callback';
+          updated.followUpDate = outcome.followUpDate || a.followUpDate;
+          clearPlanning();
+          break;
+        case 'numero_errato':
+          updated.status = 'issue';
+          updated.issueType = 'wrong_phone';
+          clearPlanning();
+          break;
+        case 'lavori_non_ultimati':
+          updated.status = 'issue';
+          updated.issueType = 'works_pending';
+          updated.followUpDate = outcome.followUpDate || a.followUpDate;
+          clearPlanning();
+          break;
+        case 'annullato':
+          updated.status = 'cancelled';
+          updated.issueType = undefined;
+          clearPlanning();
+          break;
+        case 'rifiutato':
+          updated.status = 'standby';
+          clearPlanning();
+          addNote('Rifiutato dal cliente');
+          break;
+        case 'altro_referente':
+          if (outcome.newContactPhone) {
+            // Il cliente ha indicato un'altra persona: si aggiorna il numero e
+            // la pratica torna pronta per una nuova chiamata ("per conto di...")
+            updated.phone = outcome.newContactPhone;
+            updated.contactPerson = [outcome.newContactName, outcome.newContactRole].filter(Boolean).join(' — ') || 'Referente indicato dal cliente';
+            updated.referredBy = a.referredBy || a.title;
+            updated.callStatus = undefined;
+            updated.callId = undefined;
+            updated.calledAt = undefined;
+            updated.callOutcome = undefined;
+            addNote(`Nuovo referente: ${[outcome.newContactName, outcome.newContactRole, outcome.newContactPhone].filter(Boolean).join(' · ')}`);
+          }
+          break;
+        default:
+          break; // non_risposto / sconosciuto: nessun cambio di stato
+      }
+      return updated;
+    }));
+  }, []);
+
+  // Riferimento sempre aggiornato: il polling legge da qui senza dover
+  // ricreare il timer a ogni modifica della lista.
+  const appointmentsRef = useRef<Appointment[]>(allAppointments);
+  useEffect(() => { appointmentsRef.current = allAppointments; }, [allAppointments]);
+
+  // Chiave stabile: cambia solo quando cambia l'insieme delle chiamate da monitorare
+  const callPollKey = allAppointments.filter(awaitingCallOutcome).map(a => a.id).sort().join('|');
+  const outcomePollInFlight = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!callPollKey) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      const targets = appointmentsRef.current.filter(awaitingCallOutcome);
+      for (const appt of targets) {
+        if (cancelled) return;
+        if (outcomePollInFlight.current.has(appt.id)) continue;
+        outcomePollInFlight.current.add(appt.id);
+        try {
+          // Anche a finestra scaduta si tenta UN recupero reale: l'esito su
+          // Retell è spesso già pronto (es. app riaperta il giorno dopo).
+          // Solo se ancora pending si chiude a "sconosciuto".
+          const poll = await fetchCallOutcome(appt.callId!);
+          if (cancelled) return;
+          if (!poll.pending && poll.outcome) {
+            applyCallOutcome(appt.id, poll.outcome, appt.callId);
+          } else if (isOutcomePastCutoff(appt)) {
+            applyCallOutcome(appt.id, {
+              result: 'sconosciuto',
+              summary: 'Esito non ricevuto nei tempi: controlla la dashboard Retell.',
+              receivedAt: new Date().toISOString(),
+            }, appt.callId);
+          }
+        } finally {
+          outcomePollInFlight.current.delete(appt.id);
+        }
+      }
+    };
+
+    const firstCheck = setTimeout(tick, 4000); // primo controllo poco dopo l'avvio
+    const timer = setInterval(tick, CALL_POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearTimeout(firstCheck); clearInterval(timer); };
+  }, [callPollKey, awaitingCallOutcome, applyCallOutcome]);
+
+  // Agenda del giorno per l'agente AI: fasce già impegnate del giro dello
+  // stesso tecnico, così al telefono può rispondere onesto sulle richieste
+  // di spostamento senza impegnare slot in diretta.
+  const buildDaySchedule = (appt: Appointment): string => {
+    const day = appt.date || currentDate;
+    const tech = techById(appt.technicianId);
+    let windowStart = startTime;
+    let windowEnd = endTimeLimit;
+    if (tech) {
+      const window = workWindowOn(tech, day);
+      if (window) { windowStart = window.start; windowEnd = window.end; }
+    }
+    const impegni = appointmentsRef.current
+      .filter(a =>
+        (a.status === 'confirmed' || a.status === 'proposed') &&
+        a.date === day && a.id !== appt.id && !!a.startTime &&
+        a.technicianId === appt.technicianId)
+      .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0))
+      .map(a => `${a.startTime}-${a.endTime || '?'}${a.comune ? ` (zona ${a.comune})` : ''}`);
+    return `Giornata lavorativa ${windowStart}-${windowEnd}. ` +
+      (impegni.length ? `Fasce già impegnate: ${impegni.join('; ')}.` : 'Nessun altro appuntamento fissato.');
+  };
+
+  // --- Sync verso il gestionale Effetre (Firestore) ---
+  const handleSyncGestionale = useCallback(async (automatic = false) => {
+    const syncable = getSyncableAppointments(appointmentsRef.current);
+    if (syncable.length === 0) {
+      if (!automatic) alert("Nessun sopralluogo confermato da sincronizzare.\n(Vengono inviati solo i confermati dal cliente o senza telefono, con orario calcolato.)");
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      const result = await syncConfirmedToGestionale(appointmentsRef.current);
+      const when = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+      setLastSyncInfo(`${when}: ${result.sent} inviate (${result.envName})${result.failed ? `, ${result.failed} errori` : ''}`);
+      if (result.failed > 0) console.warn('Sync gestionale, errori:', result.errors);
+      if (!automatic && result.failed > 0) {
+        alert(`Sync completata con errori: ${result.sent} inviate, ${result.failed} fallite.\n${result.errors.slice(0, 3).join('\n')}`);
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  }, []);
+
+  // Sync automatica ogni ora (il gestionale importa a sua volta ogni ora)
+  useEffect(() => {
+    const interval = setInterval(() => { handleSyncGestionale(true); }, 60 * 60000);
+    return () => clearInterval(interval);
+  }, [handleSyncGestionale]);
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -376,75 +663,158 @@ function App() {
     // Reset Import State
     setShowImportModal(true);
     setImportFinished(false);
-    setImportStats({ success: 0, failed: 0 });
+    setImportStats({ success: 0, failed: 0, approx: 0 });
     setFailedImports([]);
+    setApproxImports([]);
     setUploadProgress('Lettura file in corso...');
 
     try {
-      const rows = await parseExcelFile(file);
-      const newAppointments: Appointment[] = [];
-      const failures: string[] = [];
+      // 1) Formato strutturato: colonne Intestatario/Indirizzo/Comune
+      //    (+ Telefono/Note/Urgente/Codice). È anche il formato prodotto dal
+      //    bridge Prelios (giro arricchito).
+      let importRows: ImportRow[] = [];
+      let excludedInfo = '';
 
-      let processedCount = 0;
+      const rows = await parseExcelFile(file);
       const validRows = rows.filter(r => r.Indirizzo && r.Comune);
 
-      if (validRows.length === 0) {
-        setUploadProgress("Errore: Nessuna riga valida trovata.");
-        setTimeout(() => setShowImportModal(false), 2000);
+      if (validRows.length > 0) {
+        importRows = validRows.map(row => ({
+          title: row.Intestatario || `${row.Indirizzo} ${row['N.Civ.'] || ''}`.trim(),
+          street: `${row.Indirizzo}`,
+          civic: row['N.Civ.'] !== undefined && row['N.Civ.'] !== null ? `${row['N.Civ.']}` : undefined,
+          fullAddress: `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim(),
+          shortAddress: `${row.Indirizzo} ${row['N.Civ.'] || ''}`.trim(),
+          comune: row.Comune ? `${row.Comune}`.trim() : undefined,
+          province: row['Prov.'] ? `${row['Prov.']}` : undefined,
+          phone: extractPhoneFromRow(row),
+          notes: row.Note ? `${row.Note}`.trim() : undefined,
+          urgent: extractUrgentFromRow(row),
+          codice: extractCodiceFromRow(row),
+        }));
+      } else {
+        // 2) Elenco pratiche MISI grezzo (export Prelios): SOLO tipologia FULL - Acquisto
+        const { selected, excluded } = await parsePraticheMisi(file);
+        importRows = selected.map(p => ({
+          title: p.intestatario || `${p.via} ${p.civico}`.trim(),
+          street: p.via,
+          civic: p.civico || undefined,
+          fullAddress: `${p.via} ${p.civico}, ${p.comune}, ${p.provincia}`.trim(),
+          shortAddress: `${p.via} ${p.civico}`.trim(),
+          comune: p.comune,
+          province: p.provincia || undefined,
+          notes: p.noteGestore || undefined,
+          codice: p.codice,
+          project: p.progetto || undefined,
+        }));
+        if (excluded > 0) excludedInfo = ` — ${excluded} escluse (non FULL - Acquisto)`;
+      }
+
+      if (importRows.length === 0) {
+        setUploadProgress("Errore: Nessuna riga valida trovata (formati supportati: elenco pratiche MISI o colonne Indirizzo/Comune).");
+        setTimeout(() => setShowImportModal(false), 3000);
         return;
       }
 
-      for (const row of validRows) {
+      // Merge per codice pratica: le pratiche già presenti vengono AGGIORNATE
+      // (telefono/note/progetto) invece di essere duplicate — è il flusso del
+      // file arricchito dal bridge Prelios.
+      const byCode = new Map<string, Appointment>();
+      allAppointments.forEach(a => { if (a.periziaCode) byCode.set(a.periziaCode, a); });
+
+      const newAppointments: Appointment[] = [];
+      const updates = new Map<string, Partial<Appointment>>();
+      const failures: string[] = [];
+      const approximates: string[] = [];
+      const seenCodes = new Set<string>();
+      let processedCount = 0;
+
+      for (const row of importRows) {
         processedCount++;
-        setUploadProgress(`Elaborazione pratica ${processedCount} di ${validRows.length}...`);
+        setUploadProgress(`Elaborazione pratica ${processedCount} di ${importRows.length}...${excludedInfo}`);
 
-        const fullAddress = `${row.Indirizzo} ${row['N.Civ.'] || ''}, ${row.Comune}, ${row['Prov.'] || ''}`.trim();
-        const title = row.Intestatario || fullAddress;
-        const phone = extractPhoneFromRow(row);
-        const notes = row.Note ? `${row.Note}`.trim() : undefined;
-        const urgent = extractUrgentFromRow(row);
+        // Dedupe righe duplicate nello stesso file
+        if (row.codice) {
+          if (seenCodes.has(row.codice)) continue;
+          seenCodes.add(row.codice);
+        }
 
-        // Rate limit strictness for Nominatim (skipped for cached/duplicate addresses)
-        if (!hasCachedGeocode(fullAddress)) {
-          await new Promise(resolve => setTimeout(resolve, 1100));
+        const existing = row.codice ? byCode.get(row.codice) : undefined;
+        if (existing) {
+          updates.set(existing.id, {
+            phone: row.phone || existing.phone,
+            // Le note operative locali (esiti, richieste cliente) NON vanno
+            // sovrascritte dal file: si appende solo contenuto nuovo
+            notes: !existing.notes
+              ? row.notes
+              : (row.notes && !existing.notes.includes(row.notes)
+                  ? appendNote(existing.notes, row.notes)
+                  : existing.notes),
+            project: row.project || existing.project,
+          });
+          continue;
         }
 
         try {
-          const result = await geocodeAddress(fullAddress);
+          // Geocoding con fallback: indirizzo esatto, poi varianti (senza
+          // civico, senza prefisso via/piazza) e infine centro del comune.
+          // Il rate limit Nominatim è gestito dentro il servizio.
+          const result = await geocodeAddressParts({
+            street: row.street,
+            civic: row.civic,
+            comune: row.comune,
+            province: row.province,
+          });
           if (result) {
-            // Provincia: la colonna "Prov." del file è più affidabile del geocoding
-            const province = provinceToCode(row['Prov.'] ? `${row['Prov.']}` : undefined) || result.province;
-            const comune = row.Comune ? `${row.Comune}`.trim() : result.comune;
+            // Provincia: la colonna del file è più affidabile del geocoding
+            const province = provinceToCode(row.province) || result.province;
+            const comune = row.comune || result.comune;
             const matched = matchTechnician({ coords: result.coords, province }, technicians);
+
+            if (result.approximate) {
+              approximates.push(`${row.fullAddress} (${row.title})`);
+            }
 
             newAppointments.push({
               id: Date.now() + Math.random().toString(),
-              address: result.displayName,
-              title: title,
-              phone: phone,
-              notes: notes,
+              // Se la posizione è approssimativa manteniamo l'indirizzo del
+              // file (quello del comune sarebbe fuorviante per il tecnico)
+              address: result.approximate ? row.fullAddress : result.displayName,
+              shortAddress: row.shortAddress,
+              title: row.title,
+              phone: row.phone,
+              notes: row.notes,
               coords: result.coords,
               province,
               comune,
-              urgent: urgent || undefined,
+              urgent: row.urgent || undefined,
+              approximate: result.approximate || undefined,
+              periziaCode: row.codice,
+              project: row.project,
               technicianId: matched?.id,
               status: 'pending' // Import as pending
             });
           } else {
-            failures.push(`${fullAddress} (${title})`);
+            failures.push(`${row.fullAddress} (${row.title})`);
           }
         } catch (err) {
           console.error(err);
-          failures.push(`${fullAddress} (Errore di rete)`);
+          failures.push(`${row.fullAddress} (Errore di rete)`);
         }
       }
 
-      setAllAppointments(prev => [...prev, ...newAppointments]);
+      setAllAppointments(prev => [
+        ...prev.map(a => updates.has(a.id) ? { ...a, ...updates.get(a.id) } : a),
+        ...newAppointments
+      ]);
 
-      setImportStats({ success: newAppointments.length, failed: failures.length });
+      setImportStats({ success: newAppointments.length + updates.size, failed: failures.length, approx: approximates.length });
       setFailedImports(failures);
+      setApproxImports(approximates);
       setImportFinished(true);
-      setUploadProgress('Completato!');
+      setUploadProgress(updates.size > 0
+        ? `Completato! ${newAppointments.length} nuove, ${updates.size} aggiornate (telefono/note).${excludedInfo}`
+        : `Completato!${excludedInfo}`);
 
     } catch (error) {
       console.error(error);
@@ -452,6 +822,19 @@ function App() {
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  // --- Import da Google My Maps (KMZ/KML) ---
+  const handleKmzSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) setKmzFile(file);
+    if (kmzInputRef.current) kmzInputRef.current.value = '';
+  };
+
+  const handleKmzApply = (imported: Appointment[]) => {
+    if (imported.length === 0) return;
+    setAllAppointments(prev => [...prev, ...imported]);
+    setMapCenter(imported[0].coords);
   };
 
   const getExportPool = () => {
@@ -567,8 +950,9 @@ function App() {
   const closeImportModal = () => {
       setShowImportModal(false);
       setImportFinished(false);
-      setImportStats({ success: 0, failed: 0 });
+      setImportStats({ success: 0, failed: 0, approx: 0 });
       setFailedImports([]);
+      setApproxImports([]);
   };
 
   const handleStatusChange = (id: string, newStatus: AppointmentStatus) => {
@@ -591,8 +975,19 @@ function App() {
             update.startTime = undefined;
             update.endTime = undefined;
         }
+        // Uscendo dalla categoria problematica, la categoria si azzera; il
+        // followUpDate resta: lo smistamento non proporrà date precedenti.
+        if (newStatus !== 'issue') {
+            update.issueType = undefined;
+        }
         return { ...a, ...update };
     }));
+
+    // La vista segue la conferma (vedi handleConfirmDay)
+    if (newStatus === 'confirmed') {
+        setCurrentDate(confirmDate);
+        setViewMode('day');
+    }
 
     // On confirmation, propose the AI confirmation call if a phone number exists
     if (newStatus === 'confirmed' && target?.phone && target.callStatus !== 'called') {
@@ -607,6 +1002,64 @@ function App() {
         ? { ...a, status: 'confirmed' }
         : a
     ));
+    // La vista segue la conferma: senza questo salto le confermate "spariscono"
+    // (vivono sulla loro data mentre la vista resta su oggi)
+    setCurrentDate(date);
+    setViewMode('day');
+  };
+
+  // Riordino di un giro PROPOSTO (drag & drop): ricalcola gli orari con le
+  // stime, come lo smistamento — nessuna rete, istantaneo. La data e il
+  // tecnico del gruppo restano quelli della pratica trascinata.
+  const rescheduleProposedGroup = async (orderedList: Appointment[], sample: Appointment) => {
+    if (orderedList.length === 0) return;
+
+    // Orari e base del tecnico del giro (fallback: impostazioni generali)
+    const tech = techById(sample.technicianId);
+    let dayStart = startTime;
+    let dayEnd = endTimeLimit;
+    let base = baseLocation?.coords || null;
+    if (tech) {
+      const window = workWindowOn(tech, sample.date!);
+      if (window) { dayStart = window.start; dayEnd = window.end; }
+      base = tech.baseCoords || baseLocation?.coords || null;
+    }
+
+    setIsOptimizing(true);
+    try {
+      const [startH, startM] = dayStart.split(':').map(n => parseInt(n, 10));
+      const [endH, endM] = dayEnd.split(':').map(n => parseInt(n, 10));
+
+      const { scheduled, overflow } = await calculateSchedule(
+        orderedList,
+        base,
+        startH,
+        startM || 0,
+        endH,
+        20,
+        { useEstimates: true, startFromBase: true, maxEndTimeMinutes: endM || 0 }
+      );
+
+      const scheduledById = new Map(scheduled.map(s => [s.id, s]));
+      const overflowIds = new Set(overflow.map(o => o.id));
+
+      setAllAppointments(prev => prev.map(a => {
+        const calculated = scheduledById.get(a.id);
+        if (calculated) return { ...a, ...calculated, status: 'proposed', date: sample.date };
+        if (overflowIds.has(a.id)) {
+          return { ...a, status: 'pending', date: undefined, sequenceOrder: undefined, startTime: undefined, endTime: undefined };
+        }
+        return a;
+      }));
+
+      if (overflow.length > 0) {
+        alert(`Con questo ordine ${overflow.length === 1 ? 'un sopralluogo non rientra' : `${overflow.length} sopralluoghi non rientrano`} più nell'orario di lavoro: ${overflow.length === 1 ? 'è tornato' : 'sono tornati'} "In Attesa".`);
+      }
+    } catch (error) {
+      console.error('Reorder failed', error);
+    } finally {
+      setIsOptimizing(false);
+    }
   };
 
   // Applica gli esiti dello smistamento automatico (stato 'proposed' + assegnazioni)
@@ -652,8 +1105,6 @@ function App() {
     }
 
     setIsOptimizing(true);
-    setIsSwapMode(false);
-    setSelectedForSwap([]);
 
     try {
       const sorted = optimizeRoute(activePool, base);
@@ -706,91 +1157,119 @@ function App() {
     }
   }, [allAppointments, currentDate, baseLocation, startTime, endTimeLimit, selectedTech]);
 
-  const toggleSwapSelection = async (id: string) => {
-    if (!isSwapMode) return;
-    const target = allAppointments.find(a => a.id === id);
-    if (!target || target.status !== 'confirmed' || target.date !== currentDate) return;
+  // Ricalcola orari e sequenza del giro (di un tecnico o del pool non
+  // assegnato) per la giornata corrente, rispettando l'ordine passato.
+  const rescheduleDay = async (orderedList: Appointment[], routeTechId?: string) => {
+    if (orderedList.length === 0) return;
+    const routeTech = techById(routeTechId);
 
-    let newSelection = [...selectedForSwap];
-    if (newSelection.includes(id)) {
-      newSelection = newSelection.filter(s => s !== id);
-    } else {
-      if (newSelection.length < 2) newSelection.push(id);
-    }
-
-    setSelectedForSwap(newSelection);
-
-    if (newSelection.length === 2) {
-      const first = allAppointments.find(a => a.id === newSelection[0]);
-      const second = allAppointments.find(a => a.id === newSelection[1]);
-      if (!first || !second) return;
-
-      // Lo scambio ha senso solo all'interno del giro dello stesso tecnico
-      if (first.technicianId !== second.technicianId) {
-        alert("Puoi scambiare solo due tappe dello stesso tecnico.");
-        setSelectedForSwap([]);
-        return;
+    setIsOptimizing(true);
+    try {
+      let dayStart = startTime;
+      let dayEnd = endTimeLimit;
+      let base = baseLocation?.coords || null;
+      if (routeTech) {
+          const window = workWindowOn(routeTech, currentDate);
+          if (window) { dayStart = window.start; dayEnd = window.end; }
+          base = routeTech.baseCoords || baseLocation?.coords || null;
       }
 
-      const routeTechId = first.technicianId;
-      const routeTech = techById(routeTechId);
+      const startH = parseInt(dayStart.split(':')[0]);
+      const startM = parseInt(dayStart.split(':')[1]);
+      const endH = parseInt(dayEnd.split(':')[0]);
+      const endM = parseInt(dayEnd.split(':')[1]) || 0;
 
-      const currentDayAppointments = allAppointments
-        .filter(a => a.status === 'confirmed' && a.date === currentDate && a.technicianId === routeTechId)
-        .sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0)-(b.sequenceOrder||0));
+      const { scheduled, overflow } = await calculateSchedule(
+          orderedList,
+          base,
+          startH,
+          startM,
+          endH,
+          20,
+          { maxEndTimeMinutes: endM, startFromBase: !!routeTech && !!routeTech.baseCoords }
+      );
 
-      const idx1 = currentDayAppointments.findIndex(a => a.id === newSelection[0]);
-      const idx2 = currentDayAppointments.findIndex(a => a.id === newSelection[1]);
+      const scheduledIds = new Set(scheduled.map(a => a.id));
+      const overflowIds = new Set(overflow.map(a => a.id));
 
-      if (idx1 === -1 || idx2 === -1) return;
+      setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
+          if (scheduledIds.has(a.id)) {
+              const calculated = scheduled.find(s => s.id === a.id);
+              return { ...a, ...calculated, status: 'confirmed', date: currentDate };
+          } else if (overflowIds.has(a.id)) {
+              return { ...a, status: 'pending', date: undefined, sequenceOrder: undefined, startTime: undefined, endTime: undefined };
+          }
+          return a;
+      }));
+    } catch (e) { console.error(e); }
+    finally { setIsOptimizing(false); }
+  };
 
-      const updatedList = [...currentDayAppointments];
-      [updatedList[idx1], updatedList[idx2]] = [updatedList[idx2], updatedList[idx1]];
+  // --- Drag & drop: tieni premuto e trascina una scheda confermata per
+  // riordinare il giro; gli orari si ricalcolano subito. ---
+  const canDragReorder = viewMode === 'day' && !isOptimizing;
 
-      setIsOptimizing(true);
-      try {
-        let dayStart = startTime;
-        let dayEnd = endTimeLimit;
-        let base = baseLocation?.coords || null;
-        if (routeTech) {
-            const window = workWindowOn(routeTech, currentDate);
-            if (window) { dayStart = window.start; dayEnd = window.end; }
-            base = routeTech.baseCoords || baseLocation?.coords || null;
-        }
+  const sameRoute = (a?: Appointment, b?: Appointment): boolean =>
+    !!a && !!b && a.status === b.status &&
+    (a.status === 'confirmed' || a.status === 'proposed') &&
+    a.technicianId === b.technicianId && a.date === b.date;
 
-        const startH = parseInt(dayStart.split(':')[0]);
-        const startM = parseInt(dayStart.split(':')[1]);
-        const endH = parseInt(dayEnd.split(':')[0]);
-        const endM = parseInt(dayEnd.split(':')[1]) || 0;
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    // setData è necessario perché il drag parta anche su Firefox
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.effectAllowed = 'move';
+    setDragId(id);
+  };
 
-        const { scheduled, overflow } = await calculateSchedule(
-            updatedList,
-            base,
-            startH,
-            startM,
-            endH,
-            20,
-            { maxEndTimeMinutes: endM, startFromBase: !!routeTech && !!routeTech.baseCoords }
-        );
+  const handleDragOverCard = (e: React.DragEvent, targetId: string) => {
+    if (!dragId) {
+      // Stato non ancora aggiornato (primissimo dragover): consenti il drop,
+      // sarà handleDropOnCard a validare il giro.
+      if (e.dataTransfer.types.includes('text/plain')) e.preventDefault();
+      return;
+    }
+    if (dragId === targetId) return;
+    const dragged = allAppointments.find(a => a.id === dragId);
+    const target = allAppointments.find(a => a.id === targetId);
+    // Riordino valido solo dentro il giro dello stesso tecnico, stessa giornata
+    if (!sameRoute(dragged, target)) return;
+    e.preventDefault(); // consente il drop
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverId !== targetId) setDragOverId(targetId);
+  };
 
-        const scheduledIds = new Set(scheduled.map(a => a.id));
-        const overflowIds = new Set(overflow.map(a => a.id));
+  const handleDropOnCard = async (e: React.DragEvent, targetId: string) => {
+    const draggedId = dragId || e.dataTransfer.getData('text/plain');
+    setDragId(null);
+    setDragOverId(null);
+    if (!draggedId || draggedId === targetId) return;
 
-        setAllAppointments((prev: Appointment[]) => prev.map((a: Appointment) => {
-            if (scheduledIds.has(a.id)) {
-                const calculated = scheduled.find(s => s.id === a.id);
-                return { ...a, ...calculated, status: 'confirmed', date: currentDate };
-            } else if (overflowIds.has(a.id)) {
-                return { ...a, status: 'pending', date: undefined, sequenceOrder: undefined, startTime: undefined, endTime: undefined };
-            }
-            return a;
-        }));
+    const dragged = allAppointments.find(a => a.id === draggedId);
+    const target = allAppointments.find(a => a.id === targetId);
+    if (!sameRoute(dragged, target)) return;
 
-        setSelectedForSwap([]);
-      } catch (e) { console.error(e); }
-      finally { setIsOptimizing(false); }
+    const dayList = allAppointments
+      .filter(a => a.status === dragged!.status && a.date === dragged!.date && a.technicianId === dragged!.technicianId)
+      .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0));
+
+    const fromIdx = dayList.findIndex(a => a.id === draggedId);
+    const toIdx = dayList.findIndex(a => a.id === targetId);
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+
+    const reordered = [...dayList];
+    const [moved] = reordered.splice(fromIdx, 1);
+    // Trascinando verso il basso finisce dopo la scheda su cui si rilascia,
+    // verso l'alto ci finisce prima: comportamento naturale di una lista.
+    reordered.splice(toIdx, 0, moved);
+
+    if (dragged!.status === 'proposed') {
+      await rescheduleProposedGroup(reordered, dragged!);
+    } else {
+      await rescheduleDay(reordered, dragged!.technicianId);
     }
   };
+
+  const handleDragEnd = () => { setDragId(null); setDragOverId(null); };
 
   const handleRemove = (id: string) => {
     setAllAppointments((prev: Appointment[]) => prev.filter((a: Appointment) => a.id !== id));
@@ -804,13 +1283,49 @@ function App() {
     .sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0) - (b.sequenceOrder||0));
   const routeSummary = confirmedForDate.length > 0 ? calculateRouteSummary(confirmedForDate) : null;
 
+  // Giornate (diverse da quella in vista) che hanno appuntamenti confermati:
+  // rende raggiungibili con un clic i giri confermati "fuori vista"
+  const otherConfirmedDays = (() => {
+    const counts = new Map<string, number>();
+    for (const a of allAppointments) {
+      if (a.status !== 'confirmed' || !a.date || !matchesTechFilter(a)) continue;
+      if (viewMode === 'day' && a.date === currentDate) continue;
+      counts.set(a.date, (counts.get(a.date) || 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((x, y) => x[0].localeCompare(y[0]));
+  })();
+
   const listProposed = allAppointments.filter(a => a.status === 'proposed' && matchesTechFilter(a));
   const listPending = allAppointments
     .filter(a => a.status === 'pending' && matchesTechFilter(a))
     .sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
   const listStandby = allAppointments.filter(a => a.status === 'standby' && matchesTechFilter(a));
+  const listIssues = allAppointments.filter(a => a.status === 'issue' && matchesTechFilter(a));
+  const listCancelled = allAppointments.filter(a => a.status === 'cancelled' && matchesTechFilter(a));
 
   const pendingAll = allAppointments.filter(a => a.status === 'pending');
+
+  // Categorie delle pratiche con problematiche
+  const ISSUE_META: Record<IssueType, { label: string; icon: string; reentry: string }> = {
+    wrong_phone: { label: 'Numeri non corretti', icon: '📵', reentry: 'ricontatto' },
+    callback: { label: 'Da richiamare', icon: '📆', reentry: 'richiamo' },
+    works_pending: { label: 'Lavori da ultimare', icon: '🚧', reentry: 'fine lavori' },
+  };
+
+  // Alert "slot da riservare": pratiche problematiche che rientrano domani o
+  // prima (dal giorno precedente la data di richiamo / fine lavori).
+  const tomorrowStr = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  })();
+  const withFollowUp = allAppointments
+    .filter(a => (a.status === 'issue' || a.status === 'pending') && a.followUpDate)
+    .sort((a, b) => (a.followUpDate || '').localeCompare(b.followUpDate || ''));
+  // Scadenze imminenti (entro domani) e rientri/richieste future: entrambe
+  // visibili, così una pratica posticipata "alla data x" non sparisce mai
+  const followUpAlerts = withFollowUp.filter(a => a.followUpDate! <= tomorrowStr);
+  const futureFollowUps = withFollowUp.filter(a => a.followUpDate! > tomorrowStr);
 
   // Gruppi proposte per tecnico+data (ordinati)
   const proposedGroups = (() => {
@@ -835,17 +1350,74 @@ function App() {
         (a.status === 'confirmed' && !!a.date && a.date >= todayStr))
     ).length;
 
-  // Small badge showing the AI call state on a card
+  // Small badge showing the AI call state on a card.
+  // L'esito della conversazione (quando arriva col polling) ha la precedenza.
   const CallBadge = ({ appt }: { appt: Appointment }) => {
-    if (appt.callStatus === 'called') return <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato</span>;
+    const o = appt.callOutcome;
+    const summaryTitle = [o?.summary || appt.callSummary, o?.clientNotes].filter(Boolean).join(' — ') || undefined;
+
+    if (o) {
+      switch (o.result) {
+        case 'confermato':
+          return <span title={summaryTitle} className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 rounded">✅ Confermato dal cliente</span>;
+        case 'riprogrammare': {
+          const quando = [o.requestedDate, o.requestedTime].filter(Boolean).join(' ');
+          return <span title={summaryTitle} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">🔁 Da riprogrammare{quando ? `: ${quando}` : ''}</span>;
+        }
+        case 'da_richiamare':
+          return <span title={summaryTitle} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">📆 Da richiamare{o.followUpDate ? ` il ${formatDayLabel(o.followUpDate)}` : ''}</span>;
+        case 'numero_errato':
+          return <span title={summaryTitle} className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1 rounded">📵 Numero errato</span>;
+        case 'lavori_non_ultimati':
+          return <span title={summaryTitle} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">🚧 Lavori da ultimare{o.followUpDate ? ` · fine ${formatDayLabel(o.followUpDate)}` : ''}</span>;
+        case 'annullato':
+          return <span title={summaryTitle} className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-300 px-1 rounded">🚫 Annullato dal cliente</span>;
+        case 'rifiutato':
+          return <span title={summaryTitle} className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 rounded">🚫 Rifiutato</span>;
+        case 'altro_referente':
+          return <span title={summaryTitle} className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1 rounded">👤 Da contattare: {[o.newContactName, o.newContactRole].filter(Boolean).join(' · ') || 'altro referente'}</span>;
+        case 'non_risposto':
+          return <span title={summaryTitle} className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">📵 Non risponde · da richiamare</span>;
+        default:
+          return <span title={summaryTitle || 'Esito non chiaro: controlla la dashboard Retell'} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">❓ Esito da verificare</span>;
+      }
+    }
+    if (appt.callStatus === 'called') {
+      return awaitingCallOutcome(appt)
+        ? <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 Chiamato · esito in arrivo...</span>
+        : <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato</span>;
+    }
     if (appt.callStatus === 'calling') return <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 In chiamata...</span>;
-    if (appt.callStatus === 'failed') return <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1 rounded">✗ Chiamata fallita</span>;
+    if (appt.callStatus === 'failed') return <span title={appt.callSummary} className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1 rounded">✗ Chiamata fallita</span>;
     return null;
   };
 
   const UrgentBadge = ({ appt }: { appt: Appointment }) => {
     if (!appt.urgent) return null;
     return <span className="text-[10px] font-bold text-white bg-red-600 px-1.5 rounded">URGENTE</span>;
+  };
+
+  // Codice pratica/perizia (tooltip: progetto/committente)
+  const CodeChip = ({ appt }: { appt: Appointment }) => {
+    if (!appt.periziaCode) return null;
+    return (
+      <span title={appt.project || undefined} className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 rounded">
+        #{appt.periziaCode}
+      </span>
+    );
+  };
+
+  // Indirizzo non trovato con precisione: pin al centro del comune
+  const ApproxBadge = ({ appt }: { appt: Appointment }) => {
+    if (!appt.approximate) return null;
+    return (
+      <span
+        className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded"
+        title="Indirizzo esatto non trovato sulle mappe: la pratica è posizionata al centro del comune. Correggi l'indirizzo con il tasto Modifica per il punto esatto."
+      >
+        ≈ centro comune
+      </span>
+    );
   };
 
   const TechBadge = ({ appt }: { appt: Appointment }) => {
@@ -880,7 +1452,21 @@ function App() {
         <CallModal
           appointment={callTarget}
           technicianName={techById(callTarget.technicianId)?.name}
+          daySchedule={buildDaySchedule(callTarget)}
           onClose={() => setCallTarget(null)}
+          onCallStarted={handleCallStarted}
+          onCallResult={handleCallResult}
+          onMarkIssue={handleMarkIssueFromCall}
+        />
+      )}
+
+      {/* --- BULK AI CALL MODAL (Chiama tutte) --- */}
+      {bulkCallList && (
+        <BulkCallModal
+          appointments={bulkCallList}
+          technicianNameById={technicianNameById}
+          buildDaySchedule={buildDaySchedule}
+          onClose={() => setBulkCallList(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}
         />
@@ -907,6 +1493,17 @@ function App() {
         />
       )}
 
+      {/* --- KMZ IMPORT MODAL (Google My Maps) --- */}
+      {kmzFile && (
+        <KmzImportModal
+          file={kmzFile}
+          technicians={technicians}
+          existing={allAppointments}
+          onApply={handleKmzApply}
+          onClose={() => setKmzFile(null)}
+        />
+      )}
+
       {/* --- IMPORT MODAL --- */}
       {showImportModal && (
         <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4">
@@ -926,6 +1523,12 @@ function App() {
                     <h3 className="text-xl font-bold text-slate-800 mb-2 shrink-0">Fatto!</h3>
                     <div className="mb-4 space-y-2 shrink-0">
                         <p className="text-md text-slate-600">N. <span className="font-bold text-indigo-600">{importStats.success}</span> Pratiche importate!</p>
+                        {importStats.approx > 0 && (
+                            <p className="text-sm text-amber-700 bg-amber-50 p-2 rounded">
+                                ≈ {importStats.approx} {importStats.approx === 1 ? 'indirizzo posizionato' : 'indirizzi posizionati'} al centro del comune
+                                (numero civico o via non trovati sulle mappe).
+                            </p>
+                        )}
                         {importStats.failed > 0 && (
                             <p className="text-sm text-red-500 bg-red-50 p-2 rounded">
                                 ⚠️ {importStats.failed} indirizzi non trovati.
@@ -933,17 +1536,34 @@ function App() {
                         )}
                     </div>
 
-                    {failedImports.length > 0 && (
+                    {(failedImports.length > 0 || approxImports.length > 0) && (
                         <div className="flex-1 overflow-y-auto mb-4 bg-slate-50 rounded border border-slate-200 p-2 text-left">
-                            <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Dettaglio errori:</p>
-                            <ul className="text-xs text-red-600 space-y-1">
-                                {failedImports.map((failStr, i) => (
-                                    <li key={i} className="flex gap-1.5 items-start">
-                                        <span className="shrink-0">•</span>
-                                        <span>{failStr}</span>
-                                    </li>
-                                ))}
-                            </ul>
+                            {approxImports.length > 0 && (
+                                <>
+                                    <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Posizione approssimativa (verifica o correggi con Modifica):</p>
+                                    <ul className="text-xs text-amber-700 space-y-1 mb-2">
+                                        {approxImports.map((approxStr, i) => (
+                                            <li key={i} className="flex gap-1.5 items-start">
+                                                <span className="shrink-0">≈</span>
+                                                <span>{approxStr}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </>
+                            )}
+                            {failedImports.length > 0 && (
+                                <>
+                                    <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Dettaglio errori:</p>
+                                    <ul className="text-xs text-red-600 space-y-1">
+                                        {failedImports.map((failStr, i) => (
+                                            <li key={i} className="flex gap-1.5 items-start">
+                                                <span className="shrink-0">•</span>
+                                                <span>{failStr}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </>
+                            )}
                         </div>
                     )}
 
@@ -1091,8 +1711,87 @@ function App() {
                 <input type="checkbox" checked={filters.standby} onChange={e => setFilters(p => ({...p, standby: e.target.checked}))} className="rounded text-gray-500 focus:ring-0" />
                 Stand-by ({listStandby.length})
              </label>
+             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-rose-50 text-rose-800 border border-rose-100 cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={filters.issues} onChange={e => setFilters(p => ({...p, issues: e.target.checked}))} className="rounded text-rose-600 focus:ring-0" />
+                Problematiche ({listIssues.length})
+             </label>
+             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-slate-100 text-slate-500 border border-slate-200 cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={filters.cancelled} onChange={e => setFilters(p => ({...p, cancelled: e.target.checked}))} className="rounded text-slate-400 focus:ring-0" />
+                Annullate ({listCancelled.length})
+             </label>
            </div>
 
+           {/* Alert slot da riservare: richiami / fine lavori / richieste dei clienti */}
+           {(followUpAlerts.length > 0 || futureFollowUps.length > 0) && (
+             <div className="px-3 py-2 bg-amber-50 border-b-2 border-amber-300">
+                {followUpAlerts.length > 0 && (
+                  <p className="text-xs font-bold text-amber-800 flex items-center gap-1 mb-1">
+                    🔔 Slot da riservare ({followUpAlerts.length})
+                  </p>
+                )}
+                <div className="space-y-1 max-h-36 overflow-y-auto">
+                  {followUpAlerts.map(a => (
+                    <div key={a.id} className="flex items-center justify-between gap-2 text-[11px] text-amber-900 bg-white/70 border border-amber-200 rounded px-2 py-1">
+                        <span className="truncate">
+                            <b className="capitalize">{formatDayLabel(a.followUpDate)}</b>
+                            {a.followUpDate! < todayStr && <b className="text-red-600"> (scaduta)</b>}
+                            {' '}· {a.status === 'pending' ? 'richiesta cliente' : ISSUE_META[a.issueType || 'callback'].reentry} · {a.title}
+                        </span>
+                        {a.status === 'issue' && (
+                          <button
+                              onClick={() => handleStatusChange(a.id, 'pending')}
+                              className="shrink-0 font-bold text-white bg-amber-600 hover:bg-amber-700 px-1.5 py-0.5 rounded"
+                              title="Rimetti tra le pratiche da pianificare (lo smistamento non proporrà date precedenti al rientro)"
+                          >
+                              → In attesa
+                          </button>
+                        )}
+                    </div>
+                  ))}
+                </div>
+                {followUpAlerts.length > 0 && (
+                  <p className="text-[10px] text-amber-700 mt-1">
+                    Tieni slot liberi in quelle date: rimetti le pratiche "In attesa" e pianificale con Smista/Ottimizza insieme alle ordinarie.
+                  </p>
+                )}
+                {futureFollowUps.length > 0 && (
+                  <div className={followUpAlerts.length > 0 ? 'mt-1.5 pt-1.5 border-t border-amber-200' : ''}>
+                    <p className="text-[11px] text-amber-800">
+                      <b>📅 Rientri e richieste future:</b>{' '}
+                      {futureFollowUps.slice(0, 5).map((a, i) => (
+                        <span key={a.id}>
+                          {i > 0 && ' · '}
+                          <b className="capitalize">{formatDayLabel(a.followUpDate)}</b> {a.title}
+                          {a.status === 'pending' ? ' (richiesta cliente)' : ''}
+                        </span>
+                      ))}
+                      {futureFollowUps.length > 5 && ` · e altre ${futureFollowUps.length - 5}`}
+                    </p>
+                    <p className="text-[10px] text-amber-700">
+                      Lo smistamento non proporrà queste pratiche prima della loro data.
+                    </p>
+                  </div>
+                )}
+             </div>
+           )}
+
+          {/* Toggle Impostazioni e azioni: click per chiudere/riaprire e liberare spazio per l'elenco */}
+          <button
+            onClick={toggleSettingsPanel}
+            className="w-full px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-xs font-bold text-slate-600 uppercase tracking-wider hover:bg-slate-200 transition-colors shrink-0"
+            title={settingsOpen ? 'Nascondi impostazioni e azioni' : 'Mostra impostazioni e azioni'}
+          >
+            <span className="flex items-center gap-1.5">
+              <CogIcon /> Impostazioni e azioni
+            </span>
+            <span className="flex items-center gap-1.5 normal-case font-normal text-slate-400">
+              {!settingsOpen && <span className="hidden sm:inline">clicca per riaprire</span>}
+              <ChevronDownIcon open={settingsOpen} />
+            </span>
+          </button>
+
+          {settingsOpen && (
+          <>
           {/* Config & Add */}
           <div className="p-4 bg-slate-100 border-b border-slate-200 space-y-3">
             {/* Base */}
@@ -1149,31 +1848,47 @@ function App() {
              <button onClick={handleOptimize} className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
                 {isOptimizing ? "Calcolo..." : <><SparklesIcon /> Ottimizza {currentDate}{selectedTech ? ` · ${selectedTech.name.split(' ')[0]}` : ''}</>}
              </button>
-             {confirmedForDate.length > 0 && viewMode === 'day' && (
-                <button onClick={() => setIsSwapMode(!isSwapMode)} className={`col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 ${isSwapMode ? 'bg-amber-100 text-amber-800' : 'text-slate-600'}`}>
-                    <ArrowsRightLeftIcon /> Scambia Ordine
-                </button>
-             )}
               <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".xlsx,.csv" className="hidden" />
+              <input type="file" ref={kmzInputRef} onChange={handleKmzSelect} accept=".kmz,.kml" className="hidden" />
 
               <div className="col-span-2 grid grid-cols-2 gap-2">
                   <button onClick={() => fileInputRef.current?.click()} className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-slate-600 bg-white hover:bg-slate-50">
                       <UploadIcon /> Importa Excel
                   </button>
+                  <button
+                    onClick={() => kmzInputRef.current?.click()}
+                    title="Importa la mappa di Google My Maps (KMZ/KML) con tutti i livelli"
+                    className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100"
+                  >
+                      <UploadIcon /> Importa Maps
+                  </button>
                   <button onClick={handleExport} className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-indigo-600 border-indigo-200 bg-indigo-50 hover:bg-indigo-100">
                       <DownloadIcon /> Esporta Excel
                   </button>
+                  <button
+                    onClick={handleSendToN8n}
+                    disabled={isSendingToN8n}
+                    className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-slate-800 hover:bg-slate-900 border-slate-900 transition-colors"
+                  >
+                     {isSendingToN8n ? 'Invio...' : <><PaperAirplaneIcon /> Invia Report</>}
+                  </button>
               </div>
 
-              {/* Tasto Invia a N8N */}
+              {/* Sync verso il gestionale Effetre (anche automatica, ogni ora) */}
               <button
-                onClick={handleSendToN8n}
-                disabled={isSendingToN8n}
-                className="col-span-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-slate-800 hover:bg-slate-900 border-slate-900 transition-colors"
+                onClick={() => handleSyncGestionale(false)}
+                disabled={isSyncing}
+                title="Invia al gestionale i sopralluoghi confermati (dal cliente o senza telefono) con orario calcolato"
+                className="w-full mt-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-sky-700 border-sky-200 bg-sky-50 hover:bg-sky-100 disabled:opacity-60"
               >
-                 {isSendingToN8n ? 'Invio in corso...' : <><PaperAirplaneIcon /> Invia Report Email</>}
+                {isSyncing ? 'Sync in corso...' : `🔄 Sync gestionale (${getSyncableAppointments(allAppointments).length} confermate — ${getSyncEnvName()})`}
               </button>
+              {lastSyncInfo && (
+                <p className="text-[10px] text-slate-400 text-center mt-1">Ultima sync {lastSyncInfo}</p>
+              )}
           </div>
+          </>
+          )}
 
           {/* List Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white">
@@ -1181,8 +1896,17 @@ function App() {
             {/* 1. Proposed (da confermare) */}
             {filters.proposed && listProposed.length > 0 && (
                 <div>
-                    <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 border-b border-indigo-100 pb-1">
-                        Proposte da confermare ({listProposed.length})
+                    <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 border-b border-indigo-100 pb-1 flex justify-between items-center gap-2">
+                        <span>Proposte da confermare ({listProposed.length})</span>
+                        {listProposed.some(a => a.phone) && (
+                            <button
+                                onClick={() => requestBulkCall(listProposed)}
+                                title="Avvia la chiamata AI di conferma per tutte le proposte con telefono"
+                                className="normal-case tracking-normal text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1 shrink-0"
+                            >
+                                <PhoneIcon /> Chiama tutte
+                            </button>
+                        )}
                     </h3>
                     <div className="space-y-3">
                         {proposedGroups.map(group => {
@@ -1193,21 +1917,37 @@ function App() {
                                         <span className="text-xs font-bold capitalize" style={{ color: tech?.color || '#4f46e5' }}>
                                             {tech ? tech.name : 'Senza tecnico'} — {formatDayLabel(group.date)}
                                         </span>
-                                        <button
-                                            onClick={() => handleConfirmDay(group.techId, group.date)}
-                                            className="text-[10px] font-bold text-white px-2 py-0.5 rounded"
-                                            style={{ backgroundColor: tech?.color || '#4f46e5' }}
-                                            title="Conferma tutte le proposte di questa giornata"
-                                        >
-                                            ✓ Conferma giornata
-                                        </button>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                            {group.items.some(a => a.phone) && (
+                                                <button
+                                                    onClick={() => requestBulkCall(group.items)}
+                                                    className="text-[10px] font-bold text-emerald-700 bg-white/80 border border-emerald-200 hover:bg-emerald-50 px-1.5 py-0.5 rounded flex items-center"
+                                                    title="Chiama tutte le proposte di questa giornata (AI)"
+                                                >
+                                                    <PhoneIcon />
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => handleConfirmDay(group.techId, group.date)}
+                                                className="text-[10px] font-bold text-white px-2 py-0.5 rounded"
+                                                style={{ backgroundColor: tech?.color || '#4f46e5' }}
+                                                title="Conferma tutte le proposte di questa giornata"
+                                            >
+                                                ✓ Conferma giornata
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="divide-y divide-slate-100">
                                         {group.items.map(appt => (
                                             <div
                                                 key={appt.id}
                                                 id={`appt-${appt.id}`}
-                                                className={`p-2.5 bg-white flex justify-between items-start gap-2 ${selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-400' : ''}`}
+                                                draggable={!isOptimizing}
+                                                onDragStart={(e) => handleDragStart(e, appt.id)}
+                                                onDragOver={(e) => handleDragOverCard(e, appt.id)}
+                                                onDrop={(e) => handleDropOnCard(e, appt.id)}
+                                                onDragEnd={handleDragEnd}
+                                                className={`p-2.5 bg-white flex justify-between items-start gap-2 transition-all ${!isOptimizing ? 'cursor-grab active:cursor-grabbing' : ''} ${dragId === appt.id ? 'opacity-40' : ''} ${dragOverId === appt.id ? 'ring-2 ring-indigo-500' : selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-400' : ''}`}
                                             >
                                                 <div className="min-w-0">
                                                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -1220,6 +1960,8 @@ function App() {
                                                     <p className="text-xs text-slate-400 truncate">{appt.address}</p>
                                                     <div className="mt-0.5 flex gap-1.5 items-center flex-wrap">
                                                         {appt.phone && <span className="text-[11px] text-slate-400">📞 {appt.phone}</span>}
+                                                        <CodeChip appt={appt} />
+                                                        <ApproxBadge appt={appt} />
                                                         <CallBadge appt={appt} />
                                                     </div>
                                                 </div>
@@ -1229,6 +1971,13 @@ function App() {
                                                         title="Conferma questa proposta"
                                                         className="p-1 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200"
                                                     ><CheckIcon /></button>
+                                                    {appt.phone && appt.callStatus !== 'calling' && (
+                                                        <button
+                                                            onClick={() => requestCall(appt)}
+                                                            title="Chiama il cliente per conferma (AI)"
+                                                            className={`p-1 rounded ${appt.callStatus === 'called' ? 'text-emerald-500 hover:bg-emerald-50' : 'text-emerald-600 hover:bg-emerald-100 bg-emerald-50'}`}
+                                                        ><PhoneIcon /></button>
+                                                    )}
                                                     <button
                                                         onClick={() => handleStatusChange(appt.id, 'pending')}
                                                         title="Rifiuta: torna in attesa"
@@ -1244,8 +1993,11 @@ function App() {
                         })}
                     </div>
                     <p className="text-[11px] text-slate-400 mt-2">
-                        Alla conferma, se c'è un numero di telefono, puoi far partire la chiamata AI
-                        (l'urgenza viene comunicata esplicitamente al cliente).
+                        Trascina una scheda (tieni premuto il clic) per spostarla prima o dopo
+                        un'altra dello stesso giro: gli orari si ricalcolano subito.
+                        Con "Chiama tutte" (o il tasto 📞 su gruppo/pratica)
+                        l'operatore AI chiama i clienti per confermare data e orario proposti, senza
+                        bisogno di confermare prima a mano. L'urgenza viene comunicata al cliente.
                     </p>
                 </div>
             )}
@@ -1253,10 +2005,42 @@ function App() {
             {/* 2. Confirmed */}
             {filters.confirmed && (
                 <div>
-                    <h3 className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2 border-b border-blue-100 pb-1 flex justify-between">
+                    <h3 className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2 border-b border-blue-100 pb-1 flex justify-between items-center gap-2">
                         <span>Confermate ({visibleAppointments.filter(a => a.status === 'confirmed').length})</span>
-                        <span className="text-slate-400 font-normal normal-case">{viewMode === 'day' ? 'Giorno' : viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
+                        <span className="flex items-center gap-2 shrink-0">
+                            {visibleAppointments.some(a => a.status === 'confirmed' && a.phone) && (
+                                <button
+                                    onClick={() => requestBulkCall(visibleAppointments.filter(a => a.status === 'confirmed'))}
+                                    title="Avvia la chiamata AI di conferma per tutte le confermate con telefono"
+                                    className="normal-case tracking-normal text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1"
+                                >
+                                    <PhoneIcon /> Chiama tutte
+                                </button>
+                            )}
+                            <span className="text-slate-400 font-normal normal-case">{viewMode === 'day' ? 'Giorno' : viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
+                        </span>
                     </h3>
+                    {/* Giornate confermate fuori dalla vista corrente: un clic e ci sei */}
+                    {otherConfirmedDays.length > 0 && (
+                        <div className="mb-2 flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500">
+                            <span className="shrink-0">{viewMode === 'day' ? 'Altre giornate:' : 'Giornate:'}</span>
+                            {otherConfirmedDays.map(([day, count]) => (
+                                <button
+                                    key={day}
+                                    onClick={() => { setCurrentDate(day); setViewMode('day'); }}
+                                    title={`Vai al giro ${viewMode === 'day' ? 'confermato ' : ''}del ${formatDayLabel(day)}`}
+                                    className="capitalize font-bold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 px-1.5 py-0.5 rounded"
+                                >
+                                    {formatDayLabel(day)} ({count})
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    {viewMode === 'day' && visibleAppointments.filter(a => a.status === 'confirmed').length > 1 && (
+                        <p className="text-[11px] text-slate-400 mb-2 flex items-center gap-1">
+                            <ArrowsRightLeftIcon /> Trascina una scheda (tieni premuto il clic) per riordinare il giro: orari e mappa si ricalcolano.
+                        </p>
+                    )}
                     <div className="space-y-2">
                         {visibleAppointments.filter(a => a.status === 'confirmed')
                          .sort((a,b) => {
@@ -1274,10 +2058,16 @@ function App() {
                                 )}
                                 <div
                                     id={`appt-${appt.id}`}
-                                    onClick={() => toggleSwapSelection(appt.id)}
+                                    draggable={canDragReorder}
+                                    onDragStart={(e) => handleDragStart(e, appt.id)}
+                                    onDragOver={(e) => handleDragOverCard(e, appt.id)}
+                                    onDrop={(e) => handleDropOnCard(e, appt.id)}
+                                    onDragEnd={handleDragEnd}
                                     className={`
-                                        relative p-3 rounded-lg border transition-all
-                                        ${isSwapMode && selectedForSwap.includes(appt.id) ? 'bg-amber-50 border-amber-500' : 'bg-blue-50 border-blue-100'}
+                                        relative p-3 rounded-lg border transition-all bg-blue-50 border-blue-100
+                                        ${canDragReorder ? 'cursor-grab active:cursor-grabbing' : ''}
+                                        ${dragId === appt.id ? 'opacity-40' : ''}
+                                        ${dragOverId === appt.id ? 'ring-2 ring-indigo-500 ring-offset-1' : ''}
                                         ${selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-500 shadow-md scale-[1.01]' : ''}
                                         ${appt.urgent ? 'border-l-4 border-l-red-500' : ''}
                                     `}
@@ -1294,6 +2084,8 @@ function App() {
                                                 <div className="flex items-center gap-1.5 flex-wrap">
                                                     <h4 className="text-sm font-semibold text-slate-800 leading-tight">{appt.title}</h4>
                                                     <UrgentBadge appt={appt} />
+                                                    <CodeChip appt={appt} />
+                                                    <ApproxBadge appt={appt} />
                                                 </div>
                                                 <p className="text-xs text-slate-500">{appt.address}</p>
                                                 {appt.phone && <p className="text-xs text-slate-500 mt-0.5">📞 {appt.phone}</p>}
@@ -1346,6 +2138,8 @@ function App() {
                                      <div className="flex items-center gap-1.5 flex-wrap">
                                         <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
                                         <UrgentBadge appt={appt} />
+                                        <CodeChip appt={appt} />
+                                        <ApproxBadge appt={appt} />
                                      </div>
                                      <p className="text-xs text-slate-400">{appt.address}</p>
                                      {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
@@ -1398,6 +2192,98 @@ function App() {
                                      <button onClick={() => openEditModal(appt)} title="Modifica" className="text-indigo-400 hover:bg-indigo-50 p-1 rounded"><PencilIcon/></button>
                                      <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Riattiva" className="text-green-600 hover:bg-green-50 p-1 rounded"><ClockIcon/></button>
                                      <button onClick={() => handleRemove(appt.id)} className="text-red-400 hover:bg-red-50 p-1 rounded"><TrashIcon/></button>
+                                 </div>
+                             </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* 5. Problematiche (numeri non corretti / da richiamare / lavori da ultimare) */}
+            {filters.issues && listIssues.length > 0 && (
+                <div>
+                    <h3 className="text-xs font-bold text-rose-600 uppercase tracking-wider mb-2 border-b border-rose-100 pb-1 mt-4">
+                        Problematiche ({listIssues.length})
+                    </h3>
+                    {(Object.keys(ISSUE_META) as IssueType[]).map(type => {
+                        const items = listIssues.filter(a => (a.issueType || 'callback') === type);
+                        if (items.length === 0) return null;
+                        return (
+                            <div key={type} className="mb-3">
+                                <h4 className="text-[11px] font-bold text-rose-500 uppercase mb-1.5">
+                                    {ISSUE_META[type].icon} {ISSUE_META[type].label} ({items.length})
+                                </h4>
+                                <div className="space-y-2">
+                                    {items.map(appt => (
+                                        <div
+                                            key={appt.id}
+                                            id={`appt-${appt.id}`}
+                                            className={`
+                                                p-3 rounded-lg border border-rose-200 bg-rose-50/60 flex justify-between items-start transition-all
+                                                ${selectedAppointmentId === appt.id ? 'ring-2 ring-rose-400 shadow-md' : ''}
+                                            `}
+                                        >
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
+                                                    <UrgentBadge appt={appt} />
+                                                </div>
+                                                <p className="text-xs text-slate-400">{appt.address}</p>
+                                                {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
+                                                {appt.followUpDate && (
+                                                    <p className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 mt-1 inline-block capitalize">
+                                                        🔔 {ISSUE_META[type].reentry}: {formatDayLabel(appt.followUpDate)}
+                                                    </p>
+                                                )}
+                                                {appt.notes && <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-2">{appt.notes}</p>}
+                                                <div className="mt-1 flex gap-1.5 flex-wrap items-center">
+                                                    {selectedTechId === ALL_TECH && <TechBadge appt={appt} />}
+                                                    {appt.province && <span className="text-[10px] text-slate-400 border border-slate-200 px-1 rounded">{appt.province}</span>}
+                                                    <CallBadge appt={appt} />
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-col gap-1 shrink-0">
+                                                <button onClick={() => openEditModal(appt)} title="Modifica (categoria, data di rientro)" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
+                                                <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Rimetti in attesa (torna pianificabile)" className="p-1 hover:bg-orange-100 rounded text-orange-400"><ClockIcon/></button>
+                                                <button onClick={() => handleRemove(appt.id)} title="Elimina" className="p-1 hover:bg-red-50 rounded text-red-300"><TrashIcon/></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })}
+                    <p className="text-[11px] text-slate-400">
+                        Imposta la <b>data di rientro</b> (richiamo o fine lavori) dalla matita: dal giorno prima
+                        comparirà l'alert per riservare gli slot.
+                    </p>
+                </div>
+            )}
+
+            {/* 6. Annullate (archivio) */}
+            {filters.cancelled && listCancelled.length > 0 && (
+                <div>
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 border-b border-slate-200 pb-1 mt-4">
+                        Annullate ({listCancelled.length})
+                    </h3>
+                    <div className="space-y-2 opacity-60">
+                        {listCancelled.map(appt => (
+                             <div
+                                key={appt.id}
+                                id={`appt-${appt.id}`}
+                                className={`
+                                    p-2.5 rounded-lg border border-slate-200 bg-slate-50 flex justify-between items-center transition-all
+                                    ${selectedAppointmentId === appt.id ? 'ring-2 ring-slate-400' : ''}
+                                `}
+                             >
+                                 <div className="min-w-0">
+                                     <h4 className="text-sm font-semibold text-slate-500 line-through">{appt.title}</h4>
+                                     <p className="text-xs text-slate-400 truncate">{appt.address}</p>
+                                     {appt.notes && <p className="text-xs text-slate-300 italic truncate">{appt.notes.split('\n')[0]}</p>}
+                                 </div>
+                                 <div className="flex gap-1 shrink-0">
+                                     <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Ripristina in attesa" className="text-green-600 hover:bg-green-50 p-1 rounded"><ClockIcon/></button>
+                                     <button onClick={() => handleRemove(appt.id)} title="Elimina definitivamente" className="text-red-400 hover:bg-red-50 p-1 rounded"><TrashIcon/></button>
                                  </div>
                              </div>
                         ))}

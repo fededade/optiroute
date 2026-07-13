@@ -98,16 +98,6 @@ const CheckIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
   </svg>
 );
-const MoveUpIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
-    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 15.75 7.5-7.5 7.5 7.5" />
-  </svg>
-);
-const MoveDownIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3.5 h-3.5">
-    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-  </svg>
-);
 const XMarkIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -1005,29 +995,19 @@ function App() {
     ));
   };
 
-  // Sposta una proposta prima/dopo l'altra nel giro del suo tecnico+giorno e
-  // ricalcola gli orari (stime, come lo smistamento: nessuna rete, istantaneo).
-  const moveProposed = async (appt: Appointment, direction: -1 | 1) => {
-    if (isOptimizing) return;
-
-    const group = allAppointments
-      .filter(a => a.status === 'proposed' && a.technicianId === appt.technicianId && a.date === appt.date)
-      .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0));
-
-    const idx = group.findIndex(a => a.id === appt.id);
-    const targetIdx = idx + direction;
-    if (idx === -1 || targetIdx < 0 || targetIdx >= group.length) return;
-
-    const reordered = [...group];
-    [reordered[idx], reordered[targetIdx]] = [reordered[targetIdx], reordered[idx]];
+  // Riordino di un giro PROPOSTO (drag & drop): ricalcola gli orari con le
+  // stime, come lo smistamento — nessuna rete, istantaneo. La data e il
+  // tecnico del gruppo restano quelli della pratica trascinata.
+  const rescheduleProposedGroup = async (orderedList: Appointment[], sample: Appointment) => {
+    if (orderedList.length === 0) return;
 
     // Orari e base del tecnico del giro (fallback: impostazioni generali)
-    const tech = techById(appt.technicianId);
+    const tech = techById(sample.technicianId);
     let dayStart = startTime;
     let dayEnd = endTimeLimit;
     let base = baseLocation?.coords || null;
     if (tech) {
-      const window = workWindowOn(tech, appt.date!);
+      const window = workWindowOn(tech, sample.date!);
       if (window) { dayStart = window.start; dayEnd = window.end; }
       base = tech.baseCoords || baseLocation?.coords || null;
     }
@@ -1038,7 +1018,7 @@ function App() {
       const [endH, endM] = dayEnd.split(':').map(n => parseInt(n, 10));
 
       const { scheduled, overflow } = await calculateSchedule(
-        reordered,
+        orderedList,
         base,
         startH,
         startM || 0,
@@ -1052,7 +1032,7 @@ function App() {
 
       setAllAppointments(prev => prev.map(a => {
         const calculated = scheduledById.get(a.id);
-        if (calculated) return { ...a, ...calculated, status: 'proposed', date: appt.date };
+        if (calculated) return { ...a, ...calculated, status: 'proposed', date: sample.date };
         if (overflowIds.has(a.id)) {
           return { ...a, status: 'pending', date: undefined, sequenceOrder: undefined, startTime: undefined, endTime: undefined };
         }
@@ -1217,7 +1197,9 @@ function App() {
   const canDragReorder = viewMode === 'day' && !isOptimizing;
 
   const sameRoute = (a?: Appointment, b?: Appointment): boolean =>
-    !!a && !!b && a.technicianId === b.technicianId && a.date === b.date;
+    !!a && !!b && a.status === b.status &&
+    (a.status === 'confirmed' || a.status === 'proposed') &&
+    a.technicianId === b.technicianId && a.date === b.date;
 
   const handleDragStart = (e: React.DragEvent, id: string) => {
     // setData è necessario perché il drag parta anche su Firefox
@@ -1254,7 +1236,7 @@ function App() {
     if (!sameRoute(dragged, target)) return;
 
     const dayList = allAppointments
-      .filter(a => a.status === 'confirmed' && a.date === dragged!.date && a.technicianId === dragged!.technicianId)
+      .filter(a => a.status === dragged!.status && a.date === dragged!.date && a.technicianId === dragged!.technicianId)
       .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0));
 
     const fromIdx = dayList.findIndex(a => a.id === draggedId);
@@ -1267,7 +1249,11 @@ function App() {
     // verso l'alto ci finisce prima: comportamento naturale di una lista.
     reordered.splice(toIdx, 0, moved);
 
-    await rescheduleDay(reordered, dragged!.technicianId);
+    if (dragged!.status === 'proposed') {
+      await rescheduleProposedGroup(reordered, dragged!);
+    } else {
+      await rescheduleDay(reordered, dragged!.technicianId);
+    }
   };
 
   const handleDragEnd = () => { setDragId(null); setDragOverId(null); };
@@ -1899,11 +1885,16 @@ function App() {
                                         </div>
                                     </div>
                                     <div className="divide-y divide-slate-100">
-                                        {group.items.map((appt, itemIdx) => (
+                                        {group.items.map(appt => (
                                             <div
                                                 key={appt.id}
                                                 id={`appt-${appt.id}`}
-                                                className={`p-2.5 bg-white flex justify-between items-start gap-2 ${selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-400' : ''}`}
+                                                draggable={!isOptimizing}
+                                                onDragStart={(e) => handleDragStart(e, appt.id)}
+                                                onDragOver={(e) => handleDragOverCard(e, appt.id)}
+                                                onDrop={(e) => handleDropOnCard(e, appt.id)}
+                                                onDragEnd={handleDragEnd}
+                                                className={`p-2.5 bg-white flex justify-between items-start gap-2 transition-all ${!isOptimizing ? 'cursor-grab active:cursor-grabbing' : ''} ${dragId === appt.id ? 'opacity-40' : ''} ${dragOverId === appt.id ? 'ring-2 ring-indigo-500' : selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-400' : ''}`}
                                             >
                                                 <div className="min-w-0">
                                                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -1922,20 +1913,6 @@ function App() {
                                                     </div>
                                                 </div>
                                                 <div className="flex flex-col gap-1 shrink-0">
-                                                    <div className="flex gap-1" title="Sposta il sopralluogo prima o dopo un altro: gli orari del giro si ricalcolano">
-                                                        <button
-                                                            onClick={() => moveProposed(appt, -1)}
-                                                            disabled={itemIdx === 0 || isOptimizing}
-                                                            title="Sposta prima (su)"
-                                                            className="flex-1 p-0.5 rounded border border-slate-200 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-25 disabled:pointer-events-none flex items-center justify-center"
-                                                        ><MoveUpIcon /></button>
-                                                        <button
-                                                            onClick={() => moveProposed(appt, 1)}
-                                                            disabled={itemIdx === group.items.length - 1 || isOptimizing}
-                                                            title="Sposta dopo (giù)"
-                                                            className="flex-1 p-0.5 rounded border border-slate-200 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-25 disabled:pointer-events-none flex items-center justify-center"
-                                                        ><MoveDownIcon /></button>
-                                                    </div>
                                                     <button
                                                         onClick={() => handleStatusChange(appt.id, 'confirmed')}
                                                         title="Conferma questa proposta"
@@ -1963,8 +1940,9 @@ function App() {
                         })}
                     </div>
                     <p className="text-[11px] text-slate-400 mt-2">
-                        Con le frecce ↑/↓ sposti un sopralluogo prima o dopo un altro nel giro
-                        (gli orari si ricalcolano). Con "Chiama tutte" (o il tasto 📞 su gruppo/pratica)
+                        Trascina una scheda (tieni premuto il clic) per spostarla prima o dopo
+                        un'altra dello stesso giro: gli orari si ricalcolano subito.
+                        Con "Chiama tutte" (o il tasto 📞 su gruppo/pratica)
                         l'operatore AI chiama i clienti per confermare data e orario proposti, senza
                         bisogno di confermare prima a mano. L'urgenza viene comunicata al cliente.
                     </p>

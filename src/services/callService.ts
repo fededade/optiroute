@@ -121,7 +121,7 @@ export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll>
     const o = data.outcome;
     const followUpDate =
       parseFollowUpDate(`${o.followUpRaw || ''}`) ||
-      ((o.result === 'da_richiamare' || o.result === 'lavori_non_ultimati')
+      ((o.result === 'da_richiamare' || o.result === 'lavori_non_ultimati' || o.result === 'riprogrammare')
         ? parseFollowUpDate(`${o.requestedDate || ''}`)
         : undefined);
 

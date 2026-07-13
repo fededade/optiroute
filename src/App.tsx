@@ -506,6 +506,9 @@ function App() {
         case 'riprogrammare': {
           updated.status = 'pending';
           clearPlanning();
+          // Se la data richiesta è interpretabile diventa "rientro": compare
+          // nell'alert Slot da riservare e lo smistamento non propone prima
+          updated.followUpDate = outcome.followUpDate || a.followUpDate;
           const quando = [outcome.requestedDate, outcome.requestedTime].filter(Boolean).join(' ');
           addNote(quando ? `Da riprogrammare — richiesta cliente: ${quando}` : 'Da riprogrammare (nessuna preferenza indicata)');
           break;
@@ -980,6 +983,12 @@ function App() {
         return { ...a, ...update };
     }));
 
+    // La vista segue la conferma (vedi handleConfirmDay)
+    if (newStatus === 'confirmed') {
+        setCurrentDate(confirmDate);
+        setViewMode('day');
+    }
+
     // On confirmation, propose the AI confirmation call if a phone number exists
     if (newStatus === 'confirmed' && target?.phone && target.callStatus !== 'called') {
         setCallTarget({ ...target, status: 'confirmed', date: confirmDate });
@@ -993,6 +1002,10 @@ function App() {
         ? { ...a, status: 'confirmed' }
         : a
     ));
+    // La vista segue la conferma: senza questo salto le confermate "spariscono"
+    // (vivono sulla loro data mentre la vista resta su oggi)
+    setCurrentDate(date);
+    setViewMode('day');
   };
 
   // Riordino di un giro PROPOSTO (drag & drop): ricalcola gli orari con le
@@ -1270,6 +1283,18 @@ function App() {
     .sort((a: Appointment, b: Appointment) => (a.sequenceOrder||0) - (b.sequenceOrder||0));
   const routeSummary = confirmedForDate.length > 0 ? calculateRouteSummary(confirmedForDate) : null;
 
+  // Giornate (diverse da quella in vista) che hanno appuntamenti confermati:
+  // rende raggiungibili con un clic i giri confermati "fuori vista"
+  const otherConfirmedDays = (() => {
+    const counts = new Map<string, number>();
+    for (const a of allAppointments) {
+      if (a.status !== 'confirmed' || !a.date || !matchesTechFilter(a)) continue;
+      if (viewMode === 'day' && a.date === currentDate) continue;
+      counts.set(a.date, (counts.get(a.date) || 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((x, y) => x[0].localeCompare(y[0]));
+  })();
+
   const listProposed = allAppointments.filter(a => a.status === 'proposed' && matchesTechFilter(a));
   const listPending = allAppointments
     .filter(a => a.status === 'pending' && matchesTechFilter(a))
@@ -1294,9 +1319,13 @@ function App() {
     d.setDate(d.getDate() + 1);
     return d.toISOString().split('T')[0];
   })();
-  const followUpAlerts = allAppointments
-    .filter(a => a.status === 'issue' && a.followUpDate && a.followUpDate <= tomorrowStr)
+  const withFollowUp = allAppointments
+    .filter(a => (a.status === 'issue' || a.status === 'pending') && a.followUpDate)
     .sort((a, b) => (a.followUpDate || '').localeCompare(b.followUpDate || ''));
+  // Scadenze imminenti (entro domani) e rientri/richieste future: entrambe
+  // visibili, così una pratica posticipata "alla data x" non sparisce mai
+  const followUpAlerts = withFollowUp.filter(a => a.followUpDate! <= tomorrowStr);
+  const futureFollowUps = withFollowUp.filter(a => a.followUpDate! > tomorrowStr);
 
   // Gruppi proposte per tecnico+data (ordinati)
   const proposedGroups = (() => {
@@ -1692,33 +1721,57 @@ function App() {
              </label>
            </div>
 
-           {/* Alert slot da riservare: richiami / fine lavori in arrivo */}
-           {followUpAlerts.length > 0 && (
+           {/* Alert slot da riservare: richiami / fine lavori / richieste dei clienti */}
+           {(followUpAlerts.length > 0 || futureFollowUps.length > 0) && (
              <div className="px-3 py-2 bg-amber-50 border-b-2 border-amber-300">
-                <p className="text-xs font-bold text-amber-800 flex items-center gap-1 mb-1">
+                {followUpAlerts.length > 0 && (
+                  <p className="text-xs font-bold text-amber-800 flex items-center gap-1 mb-1">
                     🔔 Slot da riservare ({followUpAlerts.length})
-                </p>
+                  </p>
+                )}
                 <div className="space-y-1 max-h-36 overflow-y-auto">
                   {followUpAlerts.map(a => (
                     <div key={a.id} className="flex items-center justify-between gap-2 text-[11px] text-amber-900 bg-white/70 border border-amber-200 rounded px-2 py-1">
                         <span className="truncate">
                             <b className="capitalize">{formatDayLabel(a.followUpDate)}</b>
                             {a.followUpDate! < todayStr && <b className="text-red-600"> (scaduta)</b>}
-                            {' '}· {ISSUE_META[a.issueType || 'callback'].reentry} · {a.title}
+                            {' '}· {a.status === 'pending' ? 'richiesta cliente' : ISSUE_META[a.issueType || 'callback'].reentry} · {a.title}
                         </span>
-                        <button
-                            onClick={() => handleStatusChange(a.id, 'pending')}
-                            className="shrink-0 font-bold text-white bg-amber-600 hover:bg-amber-700 px-1.5 py-0.5 rounded"
-                            title="Rimetti tra le pratiche da pianificare (lo smistamento non proporrà date precedenti al rientro)"
-                        >
-                            → In attesa
-                        </button>
+                        {a.status === 'issue' && (
+                          <button
+                              onClick={() => handleStatusChange(a.id, 'pending')}
+                              className="shrink-0 font-bold text-white bg-amber-600 hover:bg-amber-700 px-1.5 py-0.5 rounded"
+                              title="Rimetti tra le pratiche da pianificare (lo smistamento non proporrà date precedenti al rientro)"
+                          >
+                              → In attesa
+                          </button>
+                        )}
                     </div>
                   ))}
                 </div>
-                <p className="text-[10px] text-amber-700 mt-1">
+                {followUpAlerts.length > 0 && (
+                  <p className="text-[10px] text-amber-700 mt-1">
                     Tieni slot liberi in quelle date: rimetti le pratiche "In attesa" e pianificale con Smista/Ottimizza insieme alle ordinarie.
-                </p>
+                  </p>
+                )}
+                {futureFollowUps.length > 0 && (
+                  <div className={followUpAlerts.length > 0 ? 'mt-1.5 pt-1.5 border-t border-amber-200' : ''}>
+                    <p className="text-[11px] text-amber-800">
+                      <b>📅 Rientri e richieste future:</b>{' '}
+                      {futureFollowUps.slice(0, 5).map((a, i) => (
+                        <span key={a.id}>
+                          {i > 0 && ' · '}
+                          <b className="capitalize">{formatDayLabel(a.followUpDate)}</b> {a.title}
+                          {a.status === 'pending' ? ' (richiesta cliente)' : ''}
+                        </span>
+                      ))}
+                      {futureFollowUps.length > 5 && ` · e altre ${futureFollowUps.length - 5}`}
+                    </p>
+                    <p className="text-[10px] text-amber-700">
+                      Lo smistamento non proporrà queste pratiche prima della loro data.
+                    </p>
+                  </div>
+                )}
              </div>
            )}
 
@@ -1967,6 +2020,22 @@ function App() {
                             <span className="text-slate-400 font-normal normal-case">{viewMode === 'day' ? 'Giorno' : viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
                         </span>
                     </h3>
+                    {/* Giornate confermate fuori dalla vista corrente: un clic e ci sei */}
+                    {otherConfirmedDays.length > 0 && (
+                        <div className="mb-2 flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500">
+                            <span className="shrink-0">{viewMode === 'day' ? 'Altre giornate:' : 'Giornate:'}</span>
+                            {otherConfirmedDays.map(([day, count]) => (
+                                <button
+                                    key={day}
+                                    onClick={() => { setCurrentDate(day); setViewMode('day'); }}
+                                    title={`Vai al giro ${viewMode === 'day' ? 'confermato ' : ''}del ${formatDayLabel(day)}`}
+                                    className="capitalize font-bold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 px-1.5 py-0.5 rounded"
+                                >
+                                    {formatDayLabel(day)} ({count})
+                                </button>
+                            ))}
+                        </div>
+                    )}
                     {viewMode === 'day' && visibleAppointments.filter(a => a.status === 'confirmed').length > 1 && (
                         <p className="text-[11px] text-slate-400 mb-2 flex items-center gap-1">
                             <ArrowsRightLeftIcon /> Trascina una scheda (tieni premuto il clic) per riordinare il giro: orari e mappa si ricalcolano.

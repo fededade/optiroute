@@ -5,5 +5,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'node',
+    // blocca qualunque richiesta di rete verso servizi veri (vedi tests/setup.ts)
+    setupFiles: ['tests/setup.ts'],
   },
 })

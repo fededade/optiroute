@@ -98,6 +98,7 @@ export interface Appointment {
   // AI call tracking
   callStatus?: CallStatus;
   callId?: string;   // Retell call id
+  callStartedAt?: string; // ISO: quando è partito il lancio della chiamata in corso
   calledAt?: string; // ISO timestamp of last call attempt
   callOutcome?: CallOutcome; // esito della conversazione (arriva col polling)
   callSummary?: string;      // riassunto AI della chiamata (copia comoda per la UI)

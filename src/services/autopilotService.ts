@@ -235,13 +235,15 @@ export const alternativesForCall = (appt: Appointment, all: Appointment[], ctx: 
 export const reduceCallStarted = (
   all: Appointment[],
   id: string,
-  alternatives: AlternativeSlot[]
+  alternatives: AlternativeSlot[],
+  now?: Date // istante di avvio: permette di riconoscere un lancio rimasto a metà
 ): Appointment[] =>
   all.map(a =>
     a.id === id
       ? {
           ...a,
           callStatus: 'calling',
+          callStartedAt: now ? now.toISOString() : undefined,
           // via i riferimenti alla chiamata precedente: il suo esito non deve
           // essere scambiato per quello della chiamata che sta partendo
           callId: undefined,

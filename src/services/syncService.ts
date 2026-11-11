@@ -28,13 +28,15 @@ const SYNC_TARGETS: Record<string, SyncTarget> = {
   },
 };
 
-const getTarget = (): SyncTarget => {
-  const env = (import.meta as any).env?.VITE_SYNC_ENV as string | undefined;
-  return SYNC_TARGETS[env || 'staging'] || SYNC_TARGETS.staging;
-};
+// Ambiente di destinazione: nel browser arriva da VITE_SYNC_ENV (build);
+// il motore lato server lo passa esplicitamente.
+const currentEnv = (override?: string): string =>
+  override || ((import.meta as any).env?.VITE_SYNC_ENV as string | undefined) || 'staging';
 
-export const getSyncEnvName = (): string =>
-  ((import.meta as any).env?.VITE_SYNC_ENV as string) === 'production' ? 'produzione' : 'collaudo';
+const getTarget = (env?: string): SyncTarget => SYNC_TARGETS[currentEnv(env)] || SYNC_TARGETS.staging;
+
+export const getSyncEnvName = (env?: string): string =>
+  currentEnv(env) === 'production' ? 'produzione' : 'collaudo';
 
 // Un sopralluogo è sincronizzabile SOLO se davvero confermato:
 // - è nel giro (confermato, con data e orario calcolati)
@@ -96,10 +98,10 @@ export interface SyncResult {
 // Upsert di ogni sopralluogo confermato in optiroute_sync/{docId}.
 // docId = codice pratica (o id appuntamento se manca), così i re-sync
 // aggiornano lo stesso documento invece di duplicare.
-export const syncConfirmedToGestionale = async (appointments: Appointment[]): Promise<SyncResult> => {
-  const target = getTarget();
+export const syncConfirmedToGestionale = async (appointments: Appointment[], env?: string): Promise<SyncResult> => {
+  const target = getTarget(env);
   const syncable = getSyncableAppointments(appointments);
-  const result: SyncResult = { sent: 0, failed: 0, errors: [], envName: getSyncEnvName() };
+  const result: SyncResult = { sent: 0, failed: 0, errors: [], envName: getSyncEnvName(env) };
 
   for (const appt of syncable) {
     const docId = (appt.periziaCode || `app_${appt.id}`).replace(/[^\w-]/g, '_');

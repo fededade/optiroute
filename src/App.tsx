@@ -5,6 +5,7 @@ import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
 import { syncConfirmedToGestionale, getSyncableAppointments, getSyncEnvName } from './services/syncService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
+import { buildDaySchedule as buildDayScheduleText } from './services/dayScheduleService';
 import { loadAppointments, saveAppointments, appointmentsFromStorageEvent, loadBase, saveBase, loadSettings, saveSettings, loadAutopilotSettings, loadBridgeSettings } from './services/storageService';
 import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, workWindowOn } from './services/technicianService';
 import { fetchCallOutcome, startConfirmationCall } from './services/callService';
@@ -467,7 +468,8 @@ function App() {
   // stessi riduttori: avvio (alternative offerte, esito precedente azzerato:
   // verrà rilevato dal polling) ed esito del lancio.
   const handleCallStarted = (id: string, alternatives: AlternativeSlot[] = []) => {
-    setAllAppointments(prev => startCallReducer(prev, id, alternatives));
+    const now = new Date();
+    setAllAppointments(prev => startCallReducer(prev, id, alternatives, now));
   };
 
   const handleCallResult = (id: string, ok: boolean, callId?: string, error?: string) => {
@@ -600,25 +602,8 @@ function App() {
   // Agenda del giorno per l'agente AI: fasce già impegnate del giro dello
   // stesso tecnico, così al telefono può rispondere onesto sulle richieste
   // di spostamento senza impegnare slot in diretta.
-  const buildDaySchedule = (appt: Appointment): string => {
-    const day = appt.date || currentDate;
-    const tech = techById(appt.technicianId);
-    let windowStart = startTime;
-    let windowEnd = endTimeLimit;
-    if (tech) {
-      const window = workWindowOn(tech, day);
-      if (window) { windowStart = window.start; windowEnd = window.end; }
-    }
-    const impegni = appointmentsRef.current
-      .filter(a =>
-        (a.status === 'confirmed' || a.status === 'proposed') &&
-        a.date === day && a.id !== appt.id && !!a.startTime &&
-        a.technicianId === appt.technicianId)
-      .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0))
-      .map(a => `${a.startTime}-${a.endTime || '?'}${a.comune ? ` (zona ${a.comune})` : ''}`);
-    return `Giornata lavorativa ${windowStart}-${windowEnd}. ` +
-      (impegni.length ? `Fasce già impegnate: ${impegni.join('; ')}.` : 'Nessun altro appuntamento fissato.');
-  };
+  const buildDaySchedule = (appt: Appointment): string =>
+    buildDayScheduleText(appt, appointmentsRef.current, technicians, { start: startTime, end: endTimeLimit }, currentDate);
   const buildDayScheduleRef = useRef(buildDaySchedule);
   buildDayScheduleRef.current = buildDaySchedule;
 
@@ -634,7 +619,8 @@ function App() {
   const performAutoCall = useCallback(async (appt: Appointment): Promise<void> => {
     const current = appointmentsRef.current.find(a => a.id === appt.id) || appt;
     const alternatives = buildAlternatives(current);
-    setAllAppointments(prev => startCallReducer(prev, current.id, alternatives));
+    const startedAt = new Date();
+    setAllAppointments(prev => startCallReducer(prev, current.id, alternatives, startedAt));
     const tech = techniciansRef.current.find(t => t.id === current.technicianId);
     const result = await startConfirmationCall(current, tech?.name, buildDayScheduleRef.current(current), alternatives);
     const now = new Date();

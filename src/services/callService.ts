@@ -1,7 +1,16 @@
 import type { AlternativeLabel, AlternativeSlot, Appointment, CallOutcome } from '../types';
+import { loadCloudSettings } from './cloudSettings';
 
 // Client for the /api/retell-call serverless endpoint (Retell AI outbound call)
 // e per /api/call-status (esito della conversazione via polling).
+
+// Chiave di accesso del cloud (se l'operatore l'ha inserita nelle
+// impostazioni): quando sul server è configurata, le API delle chiamate la
+// richiedono, così nessun altro può far partire telefonate.
+const cloudAuthHeaders = (): Record<string, string> => {
+  const key = loadCloudSettings().key;
+  return key ? { Authorization: `Bearer ${key}` } : {};
+};
 
 export interface CallResult {
   ok: boolean;
@@ -24,7 +33,7 @@ export const startConfirmationCall = async (
   try {
     const response = await fetch('/api/retell-call', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...cloudAuthHeaders() },
       body: JSON.stringify({
         phone: appointment.phone,
         clientName: appointment.title,
@@ -48,6 +57,9 @@ export const startConfirmationCall = async (
 
     const data = await response.json().catch(() => ({}));
 
+    if (response.status === 401) {
+      return { ok: false, error: 'Chiave di accesso mancante o errata: inseriscila nelle impostazioni del pilota (⚙ → Cloud).' };
+    }
     if (!response.ok) {
       return { ok: false, error: data?.error || `Errore server (${response.status})` };
     }
@@ -111,7 +123,9 @@ export const parseFollowUpDate = (raw: string): string | undefined => {
 // massima lo decide il chiamante.
 export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll> => {
   try {
-    const response = await fetch(`/api/call-status?callId=${encodeURIComponent(callId)}`);
+    const response = await fetch(`/api/call-status?callId=${encodeURIComponent(callId)}`, {
+      headers: cloudAuthHeaders(),
+    });
 
     if (!response.ok) {
       return { pending: true, error: `HTTP ${response.status}` };
@@ -122,39 +136,43 @@ export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll>
       return { pending: true };
     }
 
-    const o = data.outcome;
-    // NB: con esito "confermato" (es. alternativa accettata) la data richiesta
-    // NON diventa una data di rientro: resta solo in requestedDate
-    const followUpDate =
-      parseFollowUpDate(`${o.followUpRaw || ''}`) ||
-      ((o.result === 'da_richiamare' || o.result === 'lavori_non_ultimati' || o.result === 'riprogrammare')
-        ? parseFollowUpDate(`${o.requestedDate || ''}`)
-        : undefined);
-
-    // Alternativa accettata in chiamata: solo se è davvero una delle tre etichette
-    const chosenAlternative: AlternativeLabel | undefined =
-      o.chosenAlternative === 'A' || o.chosenAlternative === 'B' || o.chosenAlternative === 'C'
-        ? o.chosenAlternative
-        : undefined;
-
-    const outcome: CallOutcome = {
-      result: o.result || 'sconosciuto',
-      requestedDate: o.requestedDate || undefined,
-      requestedTime: o.requestedTime || undefined,
-      chosenAlternative,
-      followUpDate,
-      clientNotes: o.clientNotes || undefined,
-      newContactName: o.newContactName || undefined,
-      newContactPhone: o.newContactPhone || undefined,
-      newContactRole: o.newContactRole || undefined,
-      summary: o.summary || undefined,
-      sentiment: o.sentiment || undefined,
-      receivedAt: new Date().toISOString(),
-    };
-
-    return { pending: false, outcome };
+    return { pending: false, outcome: toCallOutcome(data.outcome) };
   } catch (error) {
     console.error('Call status polling error:', error);
     return { pending: true, error: 'network' }; // transitorio: si riprova
   }
+};
+
+// Esito normalizzato di /api/call-status -> CallOutcome dell'app (data di
+// rientro interpretata, alternativa scelta validata). Usata dal browser e dal
+// motore lato server.
+export const toCallOutcome = (o: any, now: Date = new Date()): CallOutcome => {
+  // NB: con esito "confermato" (es. alternativa accettata) la data richiesta
+  // NON diventa una data di rientro: resta solo in requestedDate
+  const followUpDate =
+    parseFollowUpDate(`${o.followUpRaw || ''}`) ||
+    ((o.result === 'da_richiamare' || o.result === 'lavori_non_ultimati' || o.result === 'riprogrammare')
+      ? parseFollowUpDate(`${o.requestedDate || ''}`)
+      : undefined);
+
+  // Alternativa accettata in chiamata: solo se è davvero una delle tre etichette
+  const chosenAlternative: AlternativeLabel | undefined =
+    o.chosenAlternative === 'A' || o.chosenAlternative === 'B' || o.chosenAlternative === 'C'
+      ? o.chosenAlternative
+      : undefined;
+
+  return {
+    result: o.result || 'sconosciuto',
+    requestedDate: o.requestedDate || undefined,
+    requestedTime: o.requestedTime || undefined,
+    chosenAlternative,
+    followUpDate,
+    clientNotes: o.clientNotes || undefined,
+    newContactName: o.newContactName || undefined,
+    newContactPhone: o.newContactPhone || undefined,
+    newContactRole: o.newContactRole || undefined,
+    summary: o.summary || undefined,
+    sentiment: o.sentiment || undefined,
+    receivedAt: now.toISOString(),
+  };
 };

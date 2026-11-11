@@ -34,7 +34,6 @@ import { useBridgeInbox, type BridgeImportOutcome } from './hooks/useBridgeInbox
 import { useCloudSync } from './hooks/useCloudSync';
 import { loadCloudSettings, saveCloudSettings, type CloudSettings } from './services/cloudSettings';
 import type { CloudConfig } from './services/cloudProtocol';
-import MapComponent from './Components/MapComponent';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
 import BulkCallModal from './Components/BulkCallModal';
@@ -43,95 +42,26 @@ import DispatchModal from './Components/DispatchModal';
 import KmzImportModal from './Components/KmzImportModal';
 import AutopilotBar from './Components/AutopilotBar';
 import AutopilotSettingsModal from './Components/AutopilotSettingsModal';
-import AttentionPanel from './Components/AttentionPanel';
-import { AutoCallBadge, OfferedAlternatives } from './Components/AutopilotBadges';
+import SideNav, { type NavCounts } from './layout/SideNav';
+import TopBar from './layout/TopBar';
+import MapPanel from './layout/MapPanel';
+import OverviewSection from './layout/sections/OverviewSection';
+import AttentionSection from './layout/sections/AttentionSection';
+import PendingSection from './layout/sections/PendingSection';
+import ProposalsSection from './layout/sections/ProposalsSection';
+import AgendaSection from './layout/sections/AgendaSection';
+import ProblemsSection from './layout/sections/ProblemsSection';
+import ArchiveSection from './layout/sections/ArchiveSection';
+import SettingsSection from './layout/sections/SettingsSection';
+import { useUiPrefs, useViewportWidth } from './layout/useUiPrefs';
+import type { SectionId, Workspace } from './layout/types';
+import { inAgendaRange, longDayLabel, matchesQuery, rangeLabel } from './layout/format';
 
 // --- CONFIGURATION ---
 // URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
 const N8N_WEBHOOK_URL = (import.meta as any).env?.VITE_N8N_WEBHOOK_URL || 'https://fededade.app.n8n.cloud/webhook-test/Suca';
 
-// Icons
-const PlusIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-  </svg>
-);
-const SparklesIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 3.844 18 4.75l-.259-.906a3 3 0 0 0-2.059-2.06L15 1.5l.682.259a3 3 0 0 0 2.059 2.059L18 4.75l.259-.906a3 3 0 0 0 2.06-2.059L21 1.5l-.682.259a3 3 0 0 0-2.059 2.059Z" />
-  </svg>
-);
-const TrashIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-    <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-  </svg>
-);
-const UploadIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
-  </svg>
-);
-const DownloadIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v6m0 0 3-3m-3 3-3-3m3-9a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-  </svg>
-);
-const PaperAirplaneIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
-  </svg>
-);
-const ArrowsRightLeftIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
-    </svg>
-);
-const CoffeeIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5V6a3.75 3.75 0 1 0-7.5 0v4.5m11.356-1.993 1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 0 1-1.12-1.243l1.264-12A1.125 1.125 0 0 1 5.513 7.5h12.974c.576 0 1.059.435 1.119 1.007ZM8.625 10.5a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm7.5 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
-    </svg>
-);
-const PauseIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5" />
-    </svg>
-);
-const ClockIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-    </svg>
-);
-const PhoneIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 0 0 2.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 0 1-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 0 0-1.091-.852H4.5A2.25 2.25 0 0 0 2.25 4.5v2.25Z" />
-    </svg>
-);
-const PencilIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
-    </svg>
-);
-const UsersIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
-    </svg>
-);
-const TruckIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
-    </svg>
-);
-const CheckIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
-    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-  </svg>
-);
-const XMarkIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-  </svg>
-);
+// Icone della finestra di import (le altre sono di lucide-react, nei componenti)
 const CheckCircleIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-12 h-12 text-emerald-500">
     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -142,18 +72,6 @@ const ExclamationCircleIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
   </svg>
 );
-const CogIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-  </svg>
-);
-const ChevronDownIcon = ({ open }: { open: boolean }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className={`w-4 h-4 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-  </svg>
-);
-
 const DEFAULT_CENTER: Coordinates = { lat: 41.9028, lng: 12.4964 }; // Rome
 
 type ViewMode = 'day' | 'week' | 'month';
@@ -1510,93 +1428,312 @@ function App() {
     }
   };
 
-  // Small badge showing the AI call state on a card.
-  // L'esito della conversazione (quando arriva col polling) ha la precedenza.
-  const CallBadge = ({ appt }: { appt: Appointment }) => {
-    const o = appt.callOutcome;
-    const summaryTitle = [o?.summary || appt.callSummary, o?.clientNotes].filter(Boolean).join(' — ') || undefined;
+  // =====================================================================
+  // INTERFACCIA (solo presentazione): sezioni, navigazione, ricerca, mappa.
+  // Stato e gestori qui sopra restano quelli di sempre: le sezioni li
+  // ricevono via props.
+  // =====================================================================
+  const viewportW = useViewportWidth();
+  const [ui, updateUi] = useUiPrefs();
+  const [section, setSection] = useState<SectionId>('panoramica');
+  const [search, setSearch] = useState('');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [navExpandedNarrow, setNavExpandedNarrow] = useState(false);
+  const [mapOpenSmall, setMapOpenSmall] = useState(false);
+  const [resizing, setResizing] = useState(false);
+  const splitRef = useRef<HTMLDivElement>(null);
+  const workRef = useRef<HTMLDivElement>(null);
 
-    if (o) {
-      switch (o.result) {
-        case 'confermato':
-          return <span title={summaryTitle} className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 rounded">✅ Confermato dal cliente</span>;
-        case 'riprogrammare': {
-          const quando = [o.requestedDate, o.requestedTime].filter(Boolean).join(' ');
-          return <span title={summaryTitle} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">🔁 Da riprogrammare{quando ? `: ${quando}` : ''}</span>;
-        }
-        case 'da_richiamare':
-          return <span title={summaryTitle} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">📆 Da richiamare{o.followUpDate ? ` il ${formatDayLabel(o.followUpDate)}` : ''}</span>;
-        case 'numero_errato':
-          return <span title={summaryTitle} className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1 rounded">📵 Numero errato</span>;
-        case 'lavori_non_ultimati':
-          return <span title={summaryTitle} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">🚧 Lavori da ultimare{o.followUpDate ? ` · fine ${formatDayLabel(o.followUpDate)}` : ''}</span>;
-        case 'annullato':
-          return <span title={summaryTitle} className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-300 px-1 rounded">🚫 Annullato dal cliente</span>;
-        case 'rifiutato':
-          return <span title={summaryTitle} className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 rounded">🚫 Rifiutato</span>;
-        case 'altro_referente':
-          return <span title={summaryTitle} className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1 rounded">👤 Da contattare: {[o.newContactName, o.newContactRole].filter(Boolean).join(' · ') || 'altro referente'}</span>;
-        case 'non_risposto':
-          return <span title={summaryTitle} className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1 rounded">📵 Non risponde · da richiamare</span>;
-        default:
-          return <span title={summaryTitle || 'Esito non chiaro: controlla la dashboard Retell'} className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">❓ Esito da verificare</span>;
+  const isMobile = viewportW < 768;          // telefono: navigazione a scomparsa
+  const mapIsOverlay = viewportW < 900;      // mappa nascosta di partenza, si apre sopra l'elenco
+  const navAutoCollapsed = viewportW < 1100; // navigazione ridotta da sola
+  const navCollapsed = isMobile ? false : navAutoCollapsed ? !navExpandedNarrow : ui.navCollapsed;
+  const mapVisible = mapIsOverlay ? mapOpenSmall : !ui.mapHidden;
+  const compactBar = viewportW < 1100;
+  const tightBar = viewportW < 1440;
+
+  const toggleNav = () => {
+    if (navAutoCollapsed) setNavExpandedNarrow(v => !v);
+    else updateUi({ navCollapsed: !ui.navCollapsed });
+  };
+  const toggleMap = () => {
+    if (mapIsOverlay) setMapOpenSmall(v => !v);
+    else updateUi({ mapHidden: !ui.mapHidden });
+  };
+
+  // Livelli della mappa: un default sensato per ogni sezione (stessi stati dei vecchi filtri)
+  const LAYER_PRESETS: Partial<Record<SectionId, typeof filters>> = {
+    'panoramica': { confirmed: true, proposed: true, pending: true, standby: true, issues: true, cancelled: false },
+    'da-gestire': { confirmed: true, proposed: true, pending: true, standby: true, issues: true, cancelled: false },
+    'in-attesa': { confirmed: false, proposed: false, pending: true, standby: false, issues: false, cancelled: false },
+    'proposte': { confirmed: true, proposed: true, pending: false, standby: false, issues: false, cancelled: false },
+    'agenda': { confirmed: true, proposed: false, pending: false, standby: false, issues: false, cancelled: false },
+    'problemi': { confirmed: false, proposed: false, pending: false, standby: false, issues: true, cancelled: false },
+    'archivio': { confirmed: false, proposed: false, pending: false, standby: true, issues: false, cancelled: true },
+  };
+
+  const navigate = (next: SectionId) => {
+    setSection(next);
+    setMobileNavOpen(false);
+    const preset = LAYER_PRESETS[next];
+    if (preset) setFilters(preset);
+    workRef.current?.scrollTo({ top: 0 });
+  };
+
+  const sectionOf = (a: Appointment): SectionId =>
+    a.status === 'confirmed' ? 'agenda'
+      : a.status === 'proposed' ? 'proposte'
+      : a.status === 'pending' ? 'in-attesa'
+      : a.status === 'issue' ? 'problemi'
+      : 'archivio';
+
+  // Porta in vista la scheda di una pratica (dalla mappa o da "Da gestire")
+  const showAppointment = (id: string) => {
+    const appt = allAppointments.find(a => a.id === id);
+    if (!appt) return;
+    if (!document.getElementById(`appt-${id}`)) {
+      const target = sectionOf(appt);
+      if (target !== section) navigate(target);
+      if (appt.status === 'confirmed' && appt.date && !inAgendaRange(appt.date, currentDate, viewMode)) {
+        setCurrentDate(appt.date);
+        setViewMode('day');
       }
+      if (search && !matchesQuery(appt, search)) setSearch('');
     }
-    if (appt.callStatus === 'called') {
-      return awaitingCallOutcome(appt)
-        ? <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 Chiamato · esito in arrivo...</span>
-        : <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1 rounded">✓ Chiamato</span>;
-    }
-    if (appt.callStatus === 'calling') return <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1 rounded animate-pulse">📞 In chiamata...</span>;
-    if (appt.callStatus === 'failed') return <span title={appt.callSummary} className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1 rounded">✗ Chiamata fallita</span>;
-    return null;
+    setSelectedAppointmentId(id);
   };
 
-  const UrgentBadge = ({ appt }: { appt: Appointment }) => {
-    if (!appt.urgent) return null;
-    return <span className="text-[10px] font-bold text-white bg-red-600 px-1.5 rounded">URGENTE</span>;
+  // Divisore trascinabile fra pannello di lavoro e mappa
+  const onDividerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const el = splitRef.current;
+    if (!el) return;
+    setResizing(true);
+    const rect = el.getBoundingClientRect();
+    const move = (ev: PointerEvent) => {
+      const minPanel = 520, minMap = 320;
+      const x = Math.min(Math.max(ev.clientX - rect.left, minPanel), rect.width - minMap);
+      updateUi({ panelPct: Math.round((x / rect.width) * 1000) / 10 });
+    };
+    const up = () => {
+      setResizing(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
   };
 
-  // Codice pratica/perizia (tooltip: progetto/committente)
-  const CodeChip = ({ appt }: { appt: Appointment }) => {
-    if (!appt.periziaCode) return null;
-    return (
-      <span title={appt.project || undefined} className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 border border-slate-200 px-1 rounded">
-        #{appt.periziaCode}
-      </span>
-    );
+  const ws: Workspace = {
+    techById,
+    selectedTechId,
+    selectedAppointmentId,
+    currentDate,
+    viewMode,
+    todayStr,
+    maxAttempts: autopilot.maxAttempts,
+    isOptimizing,
+    dragId,
+    dragOverId,
+    query: search,
+    matches: (a: Appointment) => matchesQuery(a, search),
+    awaitingOutcome: awaitingCallOutcome,
+    onSelect: setSelectedAppointmentId,
+    onEdit: openEditModal,
+    onStatusChange: handleStatusChange,
+    onRemove: handleRemove,
+    onCall: requestCall,
+    onBulkCall: requestBulkCall,
+    onDragStart: handleDragStart,
+    onDragOver: handleDragOverCard,
+    onDrop: handleDropOnCard,
+    onDragEnd: handleDragEnd,
   };
 
-  // Indirizzo non trovato con precisione: pin al centro del comune
-  const ApproxBadge = ({ appt }: { appt: Appointment }) => {
-    if (!appt.approximate) return null;
-    return (
-      <span
-        className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded"
-        title="Indirizzo esatto non trovato sulle mappe: la pratica è posizionata al centro del comune. Correggi l'indirizzo con il tasto Modifica per il punto esatto."
-      >
-        ≈ centro comune
-      </span>
-    );
+  // Elenchi per le sezioni (stesse regole di sempre)
+  const agendaItems = allAppointments.filter(a =>
+    a.status === 'confirmed' && matchesTechFilter(a) && inAgendaRange(a.date, currentDate, viewMode));
+  const confirmedUpcoming = allAppointments.filter(a => a.status === 'confirmed' && !!a.date && a.date >= todayStr && matchesTechFilter(a)).length;
+  const attentionTotal = attention.length + followUpAlerts.length;
+  const navCounts: NavCounts = {
+    daGestire: attentionTotal,
+    inAttesa: listPending.length,
+    proposte: listProposed.length,
+    agenda: confirmedUpcoming,
+    problemi: listIssues.length,
+    archivio: listStandby.length + listCancelled.length,
+  };
+  const layerCounts = {
+    confirmed: allAppointments.filter(a => a.status === 'confirmed' && matchesTechFilter(a)).length,
+    proposed: listProposed.length,
+    pending: listPending.length,
+    standby: listStandby.length,
+    issues: listIssues.length,
+    cancelled: listCancelled.length,
+  };
+  const optimizeLabel = `Ottimizza il giro del ${formatDayLabel(currentDate).replace(/\./g, '')}${selectedTech ? ` · ${selectedTech.name.split(' ')[0]}` : ''}`;
+  const syncHint = `${getSyncableAppointments(allAppointments).length} confermate da inviare · ${getSyncEnvName()}`;
+  const techUnavailable = !!selectedTech && isFullyUnavailable(selectedTech, currentDate);
+  const mapAppointments = search ? visibleAppointments.filter(a => matchesQuery(a, search)) : visibleAppointments;
+
+  const SECTION_TITLES: Record<SectionId, { title: string; subtitle: string }> = {
+    'panoramica': { title: 'Panoramica', subtitle: longDayLabel(todayStr) },
+    'da-gestire': { title: 'Da gestire', subtitle: attentionTotal ? `${attentionTotal} ${attentionTotal === 1 ? 'voce richiede' : 'voci richiedono'} una decisione` : 'Niente in sospeso' },
+    'in-attesa': { title: 'In attesa', subtitle: `${listPending.length} da pianificare` },
+    'proposte': { title: 'Proposte', subtitle: `${listProposed.length} tappe in ${proposedGroups.length} ${proposedGroups.length === 1 ? 'giro' : 'giri'} da approvare` },
+    'agenda': { title: 'Agenda', subtitle: `${agendaItems.length} confermati · ${rangeLabel(currentDate, viewMode)}` },
+    'problemi': { title: 'Problemi', subtitle: `${listIssues.length} pratiche da sistemare` },
+    'archivio': { title: 'Archivio', subtitle: `${listStandby.length} in stand-by · ${listCancelled.length} annullate` },
+    'impostazioni': { title: 'Impostazioni', subtitle: 'Base, orari, pilota e tecnici' },
   };
 
-  const TechBadge = ({ appt }: { appt: Appointment }) => {
-    const tech = techById(appt.technicianId);
-    if (tech) {
-      return (
-        <span className="text-[10px] font-bold text-white px-1.5 rounded inline-flex items-center gap-1" style={{ backgroundColor: tech.color }}>
-          {tech.name}
-        </span>
-      );
+  const renderSection = () => {
+    switch (section) {
+      case 'panoramica':
+        return (
+          <OverviewSection
+            ws={ws}
+            all={allAppointments.filter(matchesTechFilter)}
+            pendingCount={listPending.length}
+            proposedCount={listProposed.length}
+            proposedRoutes={proposedGroups.length}
+            stats={apStats}
+            autopilotOn={autopilot.enabled}
+            attention={attention}
+            attentionTotal={attentionTotal}
+            onNavigate={navigate}
+            onOpenDay={(d) => { setCurrentDate(d); setViewMode('day'); navigate('agenda'); }}
+            onOpenProposals={() => navigate('proposte')}
+            onAttentionSelect={handleAttentionSelect}
+            onAttentionShow={(item) => showAppointment(item.id)}
+            onImportExcel={() => fileInputRef.current?.click()}
+            onImportKmz={() => kmzInputRef.current?.click()}
+            onDispatch={() => setShowDispatchModal(true)}
+            empty={allAppointments.length === 0}
+          />
+        );
+      case 'da-gestire':
+        return (
+          <AttentionSection
+            ws={ws}
+            items={attention}
+            followUpAlerts={followUpAlerts}
+            futureFollowUps={futureFollowUps}
+            onSelect={handleAttentionSelect}
+            onShow={(item) => showAppointment(item.id)}
+            onBackToPending={(id) => handleStatusChange(id, 'pending')}
+            onOpenAppt={openEditModal}
+          />
+        );
+      case 'in-attesa':
+        return (
+          <PendingSection
+            ws={ws}
+            items={listPending}
+            pendingAll={pendingAll.length}
+            addressInput={addressInput}
+            onAddressInput={setAddressInput}
+            onAddAddress={handleAddAddress}
+            isLoading={isLoading}
+            onDispatch={() => setShowDispatchModal(true)}
+            onImportExcel={() => fileInputRef.current?.click()}
+            onNewPratica={openNewApptModal}
+          />
+        );
+      case 'proposte':
+        return (
+          <ProposalsSection
+            ws={ws}
+            items={listProposed}
+            groups={proposedGroups}
+            autopilotOn={autopilot.enabled}
+            queuedCount={queuedIds.length}
+            approvableIds={approvableIds}
+            onApproveAndCall={handleApproveAndCall}
+            onCancelQueued={handleCancelQueuedCalls}
+            onConfirmDay={handleConfirmDay}
+            pendingCount={pendingAll.length}
+            onDispatch={() => setShowDispatchModal(true)}
+          />
+        );
+      case 'agenda':
+        return (
+          <AgendaSection
+            ws={ws}
+            items={agendaItems}
+            otherDays={otherConfirmedDays}
+            onGoDay={(day) => { setCurrentDate(day); setViewMode('day'); }}
+            onOptimize={handleOptimize}
+            optimizeLabel={optimizeLabel}
+            canDragReorder={canDragReorder}
+            routeSummary={viewMode === 'day' ? routeSummary : null}
+            selectedTech={selectedTech}
+            techUnavailable={techUnavailable}
+            onOpenProposals={() => navigate('proposte')}
+            proposedCount={listProposed.length}
+          />
+        );
+      case 'problemi':
+        return <ProblemsSection ws={ws} items={listIssues} />;
+      case 'archivio':
+        return <ArchiveSection ws={ws} standby={listStandby} cancelled={listCancelled} />;
+      case 'impostazioni':
+        return (
+          <SettingsSection
+            baseLocation={baseLocation}
+            baseInput={baseInput}
+            onBaseInput={setBaseInput}
+            onSetBase={handleSetBase}
+            onClearBase={() => setBaseLocation(null)}
+            isLoading={isLoading}
+            startTime={startTime}
+            endTimeLimit={endTimeLimit}
+            onStartTime={setStartTime}
+            onEndTime={setEndTimeLimit}
+            autopilotOn={autopilot.enabled}
+            bridgeOn={bridgeSettings.enabled}
+            cloudOn={cloudActive}
+            onOpenAutopilotSettings={() => setShowAutopilotSettings(true)}
+            technicians={technicians}
+            onOpenTech={(id) => openTechModal(id ?? null)}
+            onSyncGestionale={() => handleSyncGestionale(false)}
+            isSyncing={isSyncing}
+            syncHint={syncHint}
+            lastSyncInfo={lastSyncInfo}
+          />
+        );
     }
-    if (appt.status === 'pending') {
-      return <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">Da assegnare</span>;
-    }
-    return null;
   };
+
+  const mapPanel = (
+    <MapPanel
+      appointments={mapAppointments}
+      center={mapCenter}
+      routeSummary={viewMode === 'day' ? routeSummary : null}
+      baseLocation={baseLocation}
+      technicians={technicians}
+      selectedId={selectedAppointmentId}
+      onSelectAppointment={showAppointment}
+      onStatusChange={handleStatusChange}
+      onRequestCall={(id) => {
+        const appt = allAppointments.find(a => a.id === id);
+        if (appt) requestCall(appt);
+      }}
+      layers={filters}
+      layerCounts={layerCounts}
+      onToggleLayer={(key, value) => setFilters(p => ({ ...p, [key]: value }))}
+      currentDate={currentDate}
+      viewMode={viewMode}
+      selectedTech={selectedTech}
+      onHide={toggleMap}
+      overlay={mapIsOverlay}
+    />
+  );
+
+  const titles = SECTION_TITLES[section];
 
   return (
-    <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-canvas">
       {/* --- ADD/EDIT APPOINTMENT MODAL --- */}
       {showApptModal && (
         <AppointmentModal
@@ -1761,815 +1898,124 @@ function App() {
         </div>
       )}
 
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex flex-col sm:flex-row items-center justify-between shadow-sm z-10 gap-4">
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          {/* LOGO UPDATE */}
-          <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg shadow-sm border border-slate-100 bg-slate-900 flex items-center justify-center">
-             <img src="/Logo.png" alt="Logo Aziendale" className="h-full w-full object-cover" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-800">OptiRoute</h1>
-            <p className="text-xs text-slate-500 hidden sm:block">Gestione Sopralluoghi Multi-Tecnico</p>
-          </div>
-        </div>
+      {/* File nascosti per gli import (Importa ▾) */}
+      <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".xlsx,.csv" className="hidden" />
+      <input type="file" ref={kmzInputRef} onChange={handleKmzSelect} accept=".kmz,.kml" className="hidden" />
 
-        <div className="flex flex-col sm:flex-row items-center gap-3">
-          {/* Technicians Manager */}
-          <button
-            onClick={() => openTechModal()}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-colors"
+      {/* --- NAVIGAZIONE --- */}
+      <SideNav
+        section={section}
+        counts={navCounts}
+        collapsed={navCollapsed}
+        mobile={isMobile}
+        mobileOpen={mobileNavOpen}
+        onNavigate={navigate}
+        onOpenTechnicians={() => { setMobileNavOpen(false); openTechModal(); }}
+        onToggleCollapsed={toggleNav}
+        onCloseMobile={() => setMobileNavOpen(false)}
+      />
+
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* --- BARRA IN ALTO --- */}
+        <TopBar
+          title={titles.title}
+          subtitle={titles.subtitle}
+          isAgenda={section === 'agenda'}
+          compact={compactBar}
+          tight={tightBar}
+          mobile={isMobile}
+          onOpenNav={() => setMobileNavOpen(true)}
+          search={search}
+          onSearch={setSearch}
+          technicians={technicians.filter(t => t.active)}
+          selectedTechId={selectedTechId}
+          onSelectTech={setSelectedTechId}
+          countForTech={countForTech}
+          totalCount={allAppointments.filter(a => a.status === 'pending' || a.status === 'proposed' || (a.status === 'confirmed' && !!a.date && a.date >= todayStr)).length}
+          techUnavailable={techUnavailable}
+          onOpenTech={(id) => openTechModal(id ?? null)}
+          onNewPratica={openNewApptModal}
+          onImportExcel={() => fileInputRef.current?.click()}
+          onImportKmz={() => kmzInputRef.current?.click()}
+          bridge={{
+            show: tabLock === 'leader' && bridgeInbox.status.kind !== 'disabled' && bridgeInbox.status.kind !== 'unconfigured',
+            busy: bridgeInbox.status.kind === 'checking',
+            onSync: () => { void bridgeInbox.syncNow(); },
+          }}
+          pendingCount={pendingAll.length}
+          onDispatch={() => setShowDispatchModal(true)}
+          optimizeLabel={optimizeLabel}
+          isOptimizing={isOptimizing}
+          onOptimize={handleOptimize}
+          onExport={handleExport}
+          onSendReport={handleSendToN8n}
+          isSending={isSendingToN8n}
+          onSyncGestionale={() => handleSyncGestionale(false)}
+          isSyncing={isSyncing}
+          syncHint={syncHint}
+          lastSyncInfo={lastSyncInfo}
+          currentDate={currentDate}
+          onDateChange={setCurrentDate}
+          viewMode={viewMode}
+          onViewMode={setViewMode}
+          mapVisible={mapVisible}
+          onToggleMap={toggleMap}
+        />
+
+        {/* --- STRISCIA DEL PILOTA --- */}
+        <AutopilotBar
+          settings={autopilot}
+          stats={apStats}
+          lock={tabLock === 'pending' ? 'leader' : tabLock}
+          introSeen={autopilotIntroSeen}
+          autoDispatchRunning={autoDispatch.running}
+          bridge={bridgeInbox.status}
+          onEnable={enableAutopilot}
+          onPause={() => setAutopilot(s => ({ ...s, enabled: false }))}
+          onOpenSettings={() => setShowAutopilotSettings(true)}
+          onBridgeSyncNow={() => { void bridgeInbox.syncNow(); }}
+          cloud={cloudActive ? { mirror: !isAutomationTab, state: cloudSync.state, leaseHolder: cloudLeaseHolder } : null}
+        />
+
+        {/* --- PANNELLO DI LAVORO + MAPPA --- */}
+        <div ref={splitRef} className={`flex-1 min-h-0 flex ${resizing ? 'select-none cursor-col-resize' : ''}`}>
+          <main
+            ref={workRef}
+            className="work-panel min-w-0 overflow-y-auto overflow-x-hidden"
+            style={mapVisible && !mapIsOverlay ? { width: `${ui.panelPct}%`, minWidth: 520, flex: 'none' } : { flex: '1 1 0%' }}
           >
-            <UsersIcon /> Tecnici
-          </button>
-
-          {/* Date & View Selector */}
-          <div className="flex flex-col sm:flex-row items-center gap-3 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
-            <div className="flex gap-1">
-                <button
-                    onClick={() => setViewMode('day')}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${viewMode === 'day' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
-                >
-                    Giorno
-                </button>
-                <button
-                    onClick={() => setViewMode('week')}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${viewMode === 'week' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
-                >
-                    Settimana
-                </button>
-                <button
-                    onClick={() => setViewMode('month')}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${viewMode === 'month' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-indigo-500'}`}
-                >
-                    Mese
-                </button>
-            </div>
-            <div className="h-4 w-px bg-slate-300 hidden sm:block"></div>
-            <div className="flex items-center gap-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase hidden md:block">Data Rif:</label>
-                <input
-                    type="date"
-                    value={currentDate}
-                    onChange={(e) => setCurrentDate(e.target.value)}
-                    className="px-2 py-1 bg-white border border-slate-200 rounded-md text-sm font-semibold focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700"
-                />
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
-
-        {/* Sidebar */}
-        <aside className="w-full md:w-96 bg-white z-20 flex flex-col border-r border-slate-200 shadow-xl md:shadow-none">
-
-           {/* Technician selector */}
-           <div className="p-2 bg-white border-b border-slate-200 flex gap-1.5 overflow-x-auto items-center">
-             <button
-                onClick={() => setSelectedTechId(ALL_TECH)}
-                className={`px-2.5 py-1 rounded-full text-xs font-bold border whitespace-nowrap transition-colors ${selectedTechId === ALL_TECH ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
-             >
-                Tutti
-             </button>
-             {technicians.filter(t => t.active).map(tech => (
-                <button
-                    key={tech.id}
-                    onClick={() => setSelectedTechId(tech.id)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-bold border whitespace-nowrap flex items-center gap-1.5 transition-colors ${selectedTechId === tech.id ? 'text-white' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
-                    style={selectedTechId === tech.id ? { backgroundColor: tech.color, borderColor: tech.color } : undefined}
-                >
-                    <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: selectedTechId === tech.id ? 'white' : tech.color }}></span>
-                    {tech.name.split(' ')[0]} ({countForTech(tech.id)})
-                </button>
-             ))}
-             <button
-                onClick={() => openTechModal()}
-                title="Gestisci tecnici"
-                className="px-2 py-1 rounded-full text-xs font-bold border border-dashed border-slate-300 text-slate-400 hover:text-indigo-600 hover:border-indigo-300 whitespace-nowrap"
-             >
-                +
-             </button>
-           </div>
-
-           {/* Selected technician info */}
-           {selectedTech && (
-             <div className="px-3 py-2 border-b border-slate-200 text-xs" style={{ backgroundColor: `${selectedTech.color}14` }}>
-                <div className="flex items-center justify-between gap-2">
-                    <span className="text-slate-600 truncate">
-                        🏠 <b>{selectedTech.baseAddress ? selectedTech.baseAddress.split(',')[0] : 'Base generale'}</b>
-                        {' '}· partenza <b>{selectedTech.workStart}</b> · fine <b>{selectedTech.workEnd}</b>
-                    </span>
-                    <button
-                        onClick={() => openTechModal(selectedTech.id)}
-                        className="font-bold shrink-0 hover:underline"
-                        style={{ color: selectedTech.color }}
-                    >
-                        Apri scheda →
-                    </button>
-                </div>
-                {isFullyUnavailable(selectedTech, currentDate) && (
-                    <p className="mt-1 text-red-600 font-bold">🚫 Non disponibile il {formatDayLabel(currentDate)}</p>
-                )}
-             </div>
-           )}
-
-           {/* Filters Bar */}
-           <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between gap-1 overflow-x-auto">
-             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-50 text-blue-800 border border-blue-100 cursor-pointer whitespace-nowrap">
-                <input type="checkbox" checked={filters.confirmed} onChange={e => setFilters(p => ({...p, confirmed: e.target.checked}))} className="rounded text-blue-600 focus:ring-0" />
-                Confermate ({allAppointments.filter(a => a.status === 'confirmed' && matchesTechFilter(a)).length})
-             </label>
-             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-800 border border-indigo-100 cursor-pointer whitespace-nowrap">
-                <input type="checkbox" checked={filters.proposed} onChange={e => setFilters(p => ({...p, proposed: e.target.checked}))} className="rounded text-indigo-600 focus:ring-0" />
-                Proposte ({listProposed.length})
-             </label>
-             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-orange-50 text-orange-800 border border-orange-100 cursor-pointer whitespace-nowrap">
-                <input type="checkbox" checked={filters.pending} onChange={e => setFilters(p => ({...p, pending: e.target.checked}))} className="rounded text-orange-600 focus:ring-0" />
-                In Attesa ({listPending.length})
-             </label>
-             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 border border-gray-200 cursor-pointer whitespace-nowrap">
-                <input type="checkbox" checked={filters.standby} onChange={e => setFilters(p => ({...p, standby: e.target.checked}))} className="rounded text-gray-500 focus:ring-0" />
-                Stand-by ({listStandby.length})
-             </label>
-             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-rose-50 text-rose-800 border border-rose-100 cursor-pointer whitespace-nowrap">
-                <input type="checkbox" checked={filters.issues} onChange={e => setFilters(p => ({...p, issues: e.target.checked}))} className="rounded text-rose-600 focus:ring-0" />
-                Problematiche ({listIssues.length})
-             </label>
-             <label className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-slate-100 text-slate-500 border border-slate-200 cursor-pointer whitespace-nowrap">
-                <input type="checkbox" checked={filters.cancelled} onChange={e => setFilters(p => ({...p, cancelled: e.target.checked}))} className="rounded text-slate-400 focus:ring-0" />
-                Annullate ({listCancelled.length})
-             </label>
-           </div>
-
-           {/* Alert slot da riservare: richiami / fine lavori / richieste dei clienti */}
-           {(followUpAlerts.length > 0 || futureFollowUps.length > 0) && (
-             <div className="px-3 py-2 bg-amber-50 border-b-2 border-amber-300">
-                {followUpAlerts.length > 0 && (
-                  <p className="text-xs font-bold text-amber-800 flex items-center gap-1 mb-1">
-                    🔔 Slot da riservare ({followUpAlerts.length})
-                  </p>
-                )}
-                <div className="space-y-1 max-h-36 overflow-y-auto">
-                  {followUpAlerts.map(a => (
-                    <div key={a.id} className="flex items-center justify-between gap-2 text-[11px] text-amber-900 bg-white/70 border border-amber-200 rounded px-2 py-1">
-                        <span className="truncate">
-                            <b className="capitalize">{formatDayLabel(a.followUpDate)}</b>
-                            {a.followUpDate! < todayStr && <b className="text-red-600"> (scaduta)</b>}
-                            {' '}· {a.status === 'pending' ? 'richiesta cliente' : ISSUE_META[a.issueType || 'callback'].reentry} · {a.title}
-                        </span>
-                        {a.status === 'issue' && (
-                          <button
-                              onClick={() => handleStatusChange(a.id, 'pending')}
-                              className="shrink-0 font-bold text-white bg-amber-600 hover:bg-amber-700 px-1.5 py-0.5 rounded"
-                              title="Rimetti tra le pratiche da pianificare (lo smistamento non proporrà date precedenti al rientro)"
-                          >
-                              → In attesa
-                          </button>
-                        )}
-                    </div>
-                  ))}
-                </div>
-                {followUpAlerts.length > 0 && (
-                  <p className="text-[10px] text-amber-700 mt-1">
-                    Tieni slot liberi in quelle date: rimetti le pratiche "In attesa" e pianificale con Smista/Ottimizza insieme alle ordinarie.
-                  </p>
-                )}
-                {futureFollowUps.length > 0 && (
-                  <div className={followUpAlerts.length > 0 ? 'mt-1.5 pt-1.5 border-t border-amber-200' : ''}>
-                    <p className="text-[11px] text-amber-800">
-                      <b>📅 Rientri e richieste future:</b>{' '}
-                      {futureFollowUps.slice(0, 5).map((a, i) => (
-                        <span key={a.id}>
-                          {i > 0 && ' · '}
-                          <b className="capitalize">{formatDayLabel(a.followUpDate)}</b> {a.title}
-                          {a.status === 'pending' ? ' (richiesta cliente)' : ''}
-                        </span>
-                      ))}
-                      {futureFollowUps.length > 5 && ` · e altre ${futureFollowUps.length - 5}`}
-                    </p>
-                    <p className="text-[10px] text-amber-700">
-                      Lo smistamento non proporrà queste pratiche prima della loro data.
-                    </p>
-                  </div>
-                )}
-             </div>
-           )}
-
-          {/* Pilota automatico: sempre visibile, fuori dal pannello richiudibile */}
-          <AutopilotBar
-            settings={autopilot}
-            stats={apStats}
-            lock={tabLock === 'pending' ? 'leader' : tabLock}
-            introSeen={autopilotIntroSeen}
-            autoDispatchRunning={autoDispatch.running}
-            bridge={bridgeInbox.status}
-            onEnable={enableAutopilot}
-            onPause={() => setAutopilot(s => ({ ...s, enabled: false }))}
-            onOpenSettings={() => setShowAutopilotSettings(true)}
-            onBridgeSyncNow={() => { void bridgeInbox.syncNow(); }}
-            cloud={cloudActive ? { mirror: !isAutomationTab, state: cloudSync.state, leaseHolder: cloudLeaseHolder } : null}
-          />
-
-          {/* Toggle Impostazioni e azioni: click per chiudere/riaprire e liberare spazio per l'elenco */}
-          <button
-            onClick={toggleSettingsPanel}
-            className="w-full px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-xs font-bold text-slate-600 uppercase tracking-wider hover:bg-slate-200 transition-colors shrink-0"
-            title={settingsOpen ? 'Nascondi impostazioni e azioni' : 'Mostra impostazioni e azioni'}
-          >
-            <span className="flex items-center gap-1.5">
-              <CogIcon /> Impostazioni e azioni
-            </span>
-            <span className="flex items-center gap-1.5 normal-case font-normal text-slate-400">
-              {!settingsOpen && <span className="hidden sm:inline">clicca per riaprire</span>}
-              <ChevronDownIcon open={settingsOpen} />
-            </span>
-          </button>
-
-          {settingsOpen && (
-          <>
-          {/* Config & Add */}
-          <div className="p-4 bg-slate-100 border-b border-slate-200 space-y-3">
-            {/* Base */}
-            {!baseLocation ? (
-                <form onSubmit={handleSetBase} className="flex gap-2">
-                  <input type="text" value={baseInput} onChange={e => setBaseInput(e.target.value)} placeholder="Imposta Base Generale..." className="flex-1 px-3 py-1.5 rounded-lg border text-sm" />
-                  <button type="submit" className="bg-red-500 text-white px-3 rounded-lg text-xs font-bold">SET</button>
-                </form>
-            ) : (
-                <div className="flex items-center justify-between text-xs bg-white p-2 rounded border border-red-200">
-                    <span className="truncate flex-1 text-slate-700">🏠 Base Generale: <b>{baseLocation.address.split(',')[0]}</b></span>
-                    <button onClick={() => setBaseLocation(null)} className="text-red-500 ml-2"><TrashIcon /></button>
-                </div>
-            )}
-
-            {/* Add */}
-            <form onSubmit={handleAddAddress} className="flex gap-2">
-              <input type="text" value={addressInput} onChange={e => setAddressInput(e.target.value)} placeholder="Aggiunta rapida (solo indirizzo)..." className="flex-1 px-3 py-2 rounded-lg border text-sm" />
-              <button disabled={isLoading} title="Aggiungi da indirizzo" className="bg-indigo-600 text-white px-3 rounded-lg disabled:opacity-60">
-                {isLoading ? <span className="block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"></span> : <PlusIcon />}
-              </button>
-            </form>
-            <button
-              onClick={openNewApptModal}
-              className="w-full text-xs py-1.5 rounded-lg border border-indigo-200 bg-white text-indigo-600 font-bold hover:bg-indigo-50 transition-colors flex items-center justify-center gap-1"
+            <div
+              data-testid={`section-${section}`}
+              className={`px-4 md:px-5 py-5 ${!mapVisible || mapIsOverlay ? 'max-w-[1100px] mx-auto' : ''}`}
             >
-              <PlusIcon /> Nuovo completo (cliente, telefono, urgenza)
-            </button>
-
-            {/* Time Limits (usati per "Tutti"; ogni tecnico ha i suoi orari nella scheda) */}
-            {!selectedTech && (
-              <div className="flex gap-2 text-xs">
-                  <div className="flex-1">
-                      <span className="block text-slate-400 font-bold mb-0.5">INIZIO</span>
-                      <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-1 rounded border"/>
-                  </div>
-                  <div className="flex-1">
-                      <span className="block text-slate-400 font-bold mb-0.5">FINE</span>
-                      <input type="time" value={endTimeLimit} onChange={e => setEndTimeLimit(e.target.value)} className="w-full p-1 rounded border"/>
-                  </div>
-              </div>
-            )}
-          </div>
-
-          {/* Controls */}
-          <div className="p-2 grid grid-cols-2 gap-2 bg-white border-b border-slate-100">
-             <button
-                onClick={() => setShowDispatchModal(true)}
-                disabled={pendingAll.length === 0}
-                className="col-span-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2"
-             >
-                <TruckIcon /> Smista pratiche per zona ({pendingAll.length})
-             </button>
-             <button onClick={handleOptimize} className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
-                {isOptimizing ? "Calcolo..." : <><SparklesIcon /> Ottimizza {currentDate}{selectedTech ? ` · ${selectedTech.name.split(' ')[0]}` : ''}</>}
-             </button>
-              <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".xlsx,.csv" className="hidden" />
-              <input type="file" ref={kmzInputRef} onChange={handleKmzSelect} accept=".kmz,.kml" className="hidden" />
-
-              <div className="col-span-2 grid grid-cols-2 gap-2">
-                  <button onClick={() => fileInputRef.current?.click()} className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-slate-600 bg-white hover:bg-slate-50">
-                      <UploadIcon /> Importa Excel
-                  </button>
-                  <button
-                    onClick={() => kmzInputRef.current?.click()}
-                    title="Importa la mappa di Google My Maps (KMZ/KML) con tutti i livelli"
-                    className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100"
-                  >
-                      <UploadIcon /> Importa Maps
-                  </button>
-                  <button onClick={handleExport} className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-indigo-600 border-indigo-200 bg-indigo-50 hover:bg-indigo-100">
-                      <DownloadIcon /> Esporta Excel
-                  </button>
-                  <button
-                    onClick={handleSendToN8n}
-                    disabled={isSendingToN8n}
-                    className="text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-white bg-slate-800 hover:bg-slate-900 border-slate-900 transition-colors"
-                  >
-                     {isSendingToN8n ? 'Invio...' : <><PaperAirplaneIcon /> Invia Report</>}
-                  </button>
-              </div>
-
-              {/* Sync verso il gestionale Effetre (anche automatica, ogni ora) */}
-              <button
-                onClick={() => handleSyncGestionale(false)}
-                disabled={isSyncing}
-                title="Invia al gestionale i sopralluoghi confermati (dal cliente o senza telefono) con orario calcolato"
-                className="w-full mt-2 text-xs py-1.5 border rounded flex items-center justify-center gap-1 text-sky-700 border-sky-200 bg-sky-50 hover:bg-sky-100 disabled:opacity-60"
-              >
-                {isSyncing ? 'Sync in corso...' : `🔄 Sync gestionale (${getSyncableAppointments(allAppointments).length} confermate — ${getSyncEnvName()})`}
-              </button>
-              {lastSyncInfo && (
-                <p className="text-[10px] text-slate-400 text-center mt-1">Ultima sync {lastSyncInfo}</p>
-              )}
-          </div>
-          </>
-          )}
-
-          {/* List Content */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white">
-
-            {/* 0. Da gestire: le eccezioni che il pilota non risolve da solo */}
-            <AttentionPanel
-              items={attention}
-              open={attentionOpen}
-              onToggle={() => setAttentionOpen(o => !o)}
-              onSelect={handleAttentionSelect}
-            />
-
-            {/* 1. Proposed (da confermare) */}
-            {filters.proposed && listProposed.length > 0 && (
-                <div>
-                    <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 border-b border-indigo-100 pb-1 flex justify-between items-center gap-2">
-                        <span>Proposte da confermare ({listProposed.length})</span>
-                        {listProposed.some(a => a.phone) && (
-                            <button
-                                onClick={() => requestBulkCall(listProposed)}
-                                title="Avvia la chiamata AI di conferma per tutte le proposte con telefono"
-                                className="normal-case tracking-normal text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1 shrink-0"
-                            >
-                                <PhoneIcon /> Chiama tutte
-                            </button>
-                        )}
-                    </h3>
-                    {autopilot.enabled && (approvableIds(listProposed).length > 0 || queuedIds.length > 0) && (
-                        <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                            {approvableIds(listProposed).length > 0 && (
-                                <button
-                                    onClick={() => handleApproveAndCall(listProposed.map(a => a.id))}
-                                    title="Approva tutti i giri proposti: il pilota automatico chiamerà i clienti nella fascia oraria"
-                                    className="text-[11px] font-bold text-white bg-violet-600 hover:bg-violet-700 px-2 py-1 rounded"
-                                >
-                                    ✅ Approva e chiama tutti i giri
-                                </button>
-                            )}
-                            {queuedIds.length > 0 && (
-                                <button
-                                    onClick={handleCancelQueuedCalls}
-                                    title="Toglie dalla coda del pilota le chiamate non ancora partite"
-                                    className="text-[11px] font-bold text-violet-700 bg-white border border-violet-300 hover:bg-violet-50 px-2 py-1 rounded"
-                                >
-                                    Annulla chiamate in coda ({queuedIds.length})
-                                </button>
-                            )}
-                        </div>
-                    )}
-                    <div className="space-y-3">
-                        {proposedGroups.map(group => {
-                            const tech = techById(group.techId);
-                            return (
-                                <div key={`${group.techId || 'none'}-${group.date}`} className="border border-indigo-100 rounded-lg overflow-hidden">
-                                    <div className="px-2.5 py-1.5 flex items-center justify-between gap-2" style={{ backgroundColor: tech ? `${tech.color}18` : '#eef2ff' }}>
-                                        <span className="text-xs font-bold capitalize" style={{ color: tech?.color || '#4f46e5' }}>
-                                            {tech ? tech.name : 'Senza tecnico'} — {formatDayLabel(group.date)}
-                                        </span>
-                                        <div className="flex items-center gap-1 shrink-0">
-                                            {group.items.some(a => a.phone) && (
-                                                <button
-                                                    onClick={() => requestBulkCall(group.items)}
-                                                    className="text-[10px] font-bold text-emerald-700 bg-white/80 border border-emerald-200 hover:bg-emerald-50 px-1.5 py-0.5 rounded flex items-center"
-                                                    title="Chiama tutte le proposte di questa giornata (AI)"
-                                                >
-                                                    <PhoneIcon />
-                                                </button>
-                                            )}
-                                            <button
-                                                onClick={() => handleConfirmDay(group.techId, group.date)}
-                                                className="text-[10px] font-bold text-white px-2 py-0.5 rounded"
-                                                style={{ backgroundColor: tech?.color || '#4f46e5' }}
-                                                title="Conferma tutte le proposte di questa giornata"
-                                            >
-                                                ✓ Conferma giornata
-                                            </button>
-                                        </div>
-                                    </div>
-                                    {autopilot.enabled && approvableIds(group.items).length > 0 && (
-                                        <div className="px-2.5 py-1 bg-violet-50 border-b border-violet-100 flex items-center justify-between gap-2">
-                                            <span className="text-[10px] text-violet-700">
-                                                {approvableIds(group.items).length} {approvableIds(group.items).length === 1 ? 'cliente da chiamare' : 'clienti da chiamare'} per confermare il giro
-                                            </span>
-                                            <button
-                                                onClick={() => handleApproveAndCall(group.items.map(a => a.id))}
-                                                className="text-[10px] font-bold text-white bg-violet-600 hover:bg-violet-700 px-1.5 py-0.5 rounded shrink-0"
-                                                title="Approva il giro: il pilota automatico chiamerà i clienti uno dopo l'altro"
-                                            >
-                                                ✅ Approva e chiama
-                                            </button>
-                                        </div>
-                                    )}
-                                    <div className="divide-y divide-slate-100">
-                                        {group.items.map(appt => (
-                                            <div
-                                                key={appt.id}
-                                                id={`appt-${appt.id}`}
-                                                draggable={!isOptimizing}
-                                                onDragStart={(e) => handleDragStart(e, appt.id)}
-                                                onDragOver={(e) => handleDragOverCard(e, appt.id)}
-                                                onDrop={(e) => handleDropOnCard(e, appt.id)}
-                                                onDragEnd={handleDragEnd}
-                                                className={`p-2.5 bg-white flex justify-between items-start gap-2 transition-all ${!isOptimizing ? 'cursor-grab active:cursor-grabbing' : ''} ${dragId === appt.id ? 'opacity-40' : ''} ${dragOverId === appt.id ? 'ring-2 ring-indigo-500' : selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-400' : ''}`}
-                                            >
-                                                <div className="min-w-0">
-                                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                                        <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-50 px-1 rounded shrink-0">
-                                                            {appt.startTime}
-                                                        </span>
-                                                        <UrgentBadge appt={appt} />
-                                                        <h4 className="text-sm font-semibold text-slate-800 leading-tight truncate">{appt.title}</h4>
-                                                    </div>
-                                                    <p className="text-xs text-slate-400 truncate">{appt.address}</p>
-                                                    <div className="mt-0.5 flex gap-1.5 items-center flex-wrap">
-                                                        {appt.phone && <span className="text-[11px] text-slate-400">📞 {appt.phone}</span>}
-                                                        <CodeChip appt={appt} />
-                                                        <ApproxBadge appt={appt} />
-                                                        <CallBadge appt={appt} />
-                                                        <AutoCallBadge appt={appt} maxAttempts={autopilot.maxAttempts} />
-                                                        <OfferedAlternatives appt={appt} />
-                                                    </div>
-                                                </div>
-                                                <div className="flex flex-col gap-1 shrink-0">
-                                                    <button
-                                                        onClick={() => handleStatusChange(appt.id, 'confirmed')}
-                                                        title="Conferma questa proposta"
-                                                        className="p-1 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200"
-                                                    ><CheckIcon /></button>
-                                                    {appt.phone && appt.callStatus !== 'calling' && (
-                                                        <button
-                                                            onClick={() => requestCall(appt)}
-                                                            title="Chiama il cliente per conferma (AI)"
-                                                            className={`p-1 rounded ${appt.callStatus === 'called' ? 'text-emerald-500 hover:bg-emerald-50' : 'text-emerald-600 hover:bg-emerald-100 bg-emerald-50'}`}
-                                                        ><PhoneIcon /></button>
-                                                    )}
-                                                    <button
-                                                        onClick={() => handleStatusChange(appt.id, 'pending')}
-                                                        title="Rifiuta: torna in attesa"
-                                                        className="p-1 rounded bg-white text-slate-400 hover:bg-red-50 hover:text-red-500 border border-slate-200"
-                                                    ><XMarkIcon /></button>
-                                                    <button onClick={() => openEditModal(appt)} title="Modifica" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                    <p className="text-[11px] text-slate-400 mt-2">
-                        Trascina una scheda (tieni premuto il clic) per spostarla prima o dopo
-                        un'altra dello stesso giro: gli orari si ricalcolano subito.
-                        Con "Chiama tutte" (o il tasto 📞 su gruppo/pratica)
-                        l'operatore AI chiama i clienti per confermare data e orario proposti, senza
-                        bisogno di confermare prima a mano. L'urgenza viene comunicata al cliente.
-                    </p>
-                </div>
-            )}
-
-            {/* 2. Confirmed */}
-            {filters.confirmed && (
-                <div>
-                    <h3 className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2 border-b border-blue-100 pb-1 flex justify-between items-center gap-2">
-                        <span>Confermate ({visibleAppointments.filter(a => a.status === 'confirmed').length})</span>
-                        <span className="flex items-center gap-2 shrink-0">
-                            {visibleAppointments.some(a => a.status === 'confirmed' && a.phone) && (
-                                <button
-                                    onClick={() => requestBulkCall(visibleAppointments.filter(a => a.status === 'confirmed'))}
-                                    title="Avvia la chiamata AI di conferma per tutte le confermate con telefono"
-                                    className="normal-case tracking-normal text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1"
-                                >
-                                    <PhoneIcon /> Chiama tutte
-                                </button>
-                            )}
-                            <span className="text-slate-400 font-normal normal-case">{viewMode === 'day' ? 'Giorno' : viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
-                        </span>
-                    </h3>
-                    {/* Giornate confermate fuori dalla vista corrente: un clic e ci sei */}
-                    {otherConfirmedDays.length > 0 && (
-                        <div className="mb-2 flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500">
-                            <span className="shrink-0">{viewMode === 'day' ? 'Altre giornate:' : 'Giornate:'}</span>
-                            {otherConfirmedDays.map(([day, count]) => (
-                                <button
-                                    key={day}
-                                    onClick={() => { setCurrentDate(day); setViewMode('day'); }}
-                                    title={`Vai al giro ${viewMode === 'day' ? 'confermato ' : ''}del ${formatDayLabel(day)}`}
-                                    className="capitalize font-bold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 px-1.5 py-0.5 rounded"
-                                >
-                                    {formatDayLabel(day)} ({count})
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                    {viewMode === 'day' && visibleAppointments.filter(a => a.status === 'confirmed').length > 1 && (
-                        <p className="text-[11px] text-slate-400 mb-2 flex items-center gap-1">
-                            <ArrowsRightLeftIcon /> Trascina una scheda (tieni premuto il clic) per riordinare il giro: orari e mappa si ricalcolano.
-                        </p>
-                    )}
-                    <div className="space-y-2">
-                        {visibleAppointments.filter(a => a.status === 'confirmed')
-                         .sort((a,b) => {
-                             if(a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
-                             return (a.sequenceOrder||0) - (b.sequenceOrder||0);
-                         })
-                         .map((appt) => {
-                            const tech = techById(appt.technicianId);
-                            return (
-                            <React.Fragment key={appt.id}>
-                                {appt.hasLunchBreakBefore && viewMode === 'day' && (
-                                    <div className="flex items-center gap-2 text-orange-600 text-[10px] font-bold py-1 justify-center bg-orange-50 rounded">
-                                    <CoffeeIcon /> PAUSA PRANZO
-                                    </div>
-                                )}
-                                <div
-                                    id={`appt-${appt.id}`}
-                                    draggable={canDragReorder}
-                                    onDragStart={(e) => handleDragStart(e, appt.id)}
-                                    onDragOver={(e) => handleDragOverCard(e, appt.id)}
-                                    onDrop={(e) => handleDropOnCard(e, appt.id)}
-                                    onDragEnd={handleDragEnd}
-                                    className={`
-                                        relative p-3 rounded-lg border transition-all bg-blue-50 border-blue-100
-                                        ${canDragReorder ? 'cursor-grab active:cursor-grabbing' : ''}
-                                        ${dragId === appt.id ? 'opacity-40' : ''}
-                                        ${dragOverId === appt.id ? 'ring-2 ring-indigo-500 ring-offset-1' : ''}
-                                        ${selectedAppointmentId === appt.id ? 'ring-2 ring-indigo-500 shadow-md scale-[1.01]' : ''}
-                                        ${appt.urgent ? 'border-l-4 border-l-red-500' : ''}
-                                    `}
-                                >
-                                    <div className="flex justify-between items-start">
-                                        <div className="flex gap-2">
-                                            <div
-                                                className="w-6 h-6 rounded-full text-white flex items-center justify-center text-xs font-bold flex-shrink-0"
-                                                style={{ backgroundColor: tech?.color || '#2563eb' }}
-                                            >
-                                                {appt.sequenceOrder}
-                                            </div>
-                                            <div>
-                                                <div className="flex items-center gap-1.5 flex-wrap">
-                                                    <h4 className="text-sm font-semibold text-slate-800 leading-tight">{appt.title}</h4>
-                                                    <UrgentBadge appt={appt} />
-                                                    <CodeChip appt={appt} />
-                                                    <ApproxBadge appt={appt} />
-                                                </div>
-                                                <p className="text-xs text-slate-500">{appt.address}</p>
-                                                {appt.phone && <p className="text-xs text-slate-500 mt-0.5">📞 {appt.phone}</p>}
-                                                <div className="mt-1 flex gap-2 flex-wrap items-center">
-                                                    {viewMode !== 'day' && <span className="text-xs font-bold text-slate-600 bg-slate-100 px-1 rounded">{appt.date}</span>}
-                                                    <span className="text-xs font-mono text-blue-700 bg-blue-100 inline-block px-1 rounded">
-                                                        {appt.startTime} - {appt.endTime}
-                                                    </span>
-                                                    {selectedTechId === ALL_TECH && <TechBadge appt={appt} />}
-                                                    <CallBadge appt={appt} />
-                                                    <AutoCallBadge appt={appt} maxAttempts={autopilot.maxAttempts} />
-                                                    <OfferedAlternatives appt={appt} />
-                                                </div>
-                                            </div>
-                                        </div>
-                                        {/* Actions */}
-                                        <div className="flex flex-col gap-1">
-                                            {appt.phone && appt.callStatus !== 'calling' && (
-                                                <button onClick={(e) => { e.stopPropagation(); requestCall(appt); }} title="Chiama il cliente (AI)" className={`p-1 rounded ${appt.callStatus === 'called' ? 'text-emerald-500 hover:bg-emerald-50' : 'text-emerald-600 hover:bg-emerald-100 bg-emerald-50'}`}><PhoneIcon/></button>
-                                            )}
-                                            <button onClick={(e) => { e.stopPropagation(); openEditModal(appt); }} title="Modifica" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
-                                            <button onClick={(e) => { e.stopPropagation(); handleStatusChange(appt.id, 'standby'); }} title="Metti in Stand-by" className="p-1 hover:bg-slate-200 rounded text-slate-400"><PauseIcon/></button>
-                                            <button onClick={(e) => { e.stopPropagation(); handleStatusChange(appt.id, 'pending'); }} title="Torna in Attesa" className="p-1 hover:bg-orange-100 rounded text-orange-400"><ClockIcon/></button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </React.Fragment>
-                         );})}
-                        {visibleAppointments.filter(a => a.status === 'confirmed').length === 0 && <p className="text-xs text-slate-400 italic">Nessun appuntamento confermato nel periodo.</p>}
-                    </div>
-                </div>
-            )}
-
-            {/* 3. Pending */}
-            {filters.pending && (
-                <div>
-                    <h3 className="text-xs font-bold text-orange-500 uppercase tracking-wider mb-2 border-b border-orange-100 pb-1 mt-4">
-                        In Attesa / Da Pianificare ({listPending.length})
-                    </h3>
-                    <div className="space-y-2 opacity-90">
-                        {listPending.map(appt => (
-                             <div
-                                key={appt.id}
-                                id={`appt-${appt.id}`}
-                                className={`
-                                    p-3 rounded-lg border bg-white flex justify-between items-start transition-all
-                                    ${appt.urgent ? 'border-red-300 border-l-4 border-l-red-500' : 'border-orange-200'}
-                                    ${selectedAppointmentId === appt.id ? 'ring-2 ring-orange-400 shadow-md' : ''}
-                                `}
-                             >
-                                 <div className="min-w-0">
-                                     <div className="flex items-center gap-1.5 flex-wrap">
-                                        <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
-                                        <UrgentBadge appt={appt} />
-                                        <CodeChip appt={appt} />
-                                        <ApproxBadge appt={appt} />
-                                     </div>
-                                     <p className="text-xs text-slate-400">{appt.address}</p>
-                                     {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
-                                     {appt.notes && <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-2">{appt.notes}</p>}
-                                     <div className="mt-1 flex gap-1.5 flex-wrap items-center">
-                                        {selectedTechId === ALL_TECH && <TechBadge appt={appt} />}
-                                        {appt.province && <span className="text-[10px] text-slate-400 border border-slate-200 px-1 rounded">{appt.province}</span>}
-                                        <CallBadge appt={appt} />
-                                     </div>
-                                 </div>
-                                 <div className="flex flex-col gap-1">
-                                    <button onClick={() => handleStatusChange(appt.id, 'confirmed')} title="Forza Conferma Oggi" className="text-xs bg-blue-100 text-blue-600 px-1 py-0.5 rounded font-bold hover:bg-blue-200">
-                                        + OGGI
-                                    </button>
-                                    <button onClick={() => openEditModal(appt)} title="Modifica" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
-                                    <button onClick={() => handleStatusChange(appt.id, 'standby')} className="p-1 hover:bg-slate-100 rounded text-slate-400"><PauseIcon/></button>
-                                    <button onClick={() => handleRemove(appt.id)} className="p-1 hover:bg-red-50 rounded text-red-300"><TrashIcon/></button>
-                                 </div>
-                             </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* 4. Standby */}
-            {filters.standby && (
-                <div>
-                    <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 border-b border-gray-200 pb-1 mt-4">
-                        In Stand-by ({listStandby.length})
-                    </h3>
-                    <div className="space-y-2 opacity-60">
-                        {listStandby.map(appt => (
-                             <div
-                                key={appt.id}
-                                id={`appt-${appt.id}`}
-                                className={`
-                                    p-3 rounded-lg border border-slate-200 bg-slate-50 flex justify-between items-center transition-all
-                                    ${selectedAppointmentId === appt.id ? 'ring-2 ring-gray-400 shadow-md' : ''}
-                                `}
-                             >
-                                 <div>
-                                     <div className="flex items-center gap-1.5 flex-wrap">
-                                        <h4 className="text-sm font-semibold text-slate-600">{appt.title}</h4>
-                                        <UrgentBadge appt={appt} />
-                                     </div>
-                                     <p className="text-xs text-slate-400">{appt.address}</p>
-                                     {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
-                                 </div>
-                                 <div className="flex gap-2">
-                                     <button onClick={() => openEditModal(appt)} title="Modifica" className="text-indigo-400 hover:bg-indigo-50 p-1 rounded"><PencilIcon/></button>
-                                     <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Riattiva" className="text-green-600 hover:bg-green-50 p-1 rounded"><ClockIcon/></button>
-                                     <button onClick={() => handleRemove(appt.id)} className="text-red-400 hover:bg-red-50 p-1 rounded"><TrashIcon/></button>
-                                 </div>
-                             </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* 5. Problematiche (numeri non corretti / da richiamare / lavori da ultimare) */}
-            {filters.issues && listIssues.length > 0 && (
-                <div>
-                    <h3 className="text-xs font-bold text-rose-600 uppercase tracking-wider mb-2 border-b border-rose-100 pb-1 mt-4">
-                        Problematiche ({listIssues.length})
-                    </h3>
-                    {(Object.keys(ISSUE_META) as IssueType[]).map(type => {
-                        const items = listIssues.filter(a => (a.issueType || 'callback') === type);
-                        if (items.length === 0) return null;
-                        return (
-                            <div key={type} className="mb-3">
-                                <h4 className="text-[11px] font-bold text-rose-500 uppercase mb-1.5">
-                                    {ISSUE_META[type].icon} {ISSUE_META[type].label} ({items.length})
-                                </h4>
-                                <div className="space-y-2">
-                                    {items.map(appt => (
-                                        <div
-                                            key={appt.id}
-                                            id={`appt-${appt.id}`}
-                                            className={`
-                                                p-3 rounded-lg border border-rose-200 bg-rose-50/60 flex justify-between items-start transition-all
-                                                ${selectedAppointmentId === appt.id ? 'ring-2 ring-rose-400 shadow-md' : ''}
-                                            `}
-                                        >
-                                            <div className="min-w-0">
-                                                <div className="flex items-center gap-1.5 flex-wrap">
-                                                    <h4 className="text-sm font-semibold text-slate-700">{appt.title}</h4>
-                                                    <UrgentBadge appt={appt} />
-                                                </div>
-                                                <p className="text-xs text-slate-400">{appt.address}</p>
-                                                {appt.phone && <p className="text-xs text-slate-400 mt-0.5">📞 {appt.phone}</p>}
-                                                {appt.followUpDate && (
-                                                    <p className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 mt-1 inline-block capitalize">
-                                                        🔔 {ISSUE_META[type].reentry}: {formatDayLabel(appt.followUpDate)}
-                                                    </p>
-                                                )}
-                                                {appt.notes && <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-2">{appt.notes}</p>}
-                                                <div className="mt-1 flex gap-1.5 flex-wrap items-center">
-                                                    {selectedTechId === ALL_TECH && <TechBadge appt={appt} />}
-                                                    {appt.province && <span className="text-[10px] text-slate-400 border border-slate-200 px-1 rounded">{appt.province}</span>}
-                                                    <CallBadge appt={appt} />
-                                                </div>
-                                            </div>
-                                            <div className="flex flex-col gap-1 shrink-0">
-                                                <button onClick={() => openEditModal(appt)} title="Modifica (categoria, data di rientro)" className="p-1 hover:bg-indigo-100 rounded text-indigo-400"><PencilIcon/></button>
-                                                <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Rimetti in attesa (torna pianificabile)" className="p-1 hover:bg-orange-100 rounded text-orange-400"><ClockIcon/></button>
-                                                <button onClick={() => handleRemove(appt.id)} title="Elimina" className="p-1 hover:bg-red-50 rounded text-red-300"><TrashIcon/></button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        );
-                    })}
-                    <p className="text-[11px] text-slate-400">
-                        Imposta la <b>data di rientro</b> (richiamo o fine lavori) dalla matita: dal giorno prima
-                        comparirà l'alert per riservare gli slot.
-                    </p>
-                </div>
-            )}
-
-            {/* 6. Annullate (archivio) */}
-            {filters.cancelled && listCancelled.length > 0 && (
-                <div>
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 border-b border-slate-200 pb-1 mt-4">
-                        Annullate ({listCancelled.length})
-                    </h3>
-                    <div className="space-y-2 opacity-60">
-                        {listCancelled.map(appt => (
-                             <div
-                                key={appt.id}
-                                id={`appt-${appt.id}`}
-                                className={`
-                                    p-2.5 rounded-lg border border-slate-200 bg-slate-50 flex justify-between items-center transition-all
-                                    ${selectedAppointmentId === appt.id ? 'ring-2 ring-slate-400' : ''}
-                                `}
-                             >
-                                 <div className="min-w-0">
-                                     <h4 className="text-sm font-semibold text-slate-500 line-through">{appt.title}</h4>
-                                     <p className="text-xs text-slate-400 truncate">{appt.address}</p>
-                                     {appt.notes && <p className="text-xs text-slate-300 italic truncate">{appt.notes.split('\n')[0]}</p>}
-                                 </div>
-                                 <div className="flex gap-1 shrink-0">
-                                     <button onClick={() => handleStatusChange(appt.id, 'pending')} title="Ripristina in attesa" className="text-green-600 hover:bg-green-50 p-1 rounded"><ClockIcon/></button>
-                                     <button onClick={() => handleRemove(appt.id)} title="Elimina definitivamente" className="text-red-400 hover:bg-red-50 p-1 rounded"><TrashIcon/></button>
-                                 </div>
-                             </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-          </div>
-        </aside>
-
-        {/* Map Area */}
-        <main className="flex-1 relative bg-slate-200 h-[50vh] md:h-auto">
-          <MapComponent
-            appointments={visibleAppointments}
-            center={mapCenter}
-            routeSummary={viewMode === 'day' ? routeSummary : null}
-            baseLocation={baseLocation}
-            technicians={technicians}
-            onSelectAppointment={setSelectedAppointmentId}
-            onStatusChange={handleStatusChange}
-            onRequestCall={(id) => {
-              const appt = allAppointments.find(a => a.id === id);
-              if (appt) requestCall(appt);
-            }}
-          />
-
-          <div className="absolute bottom-6 left-6 z-[400] bg-white/90 backdrop-blur px-4 py-2 rounded-lg shadow-lg border border-slate-200 hidden md:block">
-            <div className="text-xs font-medium text-slate-600">
-              <p>Riferimento: <span className="text-indigo-600 font-bold">{currentDate}</span></p>
-              <p>Vista: <span className="text-slate-800 font-bold uppercase">{viewMode === 'day' ? 'Giornaliera' : viewMode === 'week' ? 'Settimanale' : 'Mensile'}</span></p>
-              {selectedTech && (
-                <p className="mt-1 font-bold" style={{ color: selectedTech.color }}>
-                  Tecnico: {selectedTech.name}
-                </p>
-              )}
-              {baseLocation && <p className="text-red-500 mt-1">Base: {baseLocation.address.split(',')[0]}</p>}
+              {renderSection()}
             </div>
-          </div>
-        </main>
+          </main>
 
+          {mapVisible && !mapIsOverlay && (
+            <>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Ridimensiona il pannello e la mappa"
+                title="Trascina per ridimensionare"
+                onPointerDown={onDividerDown}
+                onDoubleClick={() => updateUi({ panelPct: 46 })}
+                className="split-handle"
+              />
+              <div className="flex-1 min-w-[320px] py-3 pr-3 md:py-4 md:pr-4">
+                {mapPanel}
+              </div>
+            </>
+          )}
+        </div>
       </div>
+
+      {mapVisible && mapIsOverlay && (
+        <div className="fixed inset-0 z-[1000] bg-canvas p-2 animate-fade-in">
+          {mapPanel}
+        </div>
+      )}
     </div>
   );
 }

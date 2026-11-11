@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
+import { Bot, Cloud, CloudOff, Download, Pause, Play, Plug, Settings } from 'lucide-react';
 import { nextCallWindowStart, type AutopilotSettings, type AutopilotStats } from '../services/autopilotService';
 import type { TabLockState } from '../hooks/useTabLock';
 import type { BridgeInboxStatus } from '../hooks/useBridgeInbox';
 import { schedulerFresh, type CloudSyncState } from '../services/cloudSyncCore';
 
-// Barra del pilota automatico: sempre visibile sopra l'elenco. Spento: una
-// riga compatta con "Attiva". Acceso: stato, contatori, Pausa, impostazioni e
-// promemoria di tenere aperta la scheda. In fondo il chip del bridge.
-// Con il cloud attivo: chip "☁️ Cloud" con lo stato della sincronizzazione,
-// ultimo passaggio del motore e se si può chiudere il browser.
+// Striscia del pilota automatico: UNA riga sempre visibile sopra il pannello
+// di lavoro. Icona e stato, contatori come etichette (in coda, in corso,
+// prossima chiamata o fascia chiusa), cloud e bridge, a destra Attiva/Pausa
+// e le impostazioni. Le righe secondarie (tieni aperta la scheda, cloud,
+// automatismi su un altro dispositivo) compaiono in piccolo solo se servono.
 
 export interface CloudBarInfo {
   mirror: boolean;               // scheda secondaria: sincronizza la scheda principale
@@ -47,42 +48,45 @@ const whenLabel = (d: Date, now: Date): string => {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+// Colori delle etichette (sistema grafico: .chip-*)
 const CLOUD_CHIP_STYLE: Record<string, string> = {
-  ok: 'text-sky-800 bg-sky-50 border-sky-200',
-  busy: 'text-slate-600 bg-slate-50 border-slate-200',
-  warn: 'text-amber-800 bg-amber-50 border-amber-300',
-  error: 'text-rose-700 bg-rose-50 border-rose-200',
+  ok: 'chip-info',
+  busy: 'chip-neutral',
+  warn: 'chip-warn',
+  error: 'chip-danger',
 };
 
-// Testo e stile del chip del cloud
-export const cloudChip = (cloud: CloudBarInfo, now: Date): { text: string; style: string; title?: string } => {
+// Testo e stile dell'etichetta del cloud
+export const cloudChip = (cloud: CloudBarInfo, now: Date): { text: string; style: string; title?: string; down?: boolean } => {
   if (cloud.mirror || !cloud.state) {
-    return { text: '☁️ Cloud · sincronizzato dalla scheda principale', style: CLOUD_CHIP_STYLE.ok };
+    return { text: 'Cloud · sincronizzato dalla scheda principale', style: CLOUD_CHIP_STYLE.ok };
   }
   const s = cloud.state;
   switch (s.phase) {
     case 'starting':
-      return { text: '☁️ Cloud · collegamento...', style: CLOUD_CHIP_STYLE.busy };
+      return { text: 'Cloud · collegamento…', style: CLOUD_CHIP_STYLE.busy };
     case 'sending':
-      return { text: '☁️ Cloud · invio in corso...', style: CLOUD_CHIP_STYLE.busy };
+      return { text: 'Cloud · invio in corso…', style: CLOUD_CHIP_STYLE.busy };
     case 'offline': {
       const retry = s.retryAt ? Math.max(0, Math.round((s.retryAt - now.getTime()) / 1000)) : null;
       return {
-        text: `☁️ Cloud non raggiungibile${s.pending ? ': le modifiche restano qui e partono appena torna' : ': riprovo da solo'}`,
+        text: `Cloud non raggiungibile${s.pending ? ': le modifiche restano qui e partono appena torna' : ': riprovo da solo'}`,
         style: CLOUD_CHIP_STYLE.warn,
+        down: true,
         title: [s.error?.message, retry !== null ? `Prossimo tentativo fra ${retry} s` : ''].filter(Boolean).join(' — ') || undefined,
       };
     }
     case 'auth':
-      return { text: '☁️ Cloud: chiave errata — correggila in ⚙ → Cloud', style: CLOUD_CHIP_STYLE.error, title: s.error?.message };
+      return { text: 'Cloud: chiave errata — correggila in Impostazioni del pilota → Cloud', style: CLOUD_CHIP_STYLE.error, title: s.error?.message, down: true };
     case 'not_configured':
       return {
-        text: `☁️ Cloud non configurato sul server${s.error?.kind === 'not_configured' ? (s.error.detail === 'store' ? ' (manca il database)' : ' (manca CRON_SECRET)') : ''}`,
+        text: `Cloud non configurato sul server${s.error?.kind === 'not_configured' ? (s.error.detail === 'store' ? ' (manca il database)' : ' (manca CRON_SECRET)') : ''}`,
         style: CLOUD_CHIP_STYLE.error,
+        down: true,
       };
     default:
       return {
-        text: `☁️ Cloud · sincronizzato${s.lastSyncAt ? ` alle ${hhmm(new Date(s.lastSyncAt))}` : ''}`,
+        text: `Cloud · sincronizzato${s.lastSyncAt ? ` alle ${hhmm(new Date(s.lastSyncAt))}` : ''}`,
         style: CLOUD_CHIP_STYLE.ok,
       };
   }
@@ -111,16 +115,16 @@ export const cloudTickLine = (state: CloudSyncState | null): string | null => {
 };
 
 const BRIDGE_CHIP_STYLE: Record<string, string> = {
-  ok: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-  checking: 'text-slate-600 bg-slate-50 border-slate-200',
-  follower: 'text-slate-500 bg-slate-50 border-slate-200',
-  disabled: 'text-slate-400 bg-white border-slate-200',
-  unconfigured: 'text-slate-500 bg-white border-dashed border-slate-300',
-  offline: 'text-amber-700 bg-amber-50 border-amber-200',
-  login: 'text-amber-800 bg-amber-50 border-amber-300',
-  token: 'text-rose-700 bg-rose-50 border-rose-200',
-  invalid: 'text-rose-700 bg-rose-50 border-rose-200',
-  portal_error: 'text-rose-700 bg-rose-50 border-rose-200',
+  ok: 'chip-success',
+  checking: 'chip-neutral',
+  follower: 'chip-neutral',
+  disabled: 'chip-neutral',
+  unconfigured: 'chip-neutral border-dashed',
+  offline: 'chip-warn',
+  login: 'chip-warn',
+  token: 'chip-danger',
+  invalid: 'chip-danger',
+  portal_error: 'chip-danger',
 };
 
 const AutopilotBar: React.FC<AutopilotBarProps> = ({
@@ -128,173 +132,182 @@ const AutopilotBar: React.FC<AutopilotBarProps> = ({
 }) => {
   const [showIntro, setShowIntro] = useState(false);
   const now = new Date();
+  const on = settings.enabled;
 
   const handleEnable = () => {
     if (!introSeen) { setShowIntro(true); return; }
     onEnable();
   };
 
-  const bridgeChip = bridge.kind !== 'disabled' && (
-    <div className="flex items-center gap-1.5 mt-1.5 min-w-0">
-      <span
-        data-testid="bridge-chip"
-        title={[bridge.detail, bridge.lastResult && bridge.kind !== 'ok' ? `Ultimo import: ${bridge.lastResult}` : '']
-          .filter(Boolean).join(' — ') || undefined}
-        className={`text-[10px] font-bold border px-1.5 py-0.5 rounded truncate ${BRIDGE_CHIP_STYLE[bridge.kind] || BRIDGE_CHIP_STYLE.checking}`}
-      >
-        🔌 {bridge.message}
-      </span>
-      {lock === 'leader' && bridge.kind !== 'unconfigured' && (
-        <button
-          onClick={onBridgeSyncNow}
-          disabled={bridge.kind === 'checking'}
-          title="Scarica ora le pratiche dal bridge"
-          className="shrink-0 text-[10px] font-bold text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 px-1.5 py-0.5 rounded disabled:opacity-50"
-        >
-          ⬇ Scarica ora
-        </button>
-      )}
-    </div>
-  );
-
-  // Cloud: chip di stato, ultimo passaggio, si può chiudere il browser?
+  // Cloud: etichetta di stato, ultimo passaggio, si può chiudere il browser?
   const cloudState = cloud?.state || null;
   const chip = cloud ? cloudChip(cloud, now) : null;
   const tickLine = cloud ? cloudTickLine(cloudState) : null;
   const canClose = schedulerFresh(cloudState?.status?.schedulerSeenAt, now.getTime());
-  const cloudBlock = cloud && chip && (
-    <div className="mt-1.5">
-      <span
-        data-testid="cloud-chip"
-        title={chip.title}
-        className={`inline-block max-w-full text-[10px] font-bold border px-1.5 py-0.5 rounded ${chip.style}`}
-      >
-        {chip.text}
-      </span>
-      {tickLine && <p data-testid="cloud-tick" className="text-[10px] text-slate-500 mt-0.5">{tickLine}</p>}
-      {settings.enabled && !cloud.mirror && cloudState && cloudState.phase !== 'starting' && (
-        canClose ? (
-          <p data-testid="cloud-hint" className="text-[10px] text-emerald-700 mt-0.5">
-            Puoi chiudere il browser: il pilota lavora dal cloud.
-          </p>
-        ) : (
-          <p data-testid="cloud-hint" className="text-[10px] text-amber-700 mt-0.5">
-            ⚠ Lo scheduler del cloud non è ancora passato: a browser chiuso il pilota non avanzerebbe.
-            Tieni aperta questa scheda finché non compare "Puoi chiudere il browser".
-          </p>
-        )
-      )}
-      {!cloud.mirror && cloudState && !cloud.leaseHolder && (cloudState.phase === 'synced' || cloudState.phase === 'sending') && ((settings.enabled && settings.autoDispatch) || bridge.kind !== 'disabled') && (
-        <p data-testid="cloud-lease" className="text-[10px] text-slate-500 mt-0.5">
-          Automatismi attivi su un altro dispositivo (smistamento e bridge).
-        </p>
-      )}
-    </div>
-  );
+  const cloudHint = cloud && on && !cloud.mirror && cloudState && cloudState.phase !== 'starting';
+  const cloudLease = cloud && !cloud.mirror && cloudState && !cloud.leaseHolder
+    && (cloudState.phase === 'synced' || cloudState.phase === 'sending')
+    && ((on && settings.autoDispatch) || bridge.kind !== 'disabled');
 
-  // Testo di stato del pilota acceso
-  let statusLine: React.ReactNode;
-  if (lock === 'follower' && !cloud) {
-    statusLine = <span className="text-amber-700 font-bold">Pilota automatico attivo in un'altra scheda</span>;
-  } else if (!stats.windowOpen) {
-    statusLine = (
-      <span>
-        Fascia chiamate chiusa: riprende {whenLabel(nextCallWindowStart(now, settings), now)}
-        {stats.queued > 0 ? ` · In coda ${stats.queued}` : ''}
-      </span>
-    );
-  } else {
-    const parts = [`In coda ${stats.queued}`, `In corso ${stats.inFlight}`];
-    if (stats.nextCallAt) parts.push(`Prossima chiamata ${stats.dueNow > 0 ? 'adesso' : whenLabel(stats.nextCallAt, now)}`);
-    statusLine = <span>{parts.join(' · ')}</span>;
-  }
-
-  return (
-    <div data-testid="autopilot-bar" className={`px-3 py-2 border-b shrink-0 ${settings.enabled ? 'bg-violet-50 border-violet-200' : 'bg-white border-slate-200'}`}>
-      {!settings.enabled ? (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-bold text-slate-600">🤖 Pilota automatico spento</span>
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              onClick={onOpenSettings}
-              title="Impostazioni del pilota automatico e del bridge"
-              className="text-xs px-1.5 py-0.5 rounded border border-slate-200 text-slate-500 hover:bg-slate-50"
-            >
-              ⚙
-            </button>
-            <button
-              onClick={handleEnable}
-              className="text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 px-2.5 py-0.5 rounded"
-            >
-              Attiva
-            </button>
-          </div>
-        </div>
-      ) : (
+  // Etichette di stato del pilota acceso
+  let counters: React.ReactNode = null;
+  if (on) {
+    if (lock === 'follower' && !cloud) {
+      counters = null;
+    } else if (!stats.windowOpen) {
+      counters = (
         <>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-bold text-violet-800 flex items-center gap-1.5 min-w-0">
-              <span className={lock === 'leader' && stats.windowOpen ? 'animate-pulse' : ''}>🤖</span>
-              <span className="truncate">Pilota automatico {lock === 'follower' ? 'acceso' : 'attivo'}</span>
-            </span>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                onClick={onOpenSettings}
-                title="Impostazioni del pilota automatico e del bridge"
-                className="text-xs px-1.5 py-0.5 rounded border border-violet-200 bg-white text-violet-700 hover:bg-violet-100"
-              >
-                ⚙
-              </button>
-              {/* In una scheda secondaria la pausa non fermerebbe l'altra: si mette in pausa da lì */}
-              {lock !== 'follower' && (
-                <button
-                  onClick={onPause}
-                  title="Ferma il pilota: nessuna chiamata parte da sola (la coda resta)"
-                  className="text-xs font-bold text-violet-700 bg-white border border-violet-300 hover:bg-violet-100 px-2 py-0.5 rounded"
-                >
-                  ⏸ Pausa
-                </button>
-              )}
-            </div>
-          </div>
-          <p data-testid="autopilot-status" className="text-[11px] text-violet-900 mt-0.5">
-            {statusLine}
-            {autoDispatchRunning && <span className="ml-1 text-violet-600">· smistamento in corso...</span>}
-          </p>
-          {lock === 'leader' && !cloud && (
-            <p className="text-[10px] text-violet-500 mt-0.5">
-              Tieni aperta questa scheda: le chiamate partono da qui.
-            </p>
+          <span className="chip chip-neutral">Fascia chiamate chiusa: riprende {whenLabel(nextCallWindowStart(now, settings), now)}</span>
+          {stats.queued > 0 && <span className="chip chip-ai num-chip">In coda {stats.queued}</span>}
+        </>
+      );
+    } else {
+      counters = (
+        <>
+          <span className="chip chip-ai num-chip">In coda {stats.queued}</span>
+          <span className={`chip num-chip ${stats.inFlight > 0 ? 'chip-info' : 'chip-neutral'}`}>In corso {stats.inFlight}</span>
+          {stats.nextCallAt && (
+            <span className="chip chip-neutral">Prossima chiamata {stats.dueNow > 0 ? 'adesso' : whenLabel(stats.nextCallAt, now)}</span>
           )}
         </>
+      );
+    }
+  }
+
+  const secondary: React.ReactNode[] = [];
+  if (on && lock === 'leader' && !cloud) {
+    secondary.push(<span key="keep">Tieni aperta questa scheda: le chiamate partono da qui.</span>);
+  }
+  if (tickLine) secondary.push(<span key="tick" data-testid="cloud-tick">{tickLine}</span>);
+  if (cloudHint) {
+    secondary.push(canClose ? (
+      <span key="hint" data-testid="cloud-hint" className="text-emerald-700">Puoi chiudere il browser: il pilota lavora dal cloud.</span>
+    ) : (
+      <span key="hint" data-testid="cloud-hint" className="text-amber-800">
+        Lo scheduler del cloud non è ancora passato: a browser chiuso il pilota non avanzerebbe.
+        Tieni aperta questa scheda finché non compare "Puoi chiudere il browser".
+      </span>
+    ));
+  }
+  if (cloudLease) {
+    secondary.push(<span key="lease" data-testid="cloud-lease">Automatismi attivi su un altro dispositivo (smistamento e bridge).</span>);
+  }
+
+  const CloudIcon = chip?.down ? CloudOff : Cloud;
+
+  return (
+    <div data-testid="autopilot-bar" className={`autopilot-strip ${on ? 'autopilot-strip-on' : ''}`}>
+      <div className="flex items-start gap-3">
+      <div className="flex-1 min-w-0 flex items-center gap-x-3 gap-y-1.5 flex-wrap min-h-[32px]">
+        <span className="flex items-center gap-2 shrink-0">
+          <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${on ? 'bg-violet-600 text-white' : 'bg-slate-100 text-ink-500'}`}>
+            <Bot size={16} strokeWidth={1.75} className={on && lock === 'leader' && stats.windowOpen ? 'animate-pulse' : ''} aria-hidden />
+          </span>
+          <span className={`text-sm font-semibold ${on ? 'text-violet-900' : 'text-ink-700'}`}>
+            {!on ? 'Pilota automatico spento'
+              : lock === 'follower' && !cloud ? <span className="text-amber-800">Pilota automatico attivo in un'altra scheda</span>
+              : `Pilota automatico ${lock === 'follower' ? 'acceso' : 'attivo'}`}
+          </span>
+        </span>
+
+        {on && (
+          <span data-testid="autopilot-status" className="flex items-center gap-1.5 flex-wrap">
+            {counters}
+            {autoDispatchRunning && <span className="chip chip-ai">Smistamento in corso…</span>}
+          </span>
+        )}
+
+        {chip && (
+          <span data-testid="cloud-chip" title={chip.title} className={`chip ${chip.style} max-w-full`}>
+            <CloudIcon size={13} strokeWidth={1.75} className="shrink-0" aria-hidden />
+            <span className="truncate">{chip.text}</span>
+          </span>
+        )}
+
+        {bridge.kind !== 'disabled' && (
+          <span className="inline-flex items-center gap-1 min-w-0 max-w-full">
+            <span
+              data-testid="bridge-chip"
+              title={[bridge.message, bridge.detail, bridge.lastResult && bridge.kind !== 'ok' ? `Ultimo import: ${bridge.lastResult}` : '']
+                .filter(Boolean).join(' — ') || undefined}
+              className={`chip ${BRIDGE_CHIP_STYLE[bridge.kind] || BRIDGE_CHIP_STYLE.checking} min-w-0 max-w-[200px] min-[1440px]:max-w-[320px]`}
+            >
+              <Plug size={13} strokeWidth={1.75} className="shrink-0" aria-hidden />
+              <span className="truncate">{bridge.message}</span>
+            </span>
+            {lock === 'leader' && bridge.kind !== 'unconfigured' && (
+              <button
+                type="button"
+                onClick={onBridgeSyncNow}
+                disabled={bridge.kind === 'checking'}
+                title="Scarica ora le pratiche dal bridge"
+                aria-label="Scarica ora"
+                className="icon-btn h-6 w-6"
+              >
+                <Download size={14} strokeWidth={1.75} />
+              </button>
+            )}
+          </span>
+        )}
+
+        </div>
+        <span className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title="Impostazioni del pilota automatico e del bridge"
+            aria-label="Impostazioni del pilota automatico e del bridge"
+            className="icon-btn"
+          >
+            <Settings size={17} strokeWidth={1.75} />
+          </button>
+          {!on ? (
+            <button type="button" onClick={handleEnable} className="btn btn-sm bg-violet-600 text-white hover:bg-violet-700">
+              <Play size={14} strokeWidth={2} aria-hidden /> Attiva
+            </button>
+          ) : lock !== 'follower' ? (
+            // In una scheda secondaria la pausa non fermerebbe l'altra: si mette in pausa da lì
+            <button
+              type="button"
+              onClick={onPause}
+              title="Ferma il pilota: nessuna chiamata parte da sola (la coda resta)"
+              className="btn btn-sm btn-secondary text-violet-800 border-violet-200 hover:bg-violet-50"
+            >
+              <Pause size={14} strokeWidth={2} aria-hidden /> Pausa
+            </button>
+          ) : null}
+        </span>
+      </div>
+
+      {secondary.length > 0 && (
+        <div className="mt-1 pl-9 flex flex-col gap-0.5 text-xs text-ink-500">
+          {secondary}
+        </div>
       )}
-      {cloudBlock}
-      {bridgeChip}
 
       {showIntro && (
-        <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4" onClick={() => setShowIntro(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-slate-800 mb-3">🤖 Attivare il pilota automatico?</h3>
-            <ul className="text-sm text-slate-600 space-y-1.5 mb-4 list-disc pl-5">
-              <li>Chiama da solo i clienti dei <b>giri approvati</b> (bottone "Approva e chiama"), richiama chi non risponde e riempie gli slot liberati.</li>
-              <li>Chiama solo nella fascia oraria impostata: <b>{settings.callWindowStart}–{settings.callWindowEnd}</b>{settings.callSaturday ? ', anche il sabato' : ', dal lunedì al venerdì'}.</li>
-              {cloud ? (
-                <li>Lavora <b>dal cloud</b>: le chiamate partono dal server, anche a browser chiuso (quando lo scheduler è attivo).</li>
-              ) : (
-                <li>Funziona <b>finché questa scheda resta aperta</b>: chiudendola le chiamate si fermano.</li>
-              )}
-            </ul>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowIntro(false)}
-                className="flex-1 py-2 rounded-lg border border-slate-300 text-sm font-bold text-slate-600 hover:bg-slate-50"
-              >
-                Annulla
-              </button>
-              <button
-                onClick={() => { setShowIntro(false); onEnable(); }}
-                className="flex-1 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold"
-              >
+        <div className="modal-backdrop" onClick={() => setShowIntro(false)}>
+          <div className="modal max-w-md" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="ap-intro-title">
+            <div className="modal-header">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600 text-white shrink-0">
+                <Bot size={18} strokeWidth={1.75} aria-hidden />
+              </span>
+              <h3 id="ap-intro-title" className="modal-title self-center">Attivare il pilota automatico?</h3>
+            </div>
+            <div className="modal-body">
+              <ul className="text-sm text-ink-700 space-y-2 list-disc pl-5 leading-relaxed">
+                <li>Chiama da solo i clienti dei <b>giri approvati</b> (bottone "Approva e chiama"), richiama chi non risponde e riempie gli slot liberati.</li>
+                <li>Chiama solo nella fascia oraria impostata: <b className="num">{settings.callWindowStart}–{settings.callWindowEnd}</b>{settings.callSaturday ? ', anche il sabato' : ', dal lunedì al venerdì'}.</li>
+                {cloud ? (
+                  <li>Lavora <b>dal cloud</b>: le chiamate partono dal server, anche a browser chiuso (quando lo scheduler è attivo).</li>
+                ) : (
+                  <li>Funziona <b>finché questa scheda resta aperta</b>: chiudendola le chiamate si fermano.</li>
+                )}
+              </ul>
+            </div>
+            <div className="modal-footer">
+              <button type="button" onClick={() => setShowIntro(false)} className="btn btn-secondary">Annulla</button>
+              <button type="button" onClick={() => { setShowIntro(false); onEnable(); }} className="btn bg-violet-600 text-white hover:bg-violet-700">
                 Attiva il pilota
               </button>
             </div>

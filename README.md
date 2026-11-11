@@ -89,8 +89,10 @@ liberati anche con il PC spento, e gli stessi dati si vedono da più computer.
   protetta: una pratica non può essere chiamata due volte e una modifica dell'operatore
   arrivata nel mezzo non va persa.
 - Restano nel browser lo smistamento automatico e l'arrivo delle pratiche dal bridge
-  (girano su un solo dispositivo alla volta). L'invio dei confermati al gestionale lo fa
-  anche il server, al massimo una volta l'ora.
+  (girano su un solo dispositivo alla volta).
+- L'invio dei confermati al gestionale resta al browser, quando è aperto. Per farlo anche
+  dal server (al massimo una volta l'ora) aggiungi su Vercel le variabili
+  `GESTIONALE_PROJECT_ID` e `GESTIONALE_API_KEY`: nel codice del server non ci sono chiavi.
 - "Pausa" ferma i lanci anche sul cloud. "Scollega questo browser" riporta quel browser ai
   soli dati locali, con il pilota locale spento: il motore sul cloud continua.
 

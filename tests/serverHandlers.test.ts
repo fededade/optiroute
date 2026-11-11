@@ -54,10 +54,15 @@ const make = (over: Partial<HandlerDeps> = {}) => {
 describe('sync col gestionale vero', () => {
   it('spenta con l\'archivio in memoria (salvo OPTIROUTE_SYNC=on) o con OPTIROUTE_SYNC=off', () => {
     const mem = new MemoryStore('optiroute:test:');
-    expect(syncEnabled({}, mem)).toBe(false);
-    expect(syncEnabled({ OPTIROUTE_SYNC: 'on' }, mem)).toBe(true);
-    expect(syncEnabled({}, null)).toBe(true);
-    expect(syncEnabled({ OPTIROUTE_SYNC: 'off' }, null)).toBe(false);
+    const target = { GESTIONALE_PROJECT_ID: 'progetto-finto', GESTIONALE_API_KEY: 'chiave-finta' };
+    expect(syncEnabled({ ...target }, mem)).toBe(false);
+    expect(syncEnabled({ ...target, OPTIROUTE_SYNC: 'on' }, mem)).toBe(true);
+    expect(syncEnabled({ ...target }, null)).toBe(true);
+    expect(syncEnabled({ ...target, OPTIROUTE_SYNC: 'off' }, null)).toBe(false);
+    // senza destinazione (variabili GESTIONALE_*) il server non invia nulla: lo fa il browser
+    expect(syncEnabled({}, null)).toBe(false);
+    expect(syncEnabled({ GESTIONALE_PROJECT_ID: 'solo-progetto' }, null)).toBe(false);
+    expect(syncEnabled({ OPTIROUTE_SYNC: 'on' }, mem)).toBe(false);
     expect(defaultDeps({ env: {}, store: mem }).sync).toBeNull();
   });
 });

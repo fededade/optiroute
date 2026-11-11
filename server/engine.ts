@@ -16,7 +16,7 @@ import {
 } from '../src/services/autopilotService';
 import { toCallOutcome } from '../src/services/callService';
 import { buildDaySchedule } from '../src/services/dayScheduleService';
-import { getSyncableAppointments, type SyncResult } from '../src/services/syncService';
+import { getSyncableAppointments, type SyncResult } from '../src/services/gestionaleSync';
 import type { RetellCallBody } from '../api/retell-call';
 import { timezoneStatus, type TimezoneStatus } from './tz';
 import { ConflictError, StoreError, commit, type Store } from './store';

@@ -36,20 +36,7 @@ var timezoneStatus = () => {
   }
 };
 
-// src/services/syncService.ts
-var SYNC_TARGETS = {
-  staging: {
-    projectId: "gestionale-effetre-staging",
-    apiKey: "AIzaSyBREzp0X64Y2zazMGSDZXLpg59Y6gnOqXw"
-  },
-  production: {
-    projectId: "gestionale-effetre",
-    apiKey: "AIzaSyAxuZxv3_7w4cR01W4dRrGOJ3-qbSsL868"
-  }
-};
-var currentEnv = (override) => override || import.meta.env?.VITE_SYNC_ENV || "staging";
-var getTarget = (env) => SYNC_TARGETS[currentEnv(env)] || SYNC_TARGETS.staging;
-var getSyncEnvName = (env) => currentEnv(env) === "production" ? "produzione" : "collaudo";
+// src/services/gestionaleSync.ts
 var isSyncable = (a) => {
   if (a.status !== "confirmed" || !a.date || !a.startTime) return false;
   if (a.callOutcome?.result === "confermato") return true;
@@ -86,10 +73,9 @@ var toFirestoreFields = (a) => {
     aggiornato_il: fsString((/* @__PURE__ */ new Date()).toISOString())
   };
 };
-var syncConfirmedToGestionale = async (appointments, env) => {
-  const target = getTarget(env);
+var pushConfirmedToFirestore = async (appointments, target, envName) => {
   const syncable = getSyncableAppointments(appointments);
-  const result = { sent: 0, failed: 0, errors: [], envName: getSyncEnvName(env) };
+  const result = { sent: 0, failed: 0, errors: [], envName };
   for (const appt of syncable) {
     const docId = (appt.periziaCode || `app_${appt.id}`).replace(/[^\w-]/g, "_");
     const url = `https://firestore.googleapis.com/v1/projects/${target.projectId}/databases/(default)/documents/optiroute_sync/${docId}?key=${target.apiKey}`;
@@ -2245,8 +2231,14 @@ var httpRetellClient = {
 };
 
 // server/http.ts
+var syncTargetFromEnv = (env) => {
+  const projectId = (env.GESTIONALE_PROJECT_ID || "").trim();
+  const apiKey = (env.GESTIONALE_API_KEY || "").trim();
+  return projectId && apiKey ? { projectId, apiKey } : null;
+};
 var syncEnabled = (env, store) => {
   if (env.OPTIROUTE_SYNC === "off") return false;
+  if (!syncTargetFromEnv(env)) return false;
   if (store?.kind === "memory") return env.OPTIROUTE_SYNC === "on";
   return true;
 };
@@ -2264,7 +2256,7 @@ var defaultDeps = (overrides = {}) => {
     now: overrides.now || defaultNow(env),
     clock: overrides.clock || Date.now,
     retell: overrides.retell || httpRetellClient,
-    sync: "sync" in overrides ? overrides.sync ?? null : syncEnabled(env, store) ? (appointments) => syncConfirmedToGestionale(appointments, env.VITE_SYNC_ENV) : null,
+    sync: "sync" in overrides ? overrides.sync ?? null : syncEnabled(env, store) ? (appointments) => pushConfirmedToFirestore(appointments, syncTargetFromEnv(env), "server") : null,
     sleep: overrides.sleep,
     timezone: overrides.timezone || timezoneStatus
   };

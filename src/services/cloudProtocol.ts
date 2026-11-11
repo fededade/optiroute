@@ -162,6 +162,7 @@ export interface CloudStatus {
   env: string;                       // production | preview | development
   storeConfigured: boolean;          // database collegato
   retellConfigured: boolean;         // chiavi Retell presenti
+  gestionaleSyncConfigured?: boolean; // il server invia i confermati al gestionale (variabili GESTIONALE_*)
   timezone: { zone: string; ok: boolean };
   rev: number;
   configRev: number;

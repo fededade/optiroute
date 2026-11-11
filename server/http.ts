@@ -11,7 +11,7 @@ import {
   type CloudStatus,
   type TickSource,
 } from '../src/services/cloudProtocol';
-import { syncConfirmedToGestionale, type SyncResult } from '../src/services/syncService';
+import { pushConfirmedToFirestore, type SyncResult, type SyncTarget } from '../src/services/gestionaleSync';
 import { retellEnv } from '../api/retell-call';
 import { headerValue, isAuthorized, isValidWebhookToken, webhookToken } from './auth';
 import { ConflictError, StoreError, commit, storeFromEnv, type Store } from './store';
@@ -52,11 +52,21 @@ export interface HandlerDeps {
   timezone: () => TimezoneStatus;
 }
 
-// Sync col gestionale VERO (Firestore). Spenta con OPTIROUTE_SYNC=off e,
-// salvo OPTIROUTE_SYNC=on, con l'archivio in memoria (test e sviluppo
-// locale): le prove non devono scrivere sul gestionale.
+// Destinazione della sync col gestionale dal server: SOLO da variabili
+// d'ambiente (nel codice del server non ci sono chiavi). Senza, la sync dal
+// server è spenta e continua a farla il browser quando è aperto.
+export const syncTargetFromEnv = (env: Env): SyncTarget | null => {
+  const projectId = (env.GESTIONALE_PROJECT_ID || '').trim();
+  const apiKey = (env.GESTIONALE_API_KEY || '').trim();
+  return projectId && apiKey ? { projectId, apiKey } : null;
+};
+
+// Sync col gestionale VERO (Firestore). Spenta senza destinazione, con
+// OPTIROUTE_SYNC=off e, salvo OPTIROUTE_SYNC=on, con l'archivio in memoria
+// (test e sviluppo locale): le prove non devono scrivere sul gestionale.
 export const syncEnabled = (env: Env, store: Store | null): boolean => {
   if (env.OPTIROUTE_SYNC === 'off') return false;
+  if (!syncTargetFromEnv(env)) return false;
   if (store?.kind === 'memory') return env.OPTIROUTE_SYNC === 'on';
   return true;
 };
@@ -83,7 +93,7 @@ export const defaultDeps = (overrides: Partial<HandlerDeps> = {}): HandlerDeps =
     sync: 'sync' in overrides
       ? overrides.sync ?? null
       : syncEnabled(env, store)
-        ? appointments => syncConfirmedToGestionale(appointments, env.VITE_SYNC_ENV)
+        ? appointments => pushConfirmedToFirestore(appointments, syncTargetFromEnv(env) as SyncTarget, 'server')
         : null,
     sleep: overrides.sleep,
     timezone: overrides.timezone || timezoneStatus,
@@ -271,6 +281,7 @@ const handleOp = async (op: string, req: ApiRequest, res: ApiResponse, d: Handle
         env: d.env.VERCEL_ENV || 'development',
         storeConfigured: true,
         retellConfigured: !!retell.apiKey && !!retell.fromNumber,
+        gestionaleSyncConfigured: syncEnabled(d.env, store),
         timezone: d.timezone(),
         rev,
         configRev,

@@ -28,6 +28,15 @@ describe('bundle generati', () => {
     }
   });
 
+  it('non contengono chiavi: la destinazione del gestionale arriva solo dalle variabili d\'ambiente', async () => {
+    const { readFile } = await import('node:fs/promises');
+    for (const file of ['api/cloud.js', 'api/cloud-tick.js']) {
+      const code = await readFile(file, 'utf8');
+      expect(code, `${file}: chiave API Google nel bundle`).not.toMatch(/AIza[0-9A-Za-z_-]{20,}/);
+      expect(code, `${file}: progetto del gestionale nel bundle`).not.toMatch(/gestionale-effetre/);
+    }
+  });
+
   it('autosufficienti: nessun import se non moduli node:', async () => {
     for (const { out } of BUNDLES as { out: string }[]) {
       const text = await readFile(path.join(ROOT, out), 'utf8');

@@ -68,6 +68,9 @@ const runCloudChecks = async (key: string): Promise<{ checks: CloudCheck[]; webh
   checks.push(st.webhookSeenAt
     ? { id: 'webhook', state: 'ok', label: 'Avvisi di fine chiamata da Retell', detail: `Ultimo avviso ${fmtWhen(st.webhookSeenAt)}.` }
     : { id: 'webhook', state: 'info', label: 'Avvisi di fine chiamata da Retell (facoltativi)', detail: 'Nessuno ancora: incolla in Retell l\'indirizzo qui sotto per avere gli esiti subito (senza, arrivano al passaggio successivo del motore).' });
+  checks.push(st.gestionaleSyncConfigured
+    ? { id: 'gestionale', state: 'ok', label: 'Invio al gestionale dal server', detail: 'I confermati arrivano al gestionale anche a browser chiuso (al massimo ogni ora).' }
+    : { id: 'gestionale', state: 'info', label: 'Invio al gestionale dal server (facoltativo)', detail: 'Non configurato: i confermati arrivano al gestionale quando l\'app è aperta. Per farlo anche a browser chiuso servono le variabili GESTIONALE_PROJECT_ID e GESTIONALE_API_KEY su Vercel.' });
   const webhookUrl = st.webhookPath && typeof location !== 'undefined' ? `${location.origin}${st.webhookPath}` : null;
   return { checks, webhookUrl };
 };

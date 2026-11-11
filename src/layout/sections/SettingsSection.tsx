@@ -36,7 +36,7 @@ const Panel: React.FC<{ title: string; text: string; children: React.ReactNode; 
 );
 
 const SettingsSection: React.FC<SettingsSectionProps> = (p) => (
-  <div className="space-y-5 max-w-3xl">
+  <div className="settings-grid" data-testid="settings-grid">
     <Panel testId="settings-generale" title="Generale" text="Base e orari usati per il giro senza tecnico e come ripiego quando un tecnico non ha i suoi.">
       <div className="space-y-4">
         <div>

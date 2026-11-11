@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, EyeOff, Layers, X } from 'lucide-react';
+import { ChevronDown, EyeOff, Layers, ListChecks, X } from 'lucide-react';
 import type { Appointment, AppointmentStatus, Coordinates, RouteSummary, Technician } from '../types';
 import MapComponent from '../Components/MapComponent';
 import type { MapLayers, ViewMode } from './types';
@@ -36,6 +36,9 @@ interface MapPanelProps {
   selectedTech: Technician | null;
   onHide: () => void;
   overlay: boolean;   // schermi stretti: la mappa si apre sopra l'elenco
+  // Tabella delle pratiche (ricerca o "Tutte le pratiche"): la mappa mostra
+  // le righe in elenco, i livelli non servono e al loro posto c'è questa nota
+  listNote?: string;
 }
 
 const MapPanel: React.FC<MapPanelProps> = (p) => {
@@ -61,16 +64,18 @@ const MapPanel: React.FC<MapPanelProps> = (p) => {
       {/* In alto a destra: livelli e nascondi */}
       <div className="absolute top-3 right-3 z-[500] flex flex-col items-end gap-2">
         <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setLayersOpen(o => !o)}
-            className="btn btn-sm btn-secondary shadow-raised"
-            aria-expanded={layersOpen}
-            data-testid="map-layers"
-          >
-            <Layers size={15} strokeWidth={1.75} aria-hidden /> Livelli
-            <span className="num text-xs text-ink-400">{onCount}/{LAYER_META.length}</span>
-          </button>
+          {!p.listNote && (
+            <button
+              type="button"
+              onClick={() => setLayersOpen(o => !o)}
+              className="btn btn-sm btn-secondary shadow-raised"
+              aria-expanded={layersOpen}
+              data-testid="map-layers"
+            >
+              <Layers size={15} strokeWidth={1.75} aria-hidden /> Livelli
+              <span className="num text-xs text-ink-400">{onCount}/{LAYER_META.length}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={p.onHide}
@@ -83,7 +88,12 @@ const MapPanel: React.FC<MapPanelProps> = (p) => {
             <span className={p.overlay ? 'sr-only sm:not-sr-only' : ''}>{p.overlay ? 'Chiudi' : 'Nascondi mappa'}</span>
           </button>
         </div>
-        {layersOpen && (
+        {p.listNote && (
+          <span className="chip chip-neutral h-8 px-3 bg-surface shadow-raised text-[13px] text-ink-700" data-testid="map-list-note">
+            <ListChecks size={14} strokeWidth={1.75} aria-hidden /> {p.listNote}
+          </span>
+        )}
+        {layersOpen && !p.listNote && (
           <div className="card shadow-pop p-1.5 w-[220px] animate-pop-in" role="group" aria-label="Cosa mostrare sulla mappa">
             <p className="menu-label">Mostra sulla mappa</p>
             {LAYER_META.map(l => (
@@ -108,7 +118,7 @@ const MapPanel: React.FC<MapPanelProps> = (p) => {
         <div className="card shadow-raised max-w-[240px] text-xs">
           <button type="button" onClick={() => setLegendOpen(o => !o)} className="w-full flex items-center gap-2 px-3 h-8 text-left" aria-expanded={legendOpen}>
             <span className="eyebrow">Legenda</span>
-            <span className="ml-auto text-ink-500 truncate">{p.viewMode === 'day' ? dayTitle(p.currentDate) : p.viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
+            <span className="ml-auto text-ink-500 truncate">{p.listNote ? 'Elenco' : p.viewMode === 'day' ? dayTitle(p.currentDate) : p.viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
             <ChevronDown size={14} strokeWidth={1.75} className={`text-ink-400 transition-transform ${legendOpen ? '' : '-rotate-90'}`} aria-hidden />
           </button>
           {legendOpen && (

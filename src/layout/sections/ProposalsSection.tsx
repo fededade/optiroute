@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowRightLeft, Check, CircleSlash, Phone, PhoneCall, Route, Truck } from 'lucide-react';
+import { ArrowRightLeft, Bot, Check, CircleSlash, Phone, PhoneCall, Route, Truck } from 'lucide-react';
 import type { Appointment } from '../../types';
 import RouteTimeline from '../RouteTimeline';
 import { EmptyState } from '../../ui/EmptyState';
@@ -11,6 +11,7 @@ interface ProposalsSectionProps {
   items: Appointment[];   // tutte le proposte (filtro tecnico)
   groups: { techId?: string; date: string; items: Appointment[] }[];
   autopilotOn: boolean;
+  hideEnableCallout?: boolean;
   queuedCount: number;
   approvableIds: (items: Appointment[]) => string[];
   onApproveAndCall: (ids: string[]) => void;
@@ -18,6 +19,7 @@ interface ProposalsSectionProps {
   onConfirmDay: (techId: string | undefined, date: string) => void;
   pendingCount: number;
   onDispatch: () => void;
+  onEnableAutopilot: () => void;   // stesso percorso del bottone "Attiva" della striscia
 }
 
 const ProposalsSection: React.FC<ProposalsSectionProps> = (p) => {
@@ -40,6 +42,15 @@ const ProposalsSection: React.FC<ProposalsSectionProps> = (p) => {
 
   return (
     <div className="space-y-5">
+      {!p.autopilotOn && !p.hideEnableCallout && (
+        <div className="callout bg-violet-50 border-violet-200 text-violet-950 items-center flex-wrap" data-testid="autopilot-off-callout">
+          <Bot size={18} strokeWidth={1.75} className="shrink-0 text-violet-700" aria-hidden />
+          <span className="flex-1 min-w-[220px]">Il pilota automatico è spento: accendilo per approvare i giri e far partire da sole le chiamate di conferma.</span>
+          <button type="button" className="btn btn-sm bg-violet-600 text-white hover:bg-violet-700" onClick={p.onEnableAutopilot}>
+            Attiva il pilota
+          </button>
+        </div>
+      )}
       <div className="card p-4">
         <p className="section-title">{plural(p.items.length, 'tappa proposta', 'tappe proposte')} in {plural(p.groups.length, 'giro', 'giri')}</p>
         <p className="text-xs text-ink-500 mt-0.5 flex items-center gap-1.5">

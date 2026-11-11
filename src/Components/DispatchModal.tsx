@@ -270,7 +270,7 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
                   <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-ink-900">
                     <span className="dot h-2.5 w-2.5" style={{ backgroundColor: tech.color }} />
                     {tech.name}
-                    <span className="num text-xs font-normal text-ink-500">{n} pratiche</span>
+                    <span className="num text-xs font-normal text-ink-500">{n} {n === 1 ? 'pratica' : 'pratiche'}</span>
                   </h4>
                   <div className="space-y-2">
                     {plans.map(plan => (
@@ -304,7 +304,7 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
                   <p className="font-semibold">Non pianificate nell'orizzonte: <span className="num">{unscheduledCount}</span></p>
                   {proposal.unscheduled.map(u => (
                     <p key={u.technician.id} className="mt-1 text-[13px]">
-                      {u.technician.name}: {u.appointments.length} pratiche (aumenta l'orizzonte o riduci il carico)
+                      {u.technician.name}: {u.appointments.length} {u.appointments.length === 1 ? 'pratica' : 'pratiche'} (aumenta l'orizzonte o riduci il carico)
                     </p>
                   ))}
                 </div>

@@ -1,84 +1,22 @@
 import React, { useState } from 'react';
 import {
-  Bell, Check, ChevronRight, Clock, GripVertical, Hash, MapPin, MoreHorizontal, PauseCircle, Pencil, Phone,
-  RotateCcw, Sparkles, Trash2, UserRound, type LucideIcon,
+  Bell, Briefcase, ChevronRight, GripVertical, Hash, MapPin, MoreHorizontal, Phone, PhoneOff, Sparkles, UserRound,
 } from 'lucide-react';
-import type { Appointment, AppointmentStatus } from '../types';
+import type { Appointment } from '../types';
 import { CallStatus } from '../Components/AutopilotBadges';
 import { Menu, MenuItem } from '../ui/Menu';
 import type { Workspace } from './types';
-import { dayLabel, placeLabel, shortStreet } from './format';
+import { dayLabel, formatPhone, placeLabel, shortStreet } from './format';
+import { ISSUE_LABEL, STATUS_META, actionsFor } from './praticaActions';
+import { phoneMissing } from './praticheTable';
 
 // La scheda della pratica: un solo componente, con varianti.
 // Gerarchia: orario/stato · cliente · indirizzo · etichette · stato della
 // chiamata · telefono e note · riassunto AI. Un'azione principale visibile,
 // tutte le altre nel menu "Altro".
 
-export const STATUS_META: Record<AppointmentStatus, { label: string; chip: string }> = {
-  confirmed: { label: 'Confermata', chip: 'chip-success' },
-  proposed: { label: 'Proposta', chip: 'chip-info' },
-  pending: { label: 'In attesa', chip: 'chip-warn' },
-  issue: { label: 'Problema', chip: 'chip-danger' },
-  standby: { label: 'Stand-by', chip: 'chip-neutral' },
-  cancelled: { label: 'Annullata', chip: 'chip-neutral' },
-};
-
-const ISSUE_LABEL: Record<string, { label: string; reentry: string }> = {
-  wrong_phone: { label: 'Numero errato', reentry: 'Ricontatto' },
-  callback: { label: 'Da richiamare', reentry: 'Richiamo' },
-  works_pending: { label: 'Lavori da ultimare', reentry: 'Fine lavori' },
-};
-
-interface Action {
-  key: string;
-  label: string;
-  icon: LucideIcon;
-  title?: string;
-  danger?: boolean;
-  run: () => void;
-}
-
-// Azioni di oggi per ciascuno stato (nessuna aggiunta, nessuna tolta)
-const actionsFor = (a: Appointment, ws: Workspace): { primary: Action; more: Action[] } => {
-  const edit: Action = { key: 'edit', label: 'Modifica', icon: Pencil, title: 'Modifica la pratica', run: () => ws.onEdit(a) };
-  const call: Action | null = a.phone && a.callStatus !== 'calling'
-    ? { key: 'call', label: 'Chiama', icon: Phone, title: a.status === 'proposed' ? 'Chiama il cliente per conferma (AI)' : 'Chiama il cliente (AI)', run: () => ws.onCall(a) }
-    : null;
-  const remove: Action = { key: 'remove', label: 'Elimina', icon: Trash2, danger: true, title: 'Elimina definitivamente la pratica', run: () => ws.onRemove(a.id) };
-  const to = (status: AppointmentStatus, label: string, icon: LucideIcon, title?: string): Action =>
-    ({ key: `to-${status}`, label, icon, title, run: () => ws.onStatusChange(a.id, status) });
-
-  switch (a.status) {
-    case 'proposed':
-      return {
-        primary: to('confirmed', 'Conferma', Check, 'Conferma questa proposta'),
-        more: [...(call ? [call] : []), edit, to('pending', 'Rifiuta: torna in attesa', RotateCcw, 'Rifiuta la proposta: la pratica torna in attesa')],
-      };
-    case 'confirmed': {
-      const rest = [to('standby', 'Metti in stand-by', PauseCircle), to('pending', 'Torna in attesa', Clock)];
-      return call ? { primary: call, more: [edit, ...rest] } : { primary: edit, more: rest };
-    }
-    case 'pending':
-      return {
-        primary: edit,
-        more: [
-          to('confirmed', `Conferma per il ${dayLabel(ws.currentDate)}`, Check, 'Forza la conferma nella data dell\'agenda'),
-          to('standby', 'Metti in stand-by', PauseCircle),
-          remove,
-        ],
-      };
-    case 'standby':
-      return { primary: to('pending', 'Rimetti in attesa', RotateCcw, 'Riattiva: torna tra le pratiche da pianificare'), more: [edit, remove] };
-    case 'issue':
-      return {
-        primary: to('pending', 'Rimetti in attesa', RotateCcw, 'Rimetti in attesa (torna pianificabile)'),
-        more: [{ ...edit, label: 'Modifica (categoria, data di rientro)' }, remove],
-      };
-    case 'cancelled':
-    default:
-      return { primary: to('pending', 'Ripristina', RotateCcw, 'Ripristina in attesa'), more: [remove] };
-  }
-};
+// Etichette di stato e azioni: condivise con la riga della tabella
+export { STATUS_META } from './praticaActions';
 
 interface PraticaCardProps {
   appt: Appointment;
@@ -87,9 +25,10 @@ interface PraticaCardProps {
   variant?: 'card' | 'stop';
   draggable?: boolean;
   showDate?: boolean;
+  hideDay?: boolean;   // dentro un blocco del giorno (agenda settimana/mese): la data è già nell'intestazione
 }
 
-const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', draggable = false, showDate = false }) => {
+const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', draggable = false, showDate = false, hideDay = false }) => {
   const [notesOpen, setNotesOpen] = useState(false);
   const tech = ws.techById(appt.technicianId);
   const { primary, more } = actionsFor(appt, ws);
@@ -148,7 +87,7 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
                   {appt.status === 'issue' && appt.issueType ? ISSUE_LABEL[appt.issueType]?.label : STATUS_META[appt.status].label}
                 </span>
               )}
-              {(showDate || (scheduled && variant === 'card')) && appt.date && (
+              {!hideDay && (showDate || (scheduled && variant === 'card')) && appt.date && (
                 <span className="text-xs text-ink-500">{dayLabel(appt.date)}</span>
               )}
               {scheduled && appt.status === 'proposed' && variant === 'card' && <span className="chip chip-info">Proposta</span>}
@@ -213,6 +152,16 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
                 <Hash size={12} strokeWidth={2} aria-hidden />{appt.periziaCode}
               </span>
             )}
+            {appt.project && (
+              <span className="chip chip-neutral max-w-full" title={`Committente / progetto: ${appt.project}`} data-testid="pratica-project">
+                <Briefcase size={12} strokeWidth={2} aria-hidden /><span className="truncate">{appt.project}</span>
+              </span>
+            )}
+            {phoneMissing(appt) && (
+              <span className="chip chip-warn" title="Senza telefono il pilota automatico non può chiamare il cliente: aggiungilo con Modifica" data-testid="pratica-no-phone">
+                <PhoneOff size={12} strokeWidth={2} aria-hidden />Manca il telefono
+              </span>
+            )}
             {appt.approximate && (
               <span className="chip chip-warn" title="Indirizzo esatto non trovato sulle mappe: la pratica è posizionata al centro del comune. Correggi l'indirizzo con Modifica per il punto esatto.">
                 <MapPin size={12} strokeWidth={2} aria-hidden />Posizione approssimativa
@@ -240,7 +189,7 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
           {appt.phone && (
             <p className="mt-2 flex items-center gap-1.5 text-[13px] text-ink-700">
               <Phone size={14} strokeWidth={1.75} className="text-ink-400" aria-hidden />
-              <span className="num">{appt.phone}</span>
+              <span className="num" title={appt.phone}>{formatPhone(appt.phone)}</span>
             </p>
           )}
           {appt.notes && (

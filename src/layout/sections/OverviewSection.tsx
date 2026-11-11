@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  ArrowRight, BellRing, CalendarDays, FileSpreadsheet, Hourglass, MapPinned, PhoneCall, Route, Truck, type LucideIcon,
+  ArrowRight, BellRing, CalendarDays, CheckCircle2, FileSpreadsheet, Hourglass, MapPinned, PhoneCall, Route, Truck, type LucideIcon,
 } from 'lucide-react';
 import type { Appointment } from '../../types';
 import type { AttentionItem, AutopilotStats } from '../../services/autopilotService';
@@ -8,6 +8,8 @@ import { isCallInFlight } from '../../services/autopilotService';
 import AttentionPanel from '../../Components/AttentionPanel';
 import type { SectionId, Workspace } from '../types';
 import { addDays, dayTitle, plural } from '../format';
+import { attentionBreakdown } from '../attentionSummary';
+import { useElementWidth } from '../useUiPrefs';
 
 interface OverviewProps {
   ws: Workspace;
@@ -19,6 +21,7 @@ interface OverviewProps {
   autopilotOn: boolean;
   attention: AttentionItem[];
   attentionTotal: number;             // voci + slot da riservare
+  slotCount: number;                  // slot da riservare per i rientri
   onNavigate: (s: SectionId) => void;
   onOpenDay: (date: string) => void;  // agenda di quel giorno
   onOpenProposals: () => void;
@@ -51,8 +54,44 @@ interface RouteCard {
   items: Appointment[];
 }
 
+// Tessera larga "Da gestire": il numero e il dettaglio per categoria
+const AttentionTile: React.FC<{ total: number; parts: { key: string; text: string }[]; onClick: () => void }> = ({ total, parts, onClick }) => {
+  const calm = total === 0;
+  return (
+    <button type="button" onClick={onClick} data-testid="tile-da-gestire" className={`tile-wide group h-full ${calm ? '' : 'tile-alert bg-gradient-to-br from-rose-50/70 to-surface'}`}>
+      <span className="flex items-center gap-2 text-[13px] font-medium text-ink-600">
+        <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${calm ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+          {calm ? <CheckCircle2 size={15} strokeWidth={1.75} aria-hidden /> : <BellRing size={15} strokeWidth={1.75} aria-hidden />}
+        </span>
+        <span className="leading-tight min-w-0">Da gestire</span>
+        <ArrowRight size={14} strokeWidth={1.75} className="ml-auto text-ink-300 group-hover:text-ink-600 transition-colors" aria-hidden />
+      </span>
+      <span className="mt-3 flex items-baseline gap-2.5 flex-wrap">
+        <span className={`num text-[28px] leading-none font-semibold ${calm ? 'text-ink-950' : 'text-rose-700'}`}>{total}</span>
+        <span className="text-xs text-ink-500">{calm ? 'Niente in sospeso' : total === 1 ? 'richiede una decisione' : 'richiedono una decisione'}</span>
+      </span>
+      {calm ? (
+        <span className="text-xs text-ink-500 mt-1.5">Il pilota sta lavorando da solo.</span>
+      ) : (
+        <span className="mt-2.5 flex flex-wrap gap-x-3.5 gap-y-1 text-xs text-ink-700" data-testid="tile-da-gestire-detail">
+          {parts.map(part => (
+            <span key={part.key} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+              <span className={`dot h-1.5 w-1.5 ${part.key === 'slot' ? 'bg-amber-500' : 'bg-rose-400'}`} aria-hidden />{part.text}
+            </span>
+          ))}
+        </span>
+      )}
+    </button>
+  );
+};
+
 const OverviewSection: React.FC<OverviewProps> = (p) => {
   const { ws } = p;
+  const [tilesRef, tilesW] = useElementWidth<HTMLDivElement>();
+  // Colonne decise dallo spazio reale: 6 (Da gestire largo 2 + 4 tessere),
+  // 4 (Da gestire su tutta la riga + 4) o 2 (Da gestire + 2×2): mai buchi
+  const cols = tilesW >= 980 ? 6 : tilesW >= 600 ? 4 : 2;
+  const wideSpan = cols === 6 ? 2 : cols;
   const now = new Date();
   const today = ws.todayStr;
   const in7 = addDays(today, 7);
@@ -112,12 +151,14 @@ const OverviewSection: React.FC<OverviewProps> = (p) => {
 
   return (
     <div className="space-y-8">
-      <div className="tiles">
+      <div ref={tilesRef} className="ov-tiles" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        <div style={{ gridColumn: `span ${wideSpan} / span ${wideSpan}` }}>
+          <AttentionTile total={p.attentionTotal} parts={attentionBreakdown(p.attention, p.slotCount)} onClick={() => p.onNavigate('da-gestire')} />
+        </div>
         <Tile testId="tile-in-attesa" icon={Hourglass} tone="bg-amber-50 text-amber-700" label="In attesa" value={p.pendingCount} hint="da pianificare" onClick={() => p.onNavigate('in-attesa')} />
         <Tile testId="tile-proposte" icon={Route} tone="bg-sky-50 text-sky-700" label="Proposte" value={p.proposedCount} hint={`da approvare · ${plural(p.proposedRoutes, 'giro', 'giri')}`} onClick={() => p.onNavigate('proposte')} />
         <Tile testId="tile-chiamate" icon={PhoneCall} tone="bg-violet-50 text-violet-700" label="Chiamate" value={p.stats.queued} hint={<>in coda · <span className="num">{p.stats.inFlight}</span> in corso{p.autopilotOn ? '' : ' · pilota spento'}</>} onClick={() => p.onNavigate('proposte')} />
         <Tile testId="tile-confermate" icon={CalendarDays} tone="bg-emerald-50 text-emerald-700" label="Confermate oggi" value={confirmedToday} hint={<><span className="num">{confirmedWeek}</span> nei prossimi 7 giorni</>} onClick={() => p.onOpenDay(today)} />
-        <Tile testId="tile-da-gestire" icon={BellRing} tone="bg-rose-50 text-rose-700" label="Da gestire" value={p.attentionTotal} hint={p.attentionTotal ? 'richiedono una decisione' : 'tutto in ordine'} onClick={() => p.onNavigate('da-gestire')} alert={p.attentionTotal > 0} />
       </div>
 
       <section>
@@ -178,7 +219,7 @@ const OverviewSection: React.FC<OverviewProps> = (p) => {
           </div>
         )}
         {routes.length > shownRoutes.length && (
-          <p className="mt-2 text-xs text-ink-500">e altri {routes.length - shownRoutes.length} giri in agenda e nelle proposte.</p>
+          <p className="mt-2 text-xs text-ink-500">{routes.length - shownRoutes.length === 1 ? 'e un altro giro' : `e altri ${routes.length - shownRoutes.length} giri`} in agenda e nelle proposte.</p>
         )}
       </section>
 

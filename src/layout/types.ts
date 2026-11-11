@@ -4,6 +4,7 @@ import type { Appointment, AppointmentStatus, Technician } from '../types';
 // Sezioni del pannello di lavoro (anche negli agganci data-testid: nav-<id>, section-<id>)
 export type SectionId =
   | 'panoramica'
+  | 'pratiche'
   | 'da-gestire'
   | 'in-attesa'
   | 'proposte'
@@ -40,6 +41,8 @@ export interface Workspace {
   query: string;                   // testo della ricerca
   matches: (a: Appointment) => boolean;
   awaitingOutcome: (a: Appointment) => boolean;
+  hasStartBase: (techId?: string) => boolean;   // base del tecnico o base generale
+  onOpenBaseSettings: () => void;               // porta a Impostazioni (base generale)
 
   onSelect: (id: string) => void;
   onEdit: (a: Appointment) => void;

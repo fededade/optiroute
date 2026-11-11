@@ -138,20 +138,36 @@ const AgendaSection: React.FC<AgendaSectionProps> = (p) => {
     // Settimana / mese: per giorno
     const byDay = new Map<string, Appointment[]>();
     for (const a of visible) byDay.set(a.date || '', [...(byDay.get(a.date || '') || []), a]);
-    body = Array.from(byDay.entries()).map(([day, items]) => (
-      <section key={day}>
-        <div className="flex items-center gap-2 mb-2">
-          <button type="button" className="text-sm font-semibold text-ink-900 hover:underline underline-offset-2" onClick={() => p.onGoDay(day)} title="Apri il giorno">
-            {cap(longDayLabel(day))}
-          </button>
-          <span className="num text-xs text-ink-500">{items.length}</span>
-          {day === ws.todayStr && <span className="chip chip-brand">Oggi</span>}
-        </div>
-        <div className="space-y-3">
-          {items.map(a => <PraticaCard key={a.id} appt={a} ws={ws} />)}
-        </div>
-      </section>
-    ));
+    // Un blocco per giorno con un'intestazione che resta in vista mentre si scorre
+    body = Array.from(byDay.entries()).map(([day, items]) => {
+      const techIds = Array.from(new Set(items.map(a => a.technicianId || 'none')));
+      return (
+        <section key={day} data-testid="agenda-day" aria-label={cap(longDayLabel(day))}>
+          <div className="day-head flex items-center gap-x-3 gap-y-1 flex-wrap">
+            <button type="button" className="text-sm font-semibold text-ink-950 hover:underline underline-offset-2" onClick={() => p.onGoDay(day)} title="Apri il giorno">
+              {cap(longDayLabel(day))}
+            </button>
+            {day === ws.todayStr && <span className="chip chip-brand">Oggi</span>}
+            <span className="text-xs text-ink-500">{plural(items.length, 'sopralluogo', 'sopralluoghi')}</span>
+            <span className="ml-auto flex items-center gap-2.5 flex-wrap text-xs text-ink-600">
+              {techIds.map(id => {
+                const t = ws.techById(id === 'none' ? undefined : id);
+                const n = items.filter(a => (a.technicianId || 'none') === id).length;
+                return (
+                  <span key={id} className="inline-flex items-center gap-1.5" title={`${t ? t.name : 'Senza tecnico'}: ${plural(n, 'tappa', 'tappe')}`}>
+                    <span className="dot" style={{ backgroundColor: t?.color || '#646A7B' }} />
+                    {t ? t.name.split(' ')[0] : 'Senza tecnico'} <span className="num text-ink-400">{n}</span>
+                  </span>
+                );
+              })}
+            </span>
+          </div>
+          <div className="space-y-3 pt-3">
+            {items.map(a => <PraticaCard key={a.id} appt={a} ws={ws} hideDay />)}
+          </div>
+        </section>
+      );
+    });
   }
 
   return (

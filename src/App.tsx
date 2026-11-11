@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { AlternativeSlot, Appointment, Coordinates, AppointmentStatus, CallOutcome, IssueType, Technician } from './types';
 import { geocodeAddress } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
@@ -42,6 +42,7 @@ import DispatchModal from './Components/DispatchModal';
 import KmzImportModal from './Components/KmzImportModal';
 import AutopilotBar from './Components/AutopilotBar';
 import AutopilotSettingsModal from './Components/AutopilotSettingsModal';
+import ImportProgressModal from './Components/ImportProgressModal';
 import SideNav, { type NavCounts } from './layout/SideNav';
 import TopBar from './layout/TopBar';
 import MapPanel from './layout/MapPanel';
@@ -53,25 +54,17 @@ import AgendaSection from './layout/sections/AgendaSection';
 import ProblemsSection from './layout/sections/ProblemsSection';
 import ArchiveSection from './layout/sections/ArchiveSection';
 import SettingsSection from './layout/sections/SettingsSection';
+import AllPraticheSection from './layout/sections/AllPraticheSection';
 import { useUiPrefs, useViewportWidth } from './layout/useUiPrefs';
 import type { SectionId, Workspace } from './layout/types';
-import { inAgendaRange, longDayLabel, matchesQuery, rangeLabel } from './layout/format';
+import { inAgendaRange, longDayLabel, matchesQuery, plural, rangeLabel } from './layout/format';
+import { DEFAULT_SORT, filterByStatus, sortPratiche, statusCounts, type SortState, type StatusFilter } from './layout/praticheTable';
+import { NAV_ITEMS } from './layout/SideNav';
 
 // --- CONFIGURATION ---
 // URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
 const N8N_WEBHOOK_URL = (import.meta as any).env?.VITE_N8N_WEBHOOK_URL || 'https://fededade.app.n8n.cloud/webhook-test/Suca';
 
-// Icone della finestra di import (le altre sono di lucide-react, nei componenti)
-const CheckCircleIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-12 h-12 text-emerald-500">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-  </svg>
-);
-const ExclamationCircleIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-12 h-12 text-orange-500">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
-  </svg>
-);
 const DEFAULT_CENTER: Coordinates = { lat: 41.9028, lng: 12.4964 }; // Rome
 
 type ViewMode = 'day' | 'week' | 'month';
@@ -865,8 +858,11 @@ function App() {
   };
 
   const getExportPool = () => {
-    if (visibleAppointments.length === 0) return null;
-    return [...visibleAppointments].sort((a: Appointment, b: Appointment) => {
+    // "Mostrate ora": l'elenco della tabella (ricerca o Tutte le pratiche)
+    // oppure, nelle altre sezioni, visibleAppointments come sempre
+    const pool = shownNow;
+    if (pool.length === 0) return null;
+    return [...pool].sort((a: Appointment, b: Appointment) => {
         if (a.technicianId !== b.technicianId) return (a.technicianId || 'zzz').localeCompare(b.technicianId || 'zzz');
         if (a.date !== b.date && a.date && b.date) return a.date.localeCompare(b.date);
         return (a.sequenceOrder||0) - (b.sequenceOrder||0);
@@ -1437,6 +1433,12 @@ function App() {
   const [ui, updateUi] = useUiPrefs();
   const [section, setSection] = useState<SectionId>('panoramica');
   const [search, setSearch] = useState('');
+  // Tutte le pratiche / ricerca globale: pillola di stato e ordinamento
+  const [praticheStatus, setPraticheStatus] = useState<StatusFilter>('all');
+  const [praticheSort, setPraticheSort] = useState<SortState>(DEFAULT_SORT);
+  // "Attiva il pilota" fuori dalla striscia: la striscia osserva il contatore
+  const [autopilotEnableRequest, setAutopilotEnableRequest] = useState(0);
+  const [autopilotIntroOpen, setAutopilotIntroOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [navExpandedNarrow, setNavExpandedNarrow] = useState(false);
   const [mapOpenSmall, setMapOpenSmall] = useState(false);
@@ -1474,6 +1476,7 @@ function App() {
 
   const navigate = (next: SectionId) => {
     setSection(next);
+    setSearch('');  // scegliendo una sezione la ricerca globale si svuota
     setMobileNavOpen(false);
     const preset = LAYER_PRESETS[next];
     if (preset) setFilters(preset);
@@ -1538,6 +1541,8 @@ function App() {
     query: search,
     matches: (a: Appointment) => matchesQuery(a, search),
     awaitingOutcome: awaitingCallOutcome,
+    hasStartBase: (techId?: string) => !!baseLocation || !!techById(techId)?.baseCoords,
+    onOpenBaseSettings: () => navigate('impostazioni'),
     onSelect: setSelectedAppointmentId,
     onEdit: openEditModal,
     onStatusChange: handleStatusChange,
@@ -1556,6 +1561,7 @@ function App() {
   const confirmedUpcoming = allAppointments.filter(a => a.status === 'confirmed' && !!a.date && a.date >= todayStr && matchesTechFilter(a)).length;
   const attentionTotal = attention.length + followUpAlerts.length;
   const navCounts: NavCounts = {
+    pratiche: allAppointments.filter(matchesTechFilter).length,
     daGestire: attentionTotal,
     inAttesa: listPending.length,
     proposte: listProposed.length,
@@ -1574,20 +1580,58 @@ function App() {
   const optimizeLabel = `Ottimizza il giro del ${formatDayLabel(currentDate).replace(/\./g, '')}${selectedTech ? ` · ${selectedTech.name.split(' ')[0]}` : ''}`;
   const syncHint = `${getSyncableAppointments(allAppointments).length} confermate da inviare · ${getSyncEnvName()}`;
   const techUnavailable = !!selectedTech && isFullyUnavailable(selectedTech, currentDate);
-  const mapAppointments = search ? visibleAppointments.filter(a => matchesQuery(a, search)) : visibleAppointments;
+
+  // Tabella delle pratiche (sezione "Tutte le pratiche" e ricerca globale):
+  // tutte le date, filtro tecnico, ricerca e pillola di stato
+  const searching = search.trim() !== '';
+  const tableMode = searching || section === 'pratiche';
+  const techFiltered = useMemo(() => allAppointments.filter(matchesTechFilter), [allAppointments, matchesTechFilter]);
+  const tableBase = useMemo(
+    () => (searching ? techFiltered.filter(a => matchesQuery(a, search)) : techFiltered),
+    [techFiltered, searching, search]);
+  const tableCounts = useMemo(() => statusCounts(tableBase), [tableBase]);
+  const tableRows = useMemo(
+    () => sortPratiche(filterByStatus(tableBase, praticheStatus), praticheSort, (id?: string) => techById(id)?.name || ''),
+    [tableBase, praticheStatus, praticheSort, techById]);
+  // Elenco "mostrate ora": lo usano la mappa e l'esportazione (getExportPool)
+  const visibleStable = useMemo(() => getVisibleAppointments(), [getVisibleAppointments]);
+  const shownNow = tableMode ? tableRows : visibleStable;
+  // In Impostazioni la mappa non serve (la preferenza salvata resta com'è)
+  const mapHere = !(section === 'impostazioni' && !tableMode);
+  const mapShown = mapVisible && mapHere;
+  const sectionLabel = (id: SectionId) => (id === 'impostazioni' ? 'Impostazioni' : NAV_ITEMS.find(n => n.id === id)?.label || '');
 
   const SECTION_TITLES: Record<SectionId, { title: string; subtitle: string }> = {
     'panoramica': { title: 'Panoramica', subtitle: longDayLabel(todayStr) },
+    'pratiche': { title: 'Tutte le pratiche', subtitle: `${plural(techFiltered.length, 'pratica', 'pratiche')}${selectedTech ? ` di ${selectedTech.name}` : ''} · ogni stato e data` },
     'da-gestire': { title: 'Da gestire', subtitle: attentionTotal ? `${attentionTotal} ${attentionTotal === 1 ? 'voce richiede' : 'voci richiedono'} una decisione` : 'Niente in sospeso' },
     'in-attesa': { title: 'In attesa', subtitle: `${listPending.length} da pianificare` },
-    'proposte': { title: 'Proposte', subtitle: `${listProposed.length} tappe in ${proposedGroups.length} ${proposedGroups.length === 1 ? 'giro' : 'giri'} da approvare` },
+    'proposte': { title: 'Proposte', subtitle: `${plural(listProposed.length, 'tappa', 'tappe')} in ${plural(proposedGroups.length, 'giro', 'giri')} da approvare` },
     'agenda': { title: 'Agenda', subtitle: `${agendaItems.length} confermati · ${rangeLabel(currentDate, viewMode)}` },
-    'problemi': { title: 'Problemi', subtitle: `${listIssues.length} pratiche da sistemare` },
+    'problemi': { title: 'Problemi', subtitle: `${plural(listIssues.length, 'pratica', 'pratiche')} da sistemare` },
     'archivio': { title: 'Archivio', subtitle: `${listStandby.length} in stand-by · ${listCancelled.length} annullate` },
     'impostazioni': { title: 'Impostazioni', subtitle: 'Base, orari, pilota e tecnici' },
   };
 
   const renderSection = () => {
+    if (tableMode) {
+      return (
+        <AllPraticheSection
+          ws={ws}
+          mode={searching ? 'search' : 'section'}
+          rows={tableRows}
+          counts={tableCounts}
+          status={praticheStatus}
+          onStatus={setPraticheStatus}
+          sort={praticheSort}
+          onSort={setPraticheSort}
+          query={search}
+          onClearSearch={() => setSearch('')}
+          backLabel={section === 'pratiche' ? undefined : sectionLabel(section)}
+          onImportExcel={() => fileInputRef.current?.click()}
+        />
+      );
+    }
     switch (section) {
       case 'panoramica':
         return (
@@ -1601,6 +1645,7 @@ function App() {
             autopilotOn={autopilot.enabled}
             attention={attention}
             attentionTotal={attentionTotal}
+            slotCount={followUpAlerts.length}
             onNavigate={navigate}
             onOpenDay={(d) => { setCurrentDate(d); setViewMode('day'); navigate('agenda'); }}
             onOpenProposals={() => navigate('proposte')}
@@ -1647,6 +1692,7 @@ function App() {
             items={listProposed}
             groups={proposedGroups}
             autopilotOn={autopilot.enabled}
+            hideEnableCallout={autopilotIntroOpen}
             queuedCount={queuedIds.length}
             approvableIds={approvableIds}
             onApproveAndCall={handleApproveAndCall}
@@ -1654,6 +1700,7 @@ function App() {
             onConfirmDay={handleConfirmDay}
             pendingCount={pendingAll.length}
             onDispatch={() => setShowDispatchModal(true)}
+            onEnableAutopilot={() => setAutopilotEnableRequest(n => n + 1)}
           />
         );
       case 'agenda':
@@ -1707,9 +1754,10 @@ function App() {
 
   const mapPanel = (
     <MapPanel
-      appointments={mapAppointments}
+      appointments={shownNow}
       center={mapCenter}
-      routeSummary={viewMode === 'day' ? routeSummary : null}
+      routeSummary={!tableMode && viewMode === 'day' ? routeSummary : null}
+      listNote={tableMode ? `Sulla mappa: ${shownNow.length === 0 ? 'nessuna pratica in elenco' : shownNow.length === 1 ? 'la pratica in elenco' : `le ${shownNow.length} pratiche in elenco`}` : undefined}
       baseLocation={baseLocation}
       technicians={technicians}
       selectedId={selectedAppointmentId}
@@ -1730,7 +1778,9 @@ function App() {
     />
   );
 
-  const titles = SECTION_TITLES[section];
+  const titles = searching
+    ? { title: `Risultati per «${search.trim()}»`, subtitle: `${plural(tableCounts.all, 'pratica', 'pratiche')} in tutte le sezioni` }
+    : SECTION_TITLES[section];
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
@@ -1825,77 +1875,14 @@ function App() {
 
       {/* --- IMPORT MODAL --- */}
       {showImportModal && (
-        <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full text-center flex flex-col max-h-[80vh]">
-             {!importFinished ? (
-                 <>
-                    <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto mb-4 shrink-0"></div>
-                    <h3 className="text-lg font-bold text-slate-800 mb-2 shrink-0">Importazione in corso...</h3>
-                    <p className="text-sm text-slate-500 mb-4 shrink-0">{uploadProgress}</p>
-                    <p className="text-xs text-slate-400 shrink-0">Non chiudere questa finestra.</p>
-                 </>
-             ) : (
-                 <>
-                    <div className="mx-auto mb-4 flex justify-center shrink-0">
-                        {importStats.failed === 0 ? <CheckCircleIcon /> : <ExclamationCircleIcon />}
-                    </div>
-                    <h3 className="text-xl font-bold text-slate-800 mb-2 shrink-0">Fatto!</h3>
-                    <div className="mb-4 space-y-2 shrink-0">
-                        <p className="text-md text-slate-600">N. <span className="font-bold text-indigo-600">{importStats.success}</span> Pratiche importate!</p>
-                        {importStats.approx > 0 && (
-                            <p className="text-sm text-amber-700 bg-amber-50 p-2 rounded">
-                                ≈ {importStats.approx} {importStats.approx === 1 ? 'indirizzo posizionato' : 'indirizzi posizionati'} al centro del comune
-                                (numero civico o via non trovati sulle mappe).
-                            </p>
-                        )}
-                        {importStats.failed > 0 && (
-                            <p className="text-sm text-red-500 bg-red-50 p-2 rounded">
-                                ⚠️ {importStats.failed} indirizzi non trovati.
-                            </p>
-                        )}
-                    </div>
-
-                    {(failedImports.length > 0 || approxImports.length > 0) && (
-                        <div className="flex-1 overflow-y-auto mb-4 bg-slate-50 rounded border border-slate-200 p-2 text-left">
-                            {approxImports.length > 0 && (
-                                <>
-                                    <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Posizione approssimativa (verifica o correggi con Modifica):</p>
-                                    <ul className="text-xs text-amber-700 space-y-1 mb-2">
-                                        {approxImports.map((approxStr, i) => (
-                                            <li key={i} className="flex gap-1.5 items-start">
-                                                <span className="shrink-0">≈</span>
-                                                <span>{approxStr}</span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </>
-                            )}
-                            {failedImports.length > 0 && (
-                                <>
-                                    <p className="text-xs font-bold text-slate-500 mb-2 sticky top-0 bg-slate-50">Dettaglio errori:</p>
-                                    <ul className="text-xs text-red-600 space-y-1">
-                                        {failedImports.map((failStr, i) => (
-                                            <li key={i} className="flex gap-1.5 items-start">
-                                                <span className="shrink-0">•</span>
-                                                <span>{failStr}</span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </>
-                            )}
-                        </div>
-                    )}
-
-                    <button
-                        onClick={closeImportModal}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition-colors shrink-0"
-                    >
-                        Chiudi
-                    </button>
-                 </>
-             )}
-          </div>
-        </div>
+        <ImportProgressModal
+          finished={importFinished}
+          progress={uploadProgress}
+          stats={importStats}
+          failed={failedImports}
+          approx={approxImports}
+          onClose={closeImportModal}
+        />
       )}
 
       {/* File nascosti per gli import (Importa ▾) */}
@@ -1920,7 +1907,7 @@ function App() {
         <TopBar
           title={titles.title}
           subtitle={titles.subtitle}
-          isAgenda={section === 'agenda'}
+          isAgenda={section === 'agenda' && !searching}
           compact={compactBar}
           tight={tightBar}
           mobile={isMobile}
@@ -1948,6 +1935,7 @@ function App() {
           isOptimizing={isOptimizing}
           onOptimize={handleOptimize}
           onExport={handleExport}
+          exportHint={`${plural(shownNow.length, 'pratica', 'pratiche')}: quelle mostrate ora`}
           onSendReport={handleSendToN8n}
           isSending={isSendingToN8n}
           onSyncGestionale={() => handleSyncGestionale(false)}
@@ -1958,7 +1946,7 @@ function App() {
           onDateChange={setCurrentDate}
           viewMode={viewMode}
           onViewMode={setViewMode}
-          mapVisible={mapVisible}
+          mapVisible={mapVisible || !mapHere}
           onToggleMap={toggleMap}
         />
 
@@ -1975,6 +1963,8 @@ function App() {
           onOpenSettings={() => setShowAutopilotSettings(true)}
           onBridgeSyncNow={() => { void bridgeInbox.syncNow(); }}
           cloud={cloudActive ? { mirror: !isAutomationTab, state: cloudSync.state, leaseHolder: cloudLeaseHolder } : null}
+          requestEnable={autopilotEnableRequest}
+          onIntroOpenChange={setAutopilotIntroOpen}
         />
 
         {/* --- PANNELLO DI LAVORO + MAPPA --- */}
@@ -1982,19 +1972,21 @@ function App() {
           <main
             ref={workRef}
             className="work-panel min-w-0 overflow-y-auto overflow-x-hidden"
-            style={mapVisible && !mapIsOverlay ? { width: `${ui.panelPct}%`, minWidth: 520, flex: 'none' } : { flex: '1 1 0%' }}
+            style={mapShown && !mapIsOverlay ? { width: `${ui.panelPct}%`, minWidth: 520, flex: 'none' } : { flex: '1 1 0%' }}
           >
             <div
               data-testid={`section-${section}`}
-              className={`px-4 md:px-5 py-5 ${!mapVisible || mapIsOverlay ? 'max-w-[1100px] mx-auto' : ''}`}
+              className={`px-4 md:px-5 py-5 ${!mapShown || mapIsOverlay ? (tableMode ? 'max-w-[1600px] mx-auto' : 'max-w-[1100px] mx-auto') : ''}`}
             >
               {renderSection()}
             </div>
           </main>
 
+          {/* In Impostazioni la mappa resta montata ma nascosta (niente
+              animazioni di Leaflet interrotte, stessa vista al ritorno) */}
           {mapVisible && !mapIsOverlay && (
             <>
-              <div
+              {mapShown && <div
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="Ridimensiona il pannello e la mappa"
@@ -2002,8 +1994,8 @@ function App() {
                 onPointerDown={onDividerDown}
                 onDoubleClick={() => updateUi({ panelPct: 46 })}
                 className="split-handle"
-              />
-              <div className="flex-1 min-w-[320px] py-3 pr-3 md:py-4 md:pr-4">
+              />}
+              <div className={mapShown ? 'flex-1 min-w-[320px] py-3 pr-3 md:py-4 md:pr-4' : 'hidden'} aria-hidden={!mapShown || undefined}>
                 {mapPanel}
               </div>
             </>
@@ -2011,7 +2003,7 @@ function App() {
         </div>
       </div>
 
-      {mapVisible && mapIsOverlay && (
+      {mapShown && mapIsOverlay && (
         <div className="fixed inset-0 z-[1000] bg-canvas p-2 animate-fade-in">
           {mapPanel}
         </div>

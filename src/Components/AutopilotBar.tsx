@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Bot, Cloud, CloudOff, Download, Pause, Play, Plug, Settings } from 'lucide-react';
+import React, { useEffect, useId, useRef, useState } from 'react';
+import { Bot, ChevronDown, Cloud, CloudOff, Download, Pause, Play, Plug, Settings } from 'lucide-react';
 import { nextCallWindowStart, type AutopilotSettings, type AutopilotStats } from '../services/autopilotService';
 import type { TabLockState } from '../hooks/useTabLock';
 import type { BridgeInboxStatus } from '../hooks/useBridgeInbox';
@@ -29,6 +29,11 @@ interface AutopilotBarProps {
   onOpenSettings: () => void;
   onBridgeSyncNow: () => void;
   cloud?: CloudBarInfo | null;   // presente solo con il cloud attivo
+  // Contatore: ogni incremento chiede di attivare il pilota con lo stesso
+  // percorso del bottone "Attiva" (finestra di presentazione compresa)
+  requestEnable?: number;
+  // la finestra "Attivare il pilota automatico?" è aperta (per non duplicare i comandi sotto)
+  onIntroOpenChange?: (open: boolean) => void;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -128,9 +133,12 @@ const BRIDGE_CHIP_STYLE: Record<string, string> = {
 };
 
 const AutopilotBar: React.FC<AutopilotBarProps> = ({
-  settings, stats, lock, introSeen, autoDispatchRunning, bridge, onEnable, onPause, onOpenSettings, onBridgeSyncNow, cloud,
+  settings, stats, lock, introSeen, autoDispatchRunning, bridge, onEnable, onPause, onOpenSettings, onBridgeSyncNow, cloud, requestEnable = 0, onIntroOpenChange,
 }) => {
   const [showIntro, setShowIntro] = useState(false);
+  // Telefono: una riga sola, il resto a comparsa
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = useId();
   const now = new Date();
   const on = settings.enabled;
 
@@ -138,6 +146,19 @@ const AutopilotBar: React.FC<AutopilotBarProps> = ({
     if (!introSeen) { setShowIntro(true); return; }
     onEnable();
   };
+
+  const introCb = useRef(onIntroOpenChange);
+  introCb.current = onIntroOpenChange;
+  useEffect(() => { introCb.current?.(showIntro); }, [showIntro]);
+
+  // Richiesta dall'esterno (es. avviso nella sezione Proposte)
+  const lastRequest = useRef(requestEnable);
+  useEffect(() => {
+    if (requestEnable === lastRequest.current) return;
+    lastRequest.current = requestEnable;
+    if (!settings.enabled) handleEnable();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestEnable]);
 
   // Cloud: etichetta di stato, ultimo passaggio, si può chiudere il browser?
   const cloudState = cloud?.state || null;
@@ -195,37 +216,63 @@ const AutopilotBar: React.FC<AutopilotBarProps> = ({
 
   const CloudIcon = chip?.down ? CloudOff : Cloud;
 
+  // Riassunto per il telefono ("3 in coda · 1 in corso") e segnale di avviso
+  const summary = !on ? '' : lock === 'follower' && !cloud ? ''
+    : !stats.windowOpen ? `fascia chiusa${stats.queued > 0 ? ` · ${stats.queued} in coda` : ''}`
+    : `${stats.queued} in coda · ${stats.inFlight} in corso`;
+  const bridgeStyle = BRIDGE_CHIP_STYLE[bridge.kind] || '';
+  const hasAlert = !!chip?.down || /chip-(warn|danger)/.test(bridge.kind !== 'disabled' ? bridgeStyle : '');
+  const hasDetails = on || !!chip || bridge.kind !== 'disabled' || secondary.length > 0;
+
   return (
     <div data-testid="autopilot-bar" className={`autopilot-strip ${on ? 'autopilot-strip-on' : ''}`}>
       <div className="flex items-start gap-3">
-      <div className="flex-1 min-w-0 flex items-center gap-x-3 gap-y-1.5 flex-wrap min-h-[32px]">
-        <span className="flex items-center gap-2 shrink-0">
-          <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${on ? 'bg-violet-600 text-white' : 'bg-slate-100 text-ink-500'}`}>
+      <div id={detailsId} className="flex-1 min-w-0 flex items-center gap-x-3 gap-y-1.5 flex-wrap min-h-[32px]">
+        <span className="flex items-center gap-2 min-w-0 md:shrink-0">
+          <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${on ? 'bg-violet-600 text-white' : 'bg-slate-100 text-ink-500'}`}>
             <Bot size={16} strokeWidth={1.75} className={on && lock === 'leader' && stats.windowOpen ? 'animate-pulse' : ''} aria-hidden />
           </span>
-          <span className={`text-sm font-semibold ${on ? 'text-violet-900' : 'text-ink-700'}`}>
+          <span className={`text-sm font-semibold max-md:sr-only ${on ? 'text-violet-900' : 'text-ink-700'}`}>
             {!on ? 'Pilota automatico spento'
               : lock === 'follower' && !cloud ? <span className="text-amber-800">Pilota automatico attivo in un'altra scheda</span>
               : `Pilota automatico ${lock === 'follower' ? 'acceso' : 'attivo'}`}
           </span>
+          <span className={`md:hidden shrink-0 text-sm font-semibold whitespace-nowrap ${!on ? 'text-ink-700' : lock === 'follower' && !cloud ? 'text-amber-800' : 'text-violet-900'}`} aria-hidden>
+            {!on ? 'Pilota spento' : lock === 'follower' && !cloud ? 'Pilota in altra scheda' : 'Pilota attivo'}
+          </span>
+          {hasDetails && (
+            <button
+              type="button"
+              onClick={() => setDetailsOpen(o => !o)}
+              aria-expanded={detailsOpen}
+              aria-controls={detailsId}
+              title={detailsOpen ? 'Nascondi i dettagli del pilota' : 'Mostra i dettagli del pilota (prossima chiamata, bridge, avvisi)'}
+              className="md:hidden relative min-w-0 inline-flex items-center gap-1 rounded-md h-7 pl-1 pr-0.5 -ml-0.5 text-xs text-ink-600 hover:bg-slate-100"
+              data-testid="autopilot-details-toggle"
+            >
+              {summary ? <span className="truncate num-chip" data-testid="autopilot-summary">{summary}</span> : <span className="sr-only">Dettagli</span>}
+              <ChevronDown size={15} strokeWidth={1.75} className={`shrink-0 transition-transform ${detailsOpen ? 'rotate-180' : ''}`} aria-hidden />
+              {hasAlert && !detailsOpen && <span className="absolute top-0.5 right-0 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-surface" aria-label="Avvisi nei dettagli" />}
+            </button>
+          )}
         </span>
 
         {on && (
-          <span data-testid="autopilot-status" className="flex items-center gap-1.5 flex-wrap">
+          <span data-testid="autopilot-status" className={`${detailsOpen ? 'flex' : 'max-md:hidden flex'} items-center gap-1.5 flex-wrap`}>
             {counters}
             {autoDispatchRunning && <span className="chip chip-ai">Smistamento in corso…</span>}
           </span>
         )}
 
         {chip && (
-          <span data-testid="cloud-chip" title={chip.title} className={`chip ${chip.style} max-w-full`}>
+          <span data-testid="cloud-chip" title={chip.title} className={`chip ${chip.style} max-w-full ${detailsOpen ? '' : 'max-md:hidden'}`}>
             <CloudIcon size={13} strokeWidth={1.75} className="shrink-0" aria-hidden />
             <span className="truncate">{chip.text}</span>
           </span>
         )}
 
         {bridge.kind !== 'disabled' && (
-          <span className="inline-flex items-center gap-1 min-w-0 max-w-full">
+          <span className={`inline-flex items-center gap-1 min-w-0 max-w-full ${detailsOpen ? '' : 'max-md:hidden'}`}>
             <span
               data-testid="bridge-chip"
               title={[bridge.message, bridge.detail, bridge.lastResult && bridge.kind !== 'ok' ? `Ultimo import: ${bridge.lastResult}` : '']
@@ -251,7 +298,7 @@ const AutopilotBar: React.FC<AutopilotBarProps> = ({
         )}
 
         </div>
-        <span className="flex items-center gap-1.5 shrink-0">
+        <span className="flex items-center gap-1 md:gap-1.5 shrink-0">
           <button
             type="button"
             onClick={onOpenSettings}
@@ -271,16 +318,16 @@ const AutopilotBar: React.FC<AutopilotBarProps> = ({
               type="button"
               onClick={onPause}
               title="Ferma il pilota: nessuna chiamata parte da sola (la coda resta)"
-              className="btn btn-sm btn-secondary text-violet-800 border-violet-200 hover:bg-violet-50"
+              className="btn btn-sm btn-secondary text-violet-800 border-violet-200 hover:bg-violet-50 max-[420px]:px-2.5"
             >
-              <Pause size={14} strokeWidth={2} aria-hidden /> Pausa
+              <Pause size={14} strokeWidth={2} aria-hidden /> <span className="max-[420px]:sr-only">Pausa</span>
             </button>
           ) : null}
         </span>
       </div>
 
       {secondary.length > 0 && (
-        <div className="mt-1 pl-9 flex flex-col gap-0.5 text-xs text-ink-500">
+        <div className={`mt-1 pl-9 flex-col gap-0.5 text-xs text-ink-500 ${detailsOpen ? 'flex' : 'max-md:hidden flex'}`}>
           {secondary}
         </div>
       )}

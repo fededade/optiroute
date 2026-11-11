@@ -185,6 +185,67 @@
 
   /* popup della mappa */
   .map-popup { @apply font-sans text-ink-900 min-w-[220px] max-w-[280px]; }
+
+  /* ---------- Tutte le pratiche: pillole, tabella, righe ---------- */
+  .pill {
+    @apply inline-flex items-center gap-1.5 h-8 px-3 rounded-full border border-line bg-surface text-[13px] font-medium
+           text-ink-600 hover:border-slate-300 hover:text-ink-900 transition-colors duration-150 whitespace-nowrap;
+  }
+  .pill-active { @apply bg-ink-900 border-ink-900 text-white hover:border-ink-900 hover:text-white; }
+  .pill-count { @apply num text-xs text-ink-400; }
+  .pill-active .pill-count { @apply text-ink-300; }
+
+  .ptable { @apply w-full table-fixed border-separate border-spacing-0 text-left; }
+  .ptable thead th {
+    @apply sticky top-0 z-[2] h-9 px-2.5 bg-slate-50 border-b border-line text-xs font-semibold text-ink-500 whitespace-nowrap;
+  }
+  .ptable thead th:first-child { @apply pl-4; }
+  .ptable tbody td { @apply px-2.5 py-1.5 align-middle border-b border-line leading-tight; }
+  .ptable tbody td:first-child { @apply pl-4; }
+  .ptable tbody tr:last-child td { @apply border-b-0; }
+  .th-sort { @apply inline-flex items-center gap-1 max-w-full rounded-md -mx-1 px-1 h-6 hover:text-ink-900; }
+  .th-sort-active { @apply text-ink-900; }
+  .th-sort-idle { @apply opacity-0 transition-opacity; }
+  .th-sort:hover .th-sort-idle, .th-sort:focus-visible .th-sort-idle { @apply opacity-60; }
+  .th-plain { @apply inline-flex h-6 items-center; }
+
+  .prow { @apply cursor-pointer transition-colors duration-100 outline-none; }
+  .ptable .prow { height: 46px; }
+  .prow:hover > td, .prow-compact:hover { @apply bg-slate-50/80; }
+  .prow:focus-visible > td, .prow-compact:focus-visible { @apply bg-brand-50/60; }
+  .prow:focus-visible { @apply ring-0 ring-offset-0; }
+  .prow-compact:focus-visible { box-shadow: inset 0 0 0 2px theme('colors.brand.400'); }
+  .ptable .prow:focus-visible > td { box-shadow: inset 0 2px 0 theme('colors.brand.400'), inset 0 -2px 0 theme('colors.brand.400'); }
+  .prow-selected > td, .prow-compact.prow-selected { @apply bg-brand-50; }
+  .prow-selected > td { box-shadow: inset 0 1px 0 theme('colors.brand.200'), inset 0 -1px 0 theme('colors.brand.200'); }
+  .prow-urgent > td:first-child { box-shadow: inset 3px 0 0 0 theme('colors.rose.500'); }
+  .prow-compact { @apply flex items-center gap-2 pl-3 pr-1.5 py-2 min-h-[52px]; }
+  .prow-compact.prow-urgent { box-shadow: inset 3px 0 0 0 theme('colors.rose.500'); }
+  .prow-compact.prow-selected { box-shadow: inset 3px 0 0 0 theme('colors.brand.400'); }
+  .prow-compact.prow-selected.prow-urgent { box-shadow: inset 3px 0 0 0 theme('colors.rose.500'); }
+  .urgent-mark {
+    @apply inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-rose-600 text-white text-[11px] font-bold leading-none;
+  }
+  /* testo trovato dalla ricerca */
+  .hl { @apply bg-brand-100 text-inherit rounded-[3px] px-px -mx-px; }
+
+  /* ricerca: niente "x" nativa (c'è la nostra), tasto rapido in vista */
+  input[type="search"]::-webkit-search-cancel-button,
+  input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
+  .kbd {
+    @apply inline-flex items-center justify-center min-w-[20px] h-5 px-1 rounded-md border border-line bg-surface
+           font-mono text-[11px] leading-none text-ink-500 shadow-card;
+  }
+
+  /* agenda settimana/mese: intestazione del giorno che resta in vista */
+  .day-head { @apply sticky top-0 z-[3] -mx-4 md:-mx-5 px-4 md:px-5 py-2 bg-canvas/95 backdrop-blur-[2px] border-b border-line; }
+
+  /* panoramica: tessere senza buchi (colonne decise dalla larghezza del pannello) */
+  .ov-tiles { display: grid; gap: 12px; }
+  .tile-wide { @apply card card-hover flex flex-col items-stretch text-left p-4 min-w-0; }
+
+  /* impostazioni: due colonne quando c'è spazio */
+  .settings-grid { display: grid; gap: 20px; align-items: start; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); }
 }
 
 /* Leaflet: popup e controlli in linea con il sistema grafico */

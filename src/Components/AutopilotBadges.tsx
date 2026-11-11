@@ -111,6 +111,24 @@ export const callLineFor = (appt: Appointment, maxAttempts: number, awaitingOutc
   return null;
 };
 
+// Variante compatta (una riga, troncata) per la tabella delle pratiche:
+// stessa logica di CallStatus, il dettaglio va nel tooltip.
+export const CallStatusInline: React.FC<{ appt: Appointment; maxAttempts: number; awaitingOutcome: boolean; className?: string; emptyDash?: boolean }> = ({ appt, maxAttempts, awaitingOutcome, className = '', emptyDash = true }) => {
+  const line = callLineFor(appt, maxAttempts, awaitingOutcome);
+  const backfill = isBackfill(appt);
+  if (!line && !backfill) return emptyDash ? <span className={`text-xs text-ink-400 ${className}`}>—</span> : null;
+  const Icon = line ? line.icon : Repeat;
+  const text = line ? line.text : `Rimpiazza ${appt.backfillOf || 'slot liberato'}`;
+  const tone = line ? TONE_CLASS[line.tone] : 'text-violet-700';
+  const title = [backfill && line ? `Rimpiazza ${appt.backfillOf || 'slot liberato'}` : '', text, line?.title].filter(Boolean).join(' — ');
+  return (
+    <span className={`inline-flex items-center gap-1.5 min-w-0 max-w-full text-xs font-medium ${tone} ${className}`} title={title} data-testid="call-status-inline">
+      <Icon size={14} strokeWidth={1.75} className={`shrink-0 ${line?.pulse ? 'animate-pulse' : ''}`} aria-hidden />
+      <span className="truncate">{text}</span>
+    </span>
+  );
+};
+
 export const CallStatus: React.FC<{ appt: Appointment; maxAttempts: number; awaitingOutcome: boolean }> = ({ appt, maxAttempts, awaitingOutcome }) => {
   const line = callLineFor(appt, maxAttempts, awaitingOutcome);
   const backfill = isBackfill(appt);

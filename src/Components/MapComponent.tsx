@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-
 import * as L from 'leaflet';
 import type { Appointment, Coordinates, RouteSummary, AppointmentStatus, Technician } from '../types';
 import { getFullRouteGeometry } from '../services/routingService';
+import { formatPhone } from '../layout/format';
 
 const iconUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
 const iconRetinaUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png';
@@ -135,7 +136,24 @@ const AutoResize: React.FC = () => {
   useEffect(() => {
     const el = map.getContainer();
     if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => map.invalidateSize());
+    // Riquadro nascosto (es. in Impostazioni) e poi rimostrato: si ritrova
+    // la stessa vista di prima, senza lo spostamento di invalidateSize da 0
+    let hiddenView: { center: L.LatLng; zoom: number } | null = null;
+    const ro = new ResizeObserver(() => {
+      const visible = el.clientWidth > 0 && el.clientHeight > 0;
+      if (!visible) {
+        if (!hiddenView) hiddenView = { center: map.getCenter(), zoom: map.getZoom() };
+        return;
+      }
+      if (hiddenView) {
+        const v = hiddenView;
+        hiddenView = null;
+        map.invalidateSize({ pan: false });
+        map.setView(v.center, v.zoom, { animate: false });
+        return;
+      }
+      map.invalidateSize();
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [map]);
@@ -150,19 +168,41 @@ const ChangeView: React.FC<{ center: Coordinates; zoom: number }> = ({ center, z
   return null;
 };
 
+// Riadattamento automatico: solo quando cambia l'INSIEME dei punti (non a
+// ogni nuovo array con gli stessi punti), così non annulla lo spostamento
+// verso la scheda selezionata (niente rimbalzi)
 const FitBounds: React.FC<{ appointments: Appointment[]; baseLocation?: any }> = ({ appointments, baseLocation }) => {
   const map = useMap();
+  const points: [number, number][] = appointments.map(a => [a.coords.lat, a.coords.lng]);
+  if (baseLocation) {
+    points.push([baseLocation.coords.lat, baseLocation.coords.lng]);
+  }
+  const signature = points.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).sort().join(';');
   useEffect(() => {
-    const points: [number, number][] = appointments.map(a => [a.coords.lat, a.coords.lng]);
-    if (baseLocation) {
-      points.push([baseLocation.coords.lat, baseLocation.coords.lng]);
-    }
-
     if (points.length > 1) {
       const bounds = L.latLngBounds(points);
       map.fitBounds(bounds, { padding: [50, 50] });
     }
-  }, [appointments, baseLocation, map]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, map]);
+  return null;
+};
+
+// Scheda o riga selezionata: se il suo segnaposto è fuori dall'area
+// visibile, la mappa si sposta per mostrarlo (stesso zoom, nessun popup).
+// Reagisce solo al cambio di selezione.
+const PanToSelected: React.FC<{ appointments: Appointment[]; selectedId?: string | null }> = ({ appointments, selectedId }) => {
+  const map = useMap();
+  const listRef = React.useRef(appointments);
+  listRef.current = appointments;
+  useEffect(() => {
+    if (!selectedId) return;
+    const appt = listRef.current.find(a => a.id === selectedId);
+    if (!appt) return;
+    const target = L.latLng(appt.coords.lat, appt.coords.lng);
+    const view = map.getBounds().pad(-0.08);
+    if (!view.contains(target)) map.panTo(target, { animate: true });
+  }, [selectedId, map]);
   return null;
 };
 
@@ -311,6 +351,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
           <ChangeView center={center} zoom={13} />
           <AutoResize />
           <FitBounds appointments={appointments} baseLocation={baseLocation} />
+          <PanToSelected appointments={appointments} selectedId={selectedId} />
 
           {baseLocation && (
             <Marker
@@ -384,7 +425,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
                         Posizione approssimativa: al centro del comune (indirizzo esatto non trovato)
                       </p>
                     )}
-                    {appt.phone && <p className="mt-2 text-[13px] text-ink-700 flex items-center gap-1.5"><Phone size={13} strokeWidth={1.75} className="text-ink-400" aria-hidden /><span className="num">{appt.phone}</span></p>}
+                    {appt.phone && <p className="mt-2 text-[13px] text-ink-700 flex items-center gap-1.5"><Phone size={13} strokeWidth={1.75} className="text-ink-400" aria-hidden /><span className="num">{formatPhone(appt.phone)}</span></p>}
                     {appt.followUpDate && appt.status === 'issue' && (
                       <p className="mt-1 text-xs font-medium text-amber-800 flex items-center gap-1.5"><Bell size={13} strokeWidth={1.75} aria-hidden />Rientra il {dayOf(appt.followUpDate)}</p>
                     )}

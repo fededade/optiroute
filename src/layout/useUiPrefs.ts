@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 // Stato di sola interfaccia, con le preferenze ricordate nel browser:
 // barra laterale ridotta, mappa nascosta, larghezza del pannello di lavoro.
@@ -46,4 +47,25 @@ export const useUiPrefs = () => {
   }, [prefs]);
   const update = useCallback((patch: Partial<UiPrefs>) => setPrefs(p => ({ ...p, ...patch })), []);
   return [prefs, update] as const;
+};
+
+// Larghezza reale di un elemento (non del viewport): per adattare tabella e
+// riquadri della panoramica allo spazio del pannello, con o senza mappa.
+export const useElementWidth = <T extends HTMLElement>(): [React.RefCallback<T>, number] => {
+  const [width, setWidth] = useState(0);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((el: T | null) => {
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (!el) return;
+    setWidth(el.getBoundingClientRect().width);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width;
+      if (typeof w === 'number') setWidth(prev => (Math.abs(prev - w) < 1 ? prev : w));
+    });
+    ro.observe(el);
+    roRef.current = ro;
+  }, []);
+  return [ref, width];
 };

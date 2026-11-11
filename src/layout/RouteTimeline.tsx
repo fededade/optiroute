@@ -1,5 +1,5 @@
 import React from 'react';
-import { Car, Coffee } from 'lucide-react';
+import { Car, Coffee, House } from 'lucide-react';
 import type { Appointment } from '../types';
 import PraticaCard from './PraticaCard';
 import type { Workspace } from './types';
@@ -18,11 +18,26 @@ const RouteTimeline: React.FC<{
 }> = ({ items, ws, color, draggable, dashed }) => (
   <ol className="timeline">
     {items.map((appt, i) => {
-      const travel = appt.travelTimeFromPrev !== undefined && appt.travelTimeFromPrev !== null
+      // Primo tratto senza alcuna base (né del tecnico né generale): "0 min dalla base" sarebbe falso
+      const noBase = i === 0 && !ws.hasStartBase(appt.technicianId);
+      const travel = !noBase && appt.travelTimeFromPrev !== undefined && appt.travelTimeFromPrev !== null
         ? [`${Math.round(appt.travelTimeFromPrev)} min`, kmLabel(appt.distanceFromPrev)].filter(Boolean).join(' · ')
         : '';
       return (
         <React.Fragment key={appt.id}>
+          {noBase && (
+            <li className="timeline-gap" data-testid="timeline-no-base">
+              <span className="timeline-time" />
+              <span className={`timeline-rail ${dashed ? 'timeline-rail-dashed' : ''}`} />
+              <span className="flex items-center gap-1.5 text-xs text-ink-500 py-1.5 flex-wrap">
+                <House size={14} strokeWidth={1.75} aria-hidden />
+                <span>Base di partenza non impostata</span>
+                <button type="button" className="font-medium text-ink-700 underline underline-offset-2 hover:text-ink-950" onClick={ws.onOpenBaseSettings}>
+                  Imposta la base
+                </button>
+              </span>
+            </li>
+          )}
           {travel && (
             <li className="timeline-gap" aria-label={`Tragitto ${travel}`}>
               <span className="timeline-time" />

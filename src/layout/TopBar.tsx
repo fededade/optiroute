@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Map as MapIcon, MapPinned, Menu as MenuIcon,
   Plug, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Truck, Upload, Users, X,
@@ -41,6 +41,7 @@ interface TopBarProps {
   isOptimizing: boolean;
   onOptimize: () => void;
   onExport: () => void;
+  exportHint?: string;       // "N pratiche: quelle mostrate ora"
   onSendReport: () => void;
   isSending: boolean;
   onSyncGestionale: () => void;
@@ -64,19 +65,43 @@ const TopBar: React.FC<TopBarProps> = (p) => {
   const label = (text: string) => (p.compact ? null : <span>{text}</span>);
   const chevron = p.compact || p.tight ? null : <ChevronDown size={15} strokeWidth={1.75} className="text-ink-400 -mr-1" aria-hidden />;
 
+  // "/" e Ctrl/Cmd+K portano nella ricerca (non mentre si scrive o con una finestra aperta)
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isSlash = e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey;
+      const isK = (e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey;
+      if (!isSlash && !isK) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector('[role="dialog"], .modal-backdrop')) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+  const showKbd = !p.search && !p.mobile && !p.compact;
+
   const searchBox = (
     <label className="relative flex-1 min-w-[160px] max-w-[340px]">
       <span className="sr-only">Cerca</span>
       <Search size={16} strokeWidth={1.75} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400 pointer-events-none" aria-hidden />
       <input
+        ref={searchRef}
         type="search"
         value={p.search}
+        aria-keyshortcuts="/ Control+K Meta+K"
         onChange={e => p.onSearch(e.target.value)}
         onKeyDown={e => { if (e.key === 'Escape') p.onSearch(''); }}
         placeholder="Cerca cliente, via, codice…"
-        className="input pl-9 pr-8 bg-slate-50/70 hover:bg-surface focus:bg-surface"
+        className="input peer pl-9 pr-8 bg-slate-50/70 hover:bg-surface focus:bg-surface"
         data-testid="search"
       />
+      {showKbd && (
+        <span className="kbd absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none peer-focus:hidden" title="Premi / per cercare" aria-hidden>/</span>
+      )}
       {p.search && (
         <button type="button" onClick={() => p.onSearch('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 icon-btn h-6 w-6" title="Cancella la ricerca" aria-label="Cancella la ricerca">
           <X size={14} strokeWidth={2} />
@@ -176,8 +201,8 @@ const TopBar: React.FC<TopBarProps> = (p) => {
         button={<><Download size={16} strokeWidth={1.75} aria-hidden />{label('Esporta')}{chevron}</>}
       >
         <MenuLabel>Esporta</MenuLabel>
-        <MenuItem icon={FileSpreadsheet} onSelect={p.onExport} hint="Le pratiche della vista corrente">Esporta Excel</MenuItem>
-        <MenuItem icon={Send} onSelect={p.onSendReport} disabled={p.isSending} hint="Planning della vista corrente">{p.isSending ? 'Invio…' : 'Invia report'}</MenuItem>
+        <MenuItem icon={FileSpreadsheet} onSelect={p.onExport} hint={p.exportHint || 'Le pratiche della vista corrente'}>Esporta Excel</MenuItem>
+        <MenuItem icon={Send} onSelect={p.onSendReport} disabled={p.isSending} hint={p.exportHint || 'Planning della vista corrente'}>{p.isSending ? 'Invio…' : 'Invia report'}</MenuItem>
         <MenuDivider />
         <MenuItem
           icon={RefreshCw}
@@ -235,7 +260,7 @@ const TopBar: React.FC<TopBarProps> = (p) => {
           </button>
         )}
         <div className={`min-w-0 flex-1 md:flex-none md:shrink-0 ${p.tight ? "md:w-[176px]" : "md:w-[210px]"}`}>
-          <h1 className="page-title truncate leading-tight" data-testid="page-title">{p.title}</h1>
+          <h1 className="page-title truncate leading-tight" data-testid="page-title" title={p.title}>{p.title}</h1>
           {p.subtitle && <p className="text-xs text-ink-500 truncate">{p.subtitle}</p>}
         </div>
         {!p.mobile && searchBox}

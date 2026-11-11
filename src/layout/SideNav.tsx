@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Archive, BellRing, CalendarDays, Hourglass, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Route, Settings,
+  Archive, BellRing, CalendarDays, Hourglass, LayoutDashboard, ListChecks, PanelLeftClose, PanelLeftOpen, Route, Settings,
   TriangleAlert, Users, X, type LucideIcon,
 } from 'lucide-react';
 import type { SectionId } from './types';
@@ -8,6 +8,7 @@ import type { SectionId } from './types';
 // Navigazione laterale scura: le sezioni dell'app con i contatori.
 
 export interface NavCounts {
+  pratiche: number;
   daGestire: number;
   inAttesa: number;
   proposte: number;
@@ -18,6 +19,7 @@ export interface NavCounts {
 
 export const NAV_ITEMS: { id: SectionId; label: string; icon: LucideIcon; count?: keyof NavCounts; alert?: boolean }[] = [
   { id: 'panoramica', label: 'Panoramica', icon: LayoutDashboard },
+  { id: 'pratiche', label: 'Tutte le pratiche', icon: ListChecks, count: 'pratiche' },
   { id: 'da-gestire', label: 'Da gestire', icon: BellRing, count: 'daGestire', alert: true },
   { id: 'in-attesa', label: 'In attesa', icon: Hourglass, count: 'inAttesa' },
   { id: 'proposte', label: 'Proposte', icon: Route, count: 'proposte' },

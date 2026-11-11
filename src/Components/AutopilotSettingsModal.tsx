@@ -80,7 +80,7 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
     const login = snap.snapshot.portals.find(p => p.status === 'login_required');
     setTest({
       state: 'ok',
-      message: `Collegato: ${snap.snapshot.pratiche.length} pratiche disponibili` +
+      message: `Collegato: ${snap.snapshot.pratiche.length} ${snap.snapshot.pratiche.length === 1 ? 'pratica disponibile' : 'pratiche disponibili'}` +
         (login ? ` · login richiesto su ${login.id}: completa l'accesso con MFA nel Chrome del bridge` : ''),
     });
   };

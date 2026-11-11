@@ -96,5 +96,39 @@ export const rangeLabel = (currentDate: string, viewMode: ViewMode): string => {
   return `settimana ${f(mon)} – ${f(sun)}`;
 };
 
-export const kmLabel = (km?: number): string =>
+// Telefono leggibile (solo visualizzazione: il valore salvato non cambia).
+// "3331234567" / "+393331234567" → "+39 333 123 4567";
+// "0212345678" → "+39 02 1234 5678"; "0382123456" → "+39 0382 123 456".
+// Prefissi esteri, numeri speciali e testi non numerici restano come sono.
+const AREA_3 = new Set(['010', '011', '015', '019', '030', '031', '035', '039', '040', '041', '045', '049', '050', '051', '055', '059',
+  '070', '071', '075', '079', '080', '081', '085', '089', '090', '091', '095', '099']);
+const groupRest = (s: string): string => {
+  if (s.length <= 5) return s;
+  if (s.length === 6) return `${s.slice(0, 3)} ${s.slice(3)}`;
+  if (s.length === 7) return `${s.slice(0, 3)} ${s.slice(3)}`;
+  if (s.length === 8) return `${s.slice(0, 4)} ${s.slice(4)}`;
+  return `${s.slice(0, s.length - 4)} ${s.slice(-4)}`;
+};
+export const formatPhone = (raw?: string): string => {
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  const compact = trimmed.replace(/[\s.\-/()]/g, '');
+  if (!/^(\+|00)?\d+$/.test(compact)) return trimmed;
+  let national: string;
+  if (compact.startsWith('+39')) national = compact.slice(3);
+  else if (compact.startsWith('0039')) national = compact.slice(4);
+  else if (compact.startsWith('+') || compact.startsWith('00')) return trimmed;
+  else national = compact;
+  if (/^3\d{8,9}$/.test(national)) {
+    // cellulare: 3-3-4 (o 3-3-3)
+    return `+39 ${national.slice(0, 3)} ${national.slice(3, 6)} ${national.slice(6)}`;
+  }
+  if (/^0\d{5,10}$/.test(national)) {
+    const areaLen = /^0[26]/.test(national) ? 2 : AREA_3.has(national.slice(0, 3)) ? 3 : 4;
+    return `+39 ${national.slice(0, areaLen)} ${groupRest(national.slice(areaLen))}`;
+  }
+  return trimmed;
+};
+
+export const kmLabel =(km?: number): string =>
   km === undefined || km === null ? '' : `${km.toLocaleString('it-IT', { maximumFractionDigits: 1 })} km`;

@@ -1,3 +1,121 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ============================================================
+   Sistema grafico di OptiRoute (vedi anche tailwind.config.js)
+   Classi pronte per i componenti ricorrenti: usarle al posto di
+   combinazioni di utility ripetute, così l'aspetto resta coerente.
+   ============================================================ */
+
+@layer base {
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  body {
+    @apply bg-canvas text-ink-900 font-sans;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+  }
+  /* Fuoco da tastiera sempre visibile e coerente */
+  :focus-visible { @apply outline-none ring-2 ring-brand-400/70 ring-offset-1 ring-offset-surface; }
+  /* Barre di scorrimento discrete */
+  * { scrollbar-width: thin; scrollbar-color: #CBD0DA transparent; }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-thumb { background: #CBD0DA; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+  *::-webkit-scrollbar-thumb:hover { background: #A9B0BE; background-clip: content-box; border: 2px solid transparent; }
+}
+
+@layer components {
+  /* ---------- Bottoni ---------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-control px-3.5 h-9 text-sm font-semibold
+           whitespace-nowrap select-none transition-colors duration-150
+           disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-sm { @apply h-8 px-3 text-[13px] gap-1.5; }
+  .btn-lg { @apply h-11 px-5 text-[15px]; }
+  /* azione principale: antracite */
+  .btn-primary { @apply bg-ink-900 text-white hover:bg-ink-700 active:bg-ink-950; }
+  /* L'azione più importante della vista (una sola): oro */
+  .btn-accent { @apply bg-brand-400 text-ink-950 hover:bg-brand-300 active:bg-brand-500 shadow-card; }
+  .btn-secondary { @apply bg-surface text-ink-800 border border-line hover:bg-slate-50 hover:border-slate-300 active:bg-slate-100; }
+  .btn-ghost { @apply text-ink-600 hover:bg-slate-100 hover:text-ink-900; }
+  .btn-success { @apply bg-emerald-600 text-white hover:bg-emerald-500 active:bg-emerald-700; }
+  .btn-danger { @apply bg-surface text-rose-700 border border-rose-200 hover:bg-rose-50; }
+  /* solo icona: serve SEMPRE title + aria-label */
+  .icon-btn {
+    @apply inline-flex items-center justify-center h-8 w-8 rounded-control text-ink-500
+           hover:bg-slate-100 hover:text-ink-900 transition-colors duration-150
+           disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  /* ---------- Campi ---------- */
+  .field-label { @apply block text-[13px] font-medium text-ink-700 mb-1.5; }
+  .field-hint { @apply text-xs text-ink-500 mt-1; }
+  .input {
+    @apply w-full h-9 rounded-control border border-line bg-surface px-3 text-sm text-ink-900
+           placeholder:text-ink-400 transition-shadow duration-150
+           hover:border-slate-300 focus:outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-400/25;
+  }
+  textarea.input { @apply h-auto py-2 leading-relaxed; }
+  .select { @apply input pr-8; }
+  .checkbox { @apply h-4 w-4 rounded border-slate-300 text-ink-900 focus:ring-brand-400/40; }
+
+  /* ---------- Superfici ---------- */
+  .card { @apply bg-surface border border-line rounded-card shadow-card; }
+  .card-hover { @apply transition-shadow duration-150 hover:shadow-raised hover:border-slate-300; }
+  .divider { @apply border-t border-line; }
+
+  /* ---------- Etichette di stato ---------- */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 h-[22px] text-xs font-medium whitespace-nowrap border;
+  }
+  .chip-neutral { @apply bg-slate-50 text-ink-600 border-slate-200; }
+  .chip-success { @apply bg-emerald-50 text-emerald-700 border-emerald-200; }   /* confermata */
+  .chip-info { @apply bg-sky-50 text-sky-700 border-sky-200; }                 /* proposta */
+  .chip-warn { @apply bg-amber-50 text-amber-800 border-amber-200; }           /* in attesa / attenzione */
+  .chip-danger { @apply bg-rose-50 text-rose-700 border-rose-200; }            /* problema */
+  .chip-ai { @apply bg-violet-50 text-violet-700 border-violet-200; }          /* pilota automatico */
+  .chip-brand { @apply bg-brand-50 text-brand-800 border-brand-200; }
+  .chip-solid-danger { @apply bg-rose-600 text-white border-rose-600; }        /* urgente */
+  /* pallino di stato (es. colore del tecnico) */
+  .dot { @apply inline-block h-2 w-2 rounded-full shrink-0; }
+
+  /* ---------- Testi ---------- */
+  .eyebrow { @apply text-2xs font-semibold uppercase tracking-[0.08em] text-ink-500; }
+  .page-title { @apply text-xl font-semibold tracking-tight text-ink-950; }
+  .section-title { @apply text-sm font-semibold text-ink-900; }
+  .muted { @apply text-ink-500; }
+  .num { @apply font-mono tabular-nums tracking-tight; } /* orari, codici, contatori */
+
+  /* ---------- Menu a comparsa ---------- */
+  .menu { @apply card shadow-pop p-1.5 min-w-[220px] animate-pop-in z-[1200]; }
+  .menu-item {
+    @apply flex w-full items-center gap-2.5 rounded-lg px-2.5 h-9 text-sm text-ink-800 text-left
+           hover:bg-slate-100 disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .menu-item-danger { @apply text-rose-700 hover:bg-rose-50; }
+  .menu-label { @apply px-2.5 pt-2 pb-1 text-2xs font-semibold uppercase tracking-[0.08em] text-ink-400; }
+
+  /* ---------- Finestre ---------- */
+  .modal-backdrop { @apply fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-ink-950/50 backdrop-blur-[2px] animate-fade-in; }
+  .modal { @apply bg-surface rounded-2xl shadow-pop w-full max-h-[90vh] flex flex-col overflow-hidden animate-pop-in; }
+  .modal-header { @apply flex items-start gap-3 px-6 pt-5 pb-4 border-b border-line shrink-0; }
+  .modal-title { @apply text-lg font-semibold tracking-tight text-ink-950; }
+  .modal-body { @apply px-6 py-5 overflow-y-auto; }
+  .modal-footer { @apply flex items-center justify-end gap-2 px-6 py-4 border-t border-line bg-slate-50/60 shrink-0; }
+
+  /* ---------- Navigazione laterale (scura) ---------- */
+  .nav-item {
+    @apply flex items-center gap-3 rounded-control px-3 h-10 text-sm font-medium text-ink-300
+           hover:bg-white/5 hover:text-white transition-colors duration-150;
+  }
+  .nav-item-active { @apply bg-white/10 text-white shadow-[inset_2px_0_0_0_theme(colors.brand.400)]; }
+  .nav-count { @apply ml-auto rounded-full bg-white/10 px-2 h-5 inline-flex items-center text-2xs font-semibold text-ink-300 tabular-nums; }
+  .nav-count-alert { @apply bg-rose-500 text-white; }
+
+  /* ---------- Avvisi in pagina ---------- */
+  .callout { @apply flex gap-3 rounded-control border px-3.5 py-3 text-sm; }
+  .callout-info { @apply bg-sky-50 border-sky-200 text-sky-900; }
+  .callout-warn { @apply bg-amber-50 border-amber-200 text-amber-900; }
+  .callout-danger { @apply bg-rose-50 border-rose-200 text-rose-900; }
+  .callout-success { @apply bg-emerald-50 border-emerald-200 text-emerald-900; }
+}

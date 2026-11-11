@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import type { Appointment, Coordinates, Technician } from '../types';
+import type { AppointmentPatch } from '../services/slotService';
 import {
   computeDispatch,
   previewDispatch,
@@ -15,7 +16,10 @@ interface DispatchModalProps {
   pending: Appointment[];
   technicians: Technician[];
   fallbackBase: Coordinates | null;
-  onApply: (updates: Appointment[]) => void;
+  // Tutte le pratiche correnti: le nuove si inseriscono negli spazi liberi dei
+  // giri esistenti senza sovrapporsi né cambiarne gli orari
+  existing?: Appointment[];
+  onApply: (updates: Appointment[], patches: AppointmentPatch[]) => void;
   onClose: () => void;
 }
 
@@ -35,7 +39,7 @@ const formatDay = (iso: string): string =>
     weekday: 'long', day: 'numeric', month: 'long',
   });
 
-const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fallbackBase, onApply, onClose }) => {
+const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fallbackBase, existing, onApply, onClose }) => {
   const [phase, setPhase] = useState<Phase>('setup');
   const [startDate, setStartDate] = useState(tomorrowStr());
   const [horizonDays, setHorizonDays] = useState('14');
@@ -70,7 +74,8 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
         technicians,
         fallbackBase,
         { startDate, horizonDays: horizon, includeWeekends },
-        (msg) => { if (!closedRef.current) setProgress(msg); }
+        (msg) => { if (!closedRef.current) setProgress(msg); },
+        existing ?? []
       );
       if (closedRef.current) return; // finestra chiusa durante il calcolo
       setProposal(result);
@@ -85,7 +90,7 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
 
   const handleApply = () => {
     if (!proposal) return;
-    onApply(proposal.updates);
+    onApply(proposal.updates, proposal.patches);
     onClose();
   };
 

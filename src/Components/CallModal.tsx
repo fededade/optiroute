@@ -1,31 +1,37 @@
 import React, { useState } from 'react';
-import type { Appointment, IssueType } from '../types';
+import type { AlternativeSlot, Appointment, IssueType } from '../types';
 import { startConfirmationCall } from '../services/callService';
+import { formatAlternatives } from './AutopilotBadges';
 
 interface CallModalProps {
   appointment: Appointment;
   technicianName?: string; // Nome del tecnico che effettuerà il sopralluogo
   daySchedule?: string;    // Agenda del giorno per l'agente AI (fasce impegnate)
   onClose: () => void;
-  onCallStarted: (id: string) => void;
-  onCallResult: (id: string, ok: boolean, callId?: string) => void;
+  // Alternative reali che l'agente potrà offrire (calcolate al momento)
+  buildAlternatives?: (appt: Appointment) => AlternativeSlot[];
+  onCallStarted: (id: string, alternatives: AlternativeSlot[]) => void;
+  onCallResult: (id: string, ok: boolean, callId?: string, error?: string) => void;
   // Esito della telefonata -> categoria problematica (con eventuale data di rientro)
   onMarkIssue?: (id: string, issueType: IssueType, followUpDate?: string) => void;
 }
 
 type Phase = 'preview' | 'calling' | 'success' | 'error';
 
-const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, daySchedule, onClose, onCallStarted, onCallResult, onMarkIssue }) => {
+const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, daySchedule, buildAlternatives, onClose, onCallStarted, onCallResult, onMarkIssue }) => {
   const [phase, setPhase] = useState<Phase>('preview');
+  // Anteprima delle alternative (ricalcolate subito prima di chiamare)
+  const [previewAlternatives] = useState<AlternativeSlot[]>(() => buildAlternatives?.(appointment) ?? []);
   const [errorMessage, setErrorMessage] = useState('');
   const [outcome, setOutcome] = useState<IssueType | null>(null);
   const [outcomeDate, setOutcomeDate] = useState('');
 
   const handleCall = async () => {
     setPhase('calling');
-    onCallStarted(appointment.id);
+    const alternatives = buildAlternatives?.(appointment) ?? [];
+    onCallStarted(appointment.id, alternatives);
 
-    const result = await startConfirmationCall(appointment, technicianName, daySchedule);
+    const result = await startConfirmationCall(appointment, technicianName, daySchedule, alternatives);
 
     if (result.ok) {
       setPhase('success');
@@ -33,7 +39,7 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, dayS
     } else {
       setPhase('error');
       setErrorMessage(result.error || 'Errore sconosciuto.');
-      onCallResult(appointment.id, false);
+      onCallResult(appointment.id, false, undefined, result.error);
     }
   };
 
@@ -134,6 +140,12 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, dayS
               {technicianName && <p><span className="font-bold text-slate-500">Tecnico:</span> {technicianName}</p>}
               {appointment.notes && <p><span className="font-bold text-slate-500">Note:</span> {appointment.notes}</p>}
             </div>
+
+            {previewAlternatives.length > 0 && (
+              <p data-testid="call-alternatives" className="text-xs text-indigo-800 bg-indigo-50 border border-indigo-100 rounded p-2 mb-4">
+                🔄 Se il cliente non può, l'operatore AI offrirà: <b>{formatAlternatives(previewAlternatives)}</b>
+              </p>
+            )}
 
             {!appointment.startTime && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded p-2 mb-4">

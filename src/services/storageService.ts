@@ -1,4 +1,6 @@
 import type { Appointment, Coordinates } from '../types';
+import { CALL_OUTCOME_MAX_AGE_MS, DEFAULT_AUTOPILOT_SETTINGS, type AutopilotSettings } from './autopilotService';
+import { DEFAULT_BRIDGE_SETTINGS, type BridgeSettings } from './bridgeService';
 
 // Simple localStorage persistence so the planning survives page reloads.
 
@@ -16,6 +18,14 @@ export interface StoredSettings {
   endTimeLimit: string;
   /** Pannello "Impostazioni e azioni" della sidebar aperto/chiuso */
   settingsOpen?: boolean;
+  /** Pilota automatico delle chiamate (campi mancanti = default) */
+  autopilot?: Partial<AutopilotSettings>;
+  /** La conferma della prima attivazione del pilota è già stata mostrata */
+  autopilotIntroSeen?: boolean;
+  /** Bridge locale dei portali (inbox delle pratiche) */
+  bridge?: Partial<BridgeSettings>;
+  /** Riquadro "Da gestire" aperto/chiuso */
+  attentionOpen?: boolean;
 }
 
 const safeParse = <T>(raw: string | null): T | null => {
@@ -30,14 +40,29 @@ const safeParse = <T>(raw: string | null): T | null => {
 export const loadAppointments = (): Appointment[] => {
   const data = safeParse<Appointment[]>(localStorage.getItem(APPOINTMENTS_KEY));
   if (!Array.isArray(data)) return [];
-  // Reset transient "calling" states left over from a closed session.
-  // Con un callId la chiamata era partita davvero: si passa a 'called' così
-  // il polling dell'esito (post-call analysis) può riprendere da dove era.
   return data
     .filter(a => a && a.id && a.coords)
-    .map(a => (a.callStatus === 'calling'
-      ? { ...a, callStatus: a.callId ? ('called' as const) : ('failed' as const) }
-      : a));
+    .map(a => recoverInterruptedCall(a, new Date()));
+};
+
+// Stati rimasti a metà: pagina chiusa durante il lancio di una chiamata
+// ('calling'). Se il lancio aveva già registrato callId e calledAt recenti la
+// chiamata era partita davvero: si passa a 'called' e il polling dell'esito
+// riprende. Altrimenti non si sa se sia partita: 'failed', da gestire a mano
+// (nessun richiamo automatico, per non chiamare due volte il cliente).
+export const recoverInterruptedCall = (a: Appointment, now: Date): Appointment => {
+  if (a.callStatus !== 'calling') return a;
+  const calledAtMs = a.calledAt ? new Date(a.calledAt).getTime() : NaN;
+  const recent = !isNaN(calledAtMs) && now.getTime() - calledAtMs >= 0 && now.getTime() - calledAtMs < CALL_OUTCOME_MAX_AGE_MS;
+  if (a.callId && recent) return { ...a, callStatus: 'called' };
+  return {
+    ...a,
+    callStatus: 'failed',
+    callOutcome: undefined,
+    autoCall: undefined,
+    autoCallNotBefore: undefined,
+    callSummary: 'Avvio della chiamata interrotto',
+  };
 };
 
 export const saveAppointments = (appointments: Appointment[]): void => {
@@ -68,6 +93,18 @@ export const saveBase = (base: StoredBase | null): void => {
 export const loadSettings = (): StoredSettings | null => {
   return safeParse<StoredSettings>(localStorage.getItem(SETTINGS_KEY));
 };
+
+// Impostazioni del pilota fuse con i default: i campi aggiunti in seguito
+// hanno sempre un valore
+export const loadAutopilotSettings = (): AutopilotSettings => ({
+  ...DEFAULT_AUTOPILOT_SETTINGS,
+  ...(loadSettings()?.autopilot || {}),
+});
+
+export const loadBridgeSettings = (): BridgeSettings => ({
+  ...DEFAULT_BRIDGE_SETTINGS,
+  ...(loadSettings()?.bridge || {}),
+});
 
 export const saveSettings = (settings: StoredSettings): void => {
   try {

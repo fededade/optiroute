@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import type { Appointment } from '../types';
+import type { AlternativeSlot, Appointment } from '../types';
 import { startConfirmationCall } from '../services/callService';
 
 // Chiamate AI di conferma in blocco: l'operatore seleziona le pratiche
@@ -12,8 +12,12 @@ interface BulkCallModalProps {
   // Agenda del giorno (fasce impegnate del giro) da passare all'agente AI
   buildDaySchedule?: (appt: Appointment) => string;
   onClose: () => void;
-  onCallStarted: (id: string) => void;
-  onCallResult: (id: string, ok: boolean, callId?: string) => void;
+  // Alternative reali che l'agente potrà offrire (calcolate subito prima di chiamare)
+  buildAlternatives?: (appt: Appointment) => AlternativeSlot[];
+  // true se la pratica ha già una chiamata in corso (es. partita dal pilota automatico)
+  isCallBusy?: (id: string) => boolean;
+  onCallStarted: (id: string, alternatives: AlternativeSlot[]) => void;
+  onCallResult: (id: string, ok: boolean, callId?: string, error?: string) => void;
 }
 
 type Phase = 'preview' | 'running' | 'done';
@@ -36,12 +40,12 @@ const formatWhen = (a: Appointment): string => {
 };
 
 const BulkCallModal: React.FC<BulkCallModalProps> = ({
-  appointments, technicianNameById, buildDaySchedule, onClose, onCallStarted, onCallResult,
+  appointments, technicianNameById, buildDaySchedule, buildAlternatives, isCallBusy, onClose, onCallStarted, onCallResult,
 }) => {
   const [phase, setPhase] = useState<Phase>('preview');
   const [selected, setSelected] = useState<Set<string>>(
     // Preselezionate: con telefono e non già chiamate con successo
-    () => new Set(appointments.filter(a => a.phone && a.callStatus !== 'called').map(a => a.id))
+    () => new Set(appointments.filter(a => a.phone && a.callStatus !== 'called' && a.callStatus !== 'calling').map(a => a.id))
   );
   const [itemStates, setItemStates] = useState<Record<string, ItemState>>({});
   const cancelRef = useRef(false);
@@ -75,18 +79,25 @@ const BulkCallModal: React.FC<BulkCallModalProps> = ({
         continue;
       }
 
+      // Già in chiamata (es. partita dal pilota automatico): niente doppioni
+      if (isCallBusy?.(appt.id)) {
+        setItem(appt.id, { outcome: 'skipped', error: 'Chiamata già in corso' });
+        continue;
+      }
+
       setItem(appt.id, { outcome: 'calling' });
-      onCallStarted(appt.id);
+      const alternatives = buildAlternatives?.(appt) ?? [];
+      onCallStarted(appt.id, alternatives);
 
       const technicianName = appt.technicianId ? technicianNameById[appt.technicianId] : undefined;
-      const result = await startConfirmationCall(appt, technicianName, buildDaySchedule?.(appt));
+      const result = await startConfirmationCall(appt, technicianName, buildDaySchedule?.(appt), alternatives);
 
       if (result.ok) {
         setItem(appt.id, { outcome: 'ok' });
         onCallResult(appt.id, true, result.callId);
       } else {
         setItem(appt.id, { outcome: 'failed', error: result.error });
-        onCallResult(appt.id, false);
+        onCallResult(appt.id, false, undefined, result.error);
       }
 
       // Piccola pausa per non inondare il servizio di chiamate

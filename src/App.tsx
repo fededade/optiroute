@@ -1,14 +1,34 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { Appointment, Coordinates, AppointmentStatus, CallOutcome, IssueType, Technician } from './types';
-import { geocodeAddress, geocodeAddressParts } from './services/geocodingService';
+import type { AlternativeSlot, Appointment, Coordinates, AppointmentStatus, CallOutcome, IssueType, Technician } from './types';
+import { geocodeAddress } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
 import { syncConfirmedToGestionale, getSyncableAppointments, getSyncEnvName } from './services/syncService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
-import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings } from './services/storageService';
+import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings, loadAutopilotSettings, loadBridgeSettings } from './services/storageService';
 import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, workWindowOn } from './services/technicianService';
-import { fetchCallOutcome } from './services/callService';
-import { provinceToCode } from './utils/provinces';
+import { fetchCallOutcome, startConfirmationCall } from './services/callService';
+import {
+  type AutopilotSettings,
+  type AttentionItem,
+  type PlanningContext,
+  alternativesForCall,
+  approveForCalling,
+  attentionItems,
+  autopilotStats,
+  cancelAutoCalls,
+  isCallInFlight,
+  reduceCallLaunchResult,
+  reduceCallOutcome,
+  reduceCallStarted,
+} from './services/autopilotService';
+import { applyPatches, type AppointmentPatch } from './services/slotService';
+import type { BridgeSettings } from './services/bridgeService';
+import { type ImportRow, applyImportResult, importRowsToAppointments } from './hooks/importPratiche';
+import { useTabLock } from './hooks/useTabLock';
+import { useAutopilot, autopilotQueueKey } from './hooks/useAutopilot';
+import { useAutoDispatch } from './hooks/useAutoDispatch';
+import { useBridgeInbox, type BridgeImportOutcome } from './hooks/useBridgeInbox';
 import MapComponent from './Components/MapComponent';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
@@ -16,6 +36,10 @@ import BulkCallModal from './Components/BulkCallModal';
 import TechnicianModal from './Components/TechnicianModal';
 import DispatchModal from './Components/DispatchModal';
 import KmzImportModal from './Components/KmzImportModal';
+import AutopilotBar from './Components/AutopilotBar';
+import AutopilotSettingsModal from './Components/AutopilotSettingsModal';
+import AttentionPanel from './Components/AttentionPanel';
+import { AutoCallBadge, OfferedAlternatives } from './Components/AutopilotBadges';
 
 // --- CONFIGURATION ---
 // URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
@@ -129,24 +153,13 @@ const DEFAULT_CENTER: Coordinates = { lat: 41.9028, lng: 12.4964 }; // Rome
 
 type ViewMode = 'day' | 'week' | 'month';
 
-// Normalized row produced by any of the supported import formats
-interface ImportRow {
-  title: string;
-  street?: string;       // via (per il geocoding con fallback)
-  civic?: string;
-  fullAddress: string;
-  shortAddress?: string; // via + civico (pronunciato in chiamata e per il gestionale)
-  comune?: string;
-  province?: string;
-  phone?: string;
-  notes?: string;
-  urgent?: boolean;
-  codice?: string;       // codice pratica/perizia (per merge e link Prelios)
-  project?: string;
-}
+// La riga normalizzata dell'import (ImportRow) e il nucleo che la trasforma
+// in pratiche vivono in hooks/importPratiche (condivisi con il bridge).
 
-const appendNote = (notes: string | undefined, extra: string): string =>
-  notes ? `${notes} | ${extra}` : extra;
+// Lancio interrotto: la chiamata nuova non ha ancora un id (quello della
+// chiamata precedente non deve essere interrogato dal polling dell'esito)
+const startCallReducer = (all: Appointment[], id: string, alternatives: AlternativeSlot[]): Appointment[] =>
+  reduceCallStarted(all, id, alternatives).map(a => (a.id === id ? { ...a, callId: undefined, calledAt: undefined } : a));
 
 const ALL_TECH = 'all';
 
@@ -162,7 +175,20 @@ function App() {
   const [baseInput, setBaseInput] = useState('');
 
   // Unified List (restored from localStorage)
-  const [allAppointments, setAllAppointments] = useState<Appointment[]>(() => loadAppointments());
+  const [allAppointments, setAllAppointmentsState] = useState<Appointment[]>(() => loadAppointments());
+
+  // Riferimento SEMPRE aggiornato all'elenco: ogni modifica passa da
+  // setAllAppointments, che calcola il nuovo elenco dal ref, lo scrive nel ref
+  // in modo sincrono e poi nello stato React. Così il polling, il pilota
+  // automatico e lo smistamento vedono subito lo stato nuovo (niente closure
+  // stantie, nessuna pratica chiamata due volte).
+  const appointmentsRef = useRef<Appointment[]>(allAppointments);
+  const setAllAppointments = useCallback((action: Appointment[] | ((prev: Appointment[]) => Appointment[])) => {
+    const next = typeof action === 'function' ? action(appointmentsRef.current) : action;
+    if (next === appointmentsRef.current) return;
+    appointmentsRef.current = next;
+    setAllAppointmentsState(next);
+  }, []);
 
   // Technicians (i soggetti che effettuano i sopralluoghi)
   const [technicians, setTechnicians] = useState<Technician[]>(() => loadTechnicians());
@@ -198,6 +224,20 @@ function App() {
   const [endTimeLimit, setEndTimeLimit] = useState(() => loadSettings()?.endTimeLimit || "18:00");
   // Pannello impostazioni/azioni della sidebar: richiudibile per dare spazio all'elenco
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => loadSettings()?.settingsOpen ?? true);
+
+  // Pilota automatico delle chiamate e bridge dei portali
+  const [autopilot, setAutopilot] = useState<AutopilotSettings>(() => loadAutopilotSettings());
+  const [autopilotIntroSeen, setAutopilotIntroSeen] = useState<boolean>(() => !!loadSettings()?.autopilotIntroSeen);
+  const [bridgeSettings, setBridgeSettings] = useState<BridgeSettings>(() => loadBridgeSettings());
+  const [attentionOpen, setAttentionOpen] = useState<boolean>(() => loadSettings()?.attentionOpen ?? true);
+  const [showAutopilotSettings, setShowAutopilotSettings] = useState(false);
+  // Import in corso (file o bridge): mai due import in parallelo, né uno
+  // smistamento automatico durante un import
+  const importBusyRef = useRef(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const autoDispatchBusyRef = useRef(false);
+  // Orologio della barra del pilota (contatori e "prossima chiamata")
+  const [, setClockTick] = useState(0);
 
   // Appointment add/edit modal
   const [showApptModal, setShowApptModal] = useState(false);
@@ -254,7 +294,9 @@ function App() {
   // Persist state locally so a page reload never loses the planning
   useEffect(() => { saveAppointments(allAppointments); }, [allAppointments]);
   useEffect(() => { saveBase(baseLocation); }, [baseLocation]);
-  useEffect(() => { saveSettings({ startTime, endTimeLimit, settingsOpen }); }, [startTime, endTimeLimit, settingsOpen]);
+  useEffect(() => {
+    saveSettings({ startTime, endTimeLimit, settingsOpen, autopilot, autopilotIntroSeen, bridge: bridgeSettings, attentionOpen });
+  }, [startTime, endTimeLimit, settingsOpen, autopilot, autopilotIntroSeen, bridgeSettings, attentionOpen]);
   useEffect(() => { saveTechnicians(technicians); }, [technicians]);
 
   // Se il tecnico selezionato viene eliminato, torna a "Tutti"
@@ -422,19 +464,16 @@ function App() {
     setBulkCallList(appts);
   };
 
-  const handleCallStarted = (id: string) => {
-    // Nuova chiamata: azzera l'esito precedente, verrà rilevato dal polling
-    setAllAppointments(prev => prev.map(a => a.id === id
-      ? { ...a, callStatus: 'calling', callOutcome: undefined, callSummary: undefined }
-      : a
-    ));
+  // Tutte le chiamate (singola, in blocco, pilota automatico) passano dagli
+  // stessi riduttori: avvio (alternative offerte, esito precedente azzerato:
+  // verrà rilevato dal polling) ed esito del lancio.
+  const handleCallStarted = (id: string, alternatives: AlternativeSlot[] = []) => {
+    setAllAppointments(prev => startCallReducer(prev, id, alternatives));
   };
 
-  const handleCallResult = (id: string, ok: boolean, callId?: string) => {
-    setAllAppointments(prev => prev.map(a => a.id === id
-      ? { ...a, callStatus: ok ? 'called' : 'failed', callId: callId || a.callId, calledAt: new Date().toISOString() }
-      : a
-    ));
+  const handleCallResult = (id: string, ok: boolean, callId?: string, error?: string) => {
+    const now = new Date();
+    setAllAppointments(prev => reduceCallLaunchResult(prev, id, { ok, callId, error }, now));
   };
 
   // Esito della telefonata -> categoria problematica (la pratica esce dalla
@@ -468,103 +507,36 @@ function App() {
   const isOutcomePastCutoff = (a: Appointment): boolean =>
     !!a.calledAt && (Date.now() - new Date(a.calledAt).getTime()) >= CALL_POLL_MAX_AGE_MS;
 
-  // Applica l'esito della conversazione alla pratica:
-  //  confermato          -> proposta => Confermata (data/orario mantenuti)
-  //  riprogrammare       -> In Attesa, preferenza del cliente nelle note
-  //  da_richiamare       -> Problematica 📆 con data di rientro
-  //  numero_errato       -> Problematica 📵
-  //  lavori_non_ultimati -> Problematica 🚧 con data fine lavori
-  //  annullato           -> Annullata (archivio)
-  //  rifiutato           -> Stand-by
-  //  altro_referente     -> aggiorna telefono/referente e rimette in coda chiamate
-  //  non_risposto / sconosciuto -> solo badge
+  // --- Contesto di pianificazione per i riduttori del pilota ---
+  // Costruito al momento da ref sempre aggiornati (tecnici, impostazioni,
+  // orari e base generali dell'app come fallback), con l'ora corrente.
+  const techniciansRef = useRef(technicians);
+  techniciansRef.current = technicians;
+  const autopilotRef = useRef(autopilot);
+  autopilotRef.current = autopilot;
+  const fallbackRef = useRef({ start: startTime, end: endTimeLimit, base: baseLocation?.coords || null });
+  fallbackRef.current = { start: startTime, end: endTimeLimit, base: baseLocation?.coords || null };
+
+  const getPlanningContext = useCallback((): PlanningContext => ({
+    technicians: techniciansRef.current,
+    fallback: fallbackRef.current,
+    settings: autopilotRef.current,
+    now: new Date(),
+  }), []);
+
+  // Applica l'esito della conversazione alla pratica (riduttore puro del
+  // pilota). Pilota spento: mappatura di sempre (confermato -> Confermata,
+  // riprogrammare -> In Attesa, da_richiamare/numero_errato/lavori ->
+  // Problematiche, annullato, rifiutato -> Stand-by, altro_referente ->
+  // nuovo numero) più le date rifiutate e le alternative accettate in
+  // chiamata. Pilota acceso: anche richiami e rimpiazzo dello slot liberato.
   const applyCallOutcome = useCallback((id: string, outcome: CallOutcome, expectedCallId?: string) => {
-    setAllAppointments(prev => prev.map(a => {
-      if (a.id !== id || a.callOutcome) return a;
-      if (expectedCallId && a.callId !== expectedCallId) return a; // nel frattempo è partita un'altra chiamata
+    const ctx = getPlanningContext();
+    setAllAppointments(prev => reduceCallOutcome(prev, id, outcome, expectedCallId, ctx));
+  }, [getPlanningContext, setAllAppointments]);
 
-      const updated: Appointment = {
-        ...a,
-        callOutcome: outcome,
-        callSummary: outcome.summary || a.callSummary,
-        callStatus: outcome.result === 'non_risposto' ? 'failed' : 'called',
-      };
-      const clearPlanning = () => {
-        updated.date = undefined;
-        updated.sequenceOrder = undefined;
-        updated.startTime = undefined;
-        updated.endTime = undefined;
-      };
-      const addNote = (nota: string) => {
-        updated.notes = updated.notes ? `${updated.notes} · ${nota}` : nota;
-      };
-
-      switch (outcome.result) {
-        case 'confermato':
-          if (a.status === 'proposed') updated.status = 'confirmed';
-          break;
-        case 'riprogrammare': {
-          updated.status = 'pending';
-          clearPlanning();
-          // Se la data richiesta è interpretabile diventa "rientro": compare
-          // nell'alert Slot da riservare e lo smistamento non propone prima
-          updated.followUpDate = outcome.followUpDate || a.followUpDate;
-          const quando = [outcome.requestedDate, outcome.requestedTime].filter(Boolean).join(' ');
-          addNote(quando ? `Da riprogrammare — richiesta cliente: ${quando}` : 'Da riprogrammare (nessuna preferenza indicata)');
-          break;
-        }
-        case 'da_richiamare':
-          updated.status = 'issue';
-          updated.issueType = 'callback';
-          updated.followUpDate = outcome.followUpDate || a.followUpDate;
-          clearPlanning();
-          break;
-        case 'numero_errato':
-          updated.status = 'issue';
-          updated.issueType = 'wrong_phone';
-          clearPlanning();
-          break;
-        case 'lavori_non_ultimati':
-          updated.status = 'issue';
-          updated.issueType = 'works_pending';
-          updated.followUpDate = outcome.followUpDate || a.followUpDate;
-          clearPlanning();
-          break;
-        case 'annullato':
-          updated.status = 'cancelled';
-          updated.issueType = undefined;
-          clearPlanning();
-          break;
-        case 'rifiutato':
-          updated.status = 'standby';
-          clearPlanning();
-          addNote('Rifiutato dal cliente');
-          break;
-        case 'altro_referente':
-          if (outcome.newContactPhone) {
-            // Il cliente ha indicato un'altra persona: si aggiorna il numero e
-            // la pratica torna pronta per una nuova chiamata ("per conto di...")
-            updated.phone = outcome.newContactPhone;
-            updated.contactPerson = [outcome.newContactName, outcome.newContactRole].filter(Boolean).join(' — ') || 'Referente indicato dal cliente';
-            updated.referredBy = a.referredBy || a.title;
-            updated.callStatus = undefined;
-            updated.callId = undefined;
-            updated.calledAt = undefined;
-            updated.callOutcome = undefined;
-            addNote(`Nuovo referente: ${[outcome.newContactName, outcome.newContactRole, outcome.newContactPhone].filter(Boolean).join(' · ')}`);
-          }
-          break;
-        default:
-          break; // non_risposto / sconosciuto: nessun cambio di stato
-      }
-      return updated;
-    }));
-  }, []);
-
-  // Riferimento sempre aggiornato: il polling legge da qui senza dover
-  // ricreare il timer a ogni modifica della lista.
-  const appointmentsRef = useRef<Appointment[]>(allAppointments);
-  useEffect(() => { appointmentsRef.current = allAppointments; }, [allAppointments]);
+  // (appointmentsRef, definito in alto, è il riferimento sempre aggiornato:
+  // il polling legge da lì senza dover ricreare il timer a ogni modifica.)
 
   // Chiave stabile: cambia solo quando cambia l'insieme delle chiamate da monitorare
   const callPollKey = allAppointments.filter(awaitingCallOutcome).map(a => a.id).sort().join('|');
@@ -628,6 +600,119 @@ function App() {
     return `Giornata lavorativa ${windowStart}-${windowEnd}. ` +
       (impegni.length ? `Fasce già impegnate: ${impegni.join('; ')}.` : 'Nessun altro appuntamento fissato.');
   };
+  const buildDayScheduleRef = useRef(buildDaySchedule);
+  buildDayScheduleRef.current = buildDaySchedule;
+
+  // Alternative reali che l'agente potrà offrire, calcolate sullo stato
+  // attuale subito prima di chiamare
+  const buildAlternatives = useCallback((appt: Appointment): AlternativeSlot[] => {
+    const all = appointmentsRef.current;
+    const current = all.find(a => a.id === appt.id) || appt;
+    return alternativesForCall(current, all, getPlanningContext());
+  }, [getPlanningContext]);
+
+  // Chiamata lanciata dal pilota automatico: stesso percorso delle manuali
+  const performAutoCall = useCallback(async (appt: Appointment): Promise<void> => {
+    const current = appointmentsRef.current.find(a => a.id === appt.id) || appt;
+    const alternatives = buildAlternatives(current);
+    setAllAppointments(prev => startCallReducer(prev, current.id, alternatives));
+    const tech = techniciansRef.current.find(t => t.id === current.technicianId);
+    const result = await startConfirmationCall(current, tech?.name, buildDayScheduleRef.current(current), alternatives);
+    const now = new Date();
+    setAllAppointments(prev => reduceCallLaunchResult(prev, current.id, result, now));
+  }, [buildAlternatives, setAllAppointments]);
+
+  // --- Automatismi: una sola scheda (Web Locks) ---
+  const tabLock = useTabLock('optiroute-automazione');
+  const isAutomationTab = tabLock === 'leader';
+
+  useAutopilot({
+    active: autopilot.enabled && isAutomationTab,
+    appointmentsRef,
+    commit: setAllAppointments,
+    getContext: getPlanningContext,
+    launchCall: performAutoCall,
+    queueKey: autopilotQueueKey(allAppointments),
+  });
+
+  // Pilota acceso/spento da un'altra scheda: la barra resta coerente
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== 'optiroute_settings_v1') return;
+      const next = loadAutopilotSettings();
+      setAutopilot(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // Barra del pilota: contatori e orari aggiornati anche senza modifiche
+  useEffect(() => {
+    if (!autopilot.enabled) return;
+    const timer = setInterval(() => setClockTick(n => n + 1), 15000);
+    return () => clearInterval(timer);
+  }, [autopilot.enabled]);
+
+  const isImportOrDispatchBusy = useCallback(() => importBusyRef.current || autoDispatchBusyRef.current, []);
+  const setAutoDispatchBusy = useCallback((busy: boolean) => { autoDispatchBusyRef.current = busy; }, []);
+
+  const autoDispatch = useAutoDispatch({
+    active: autopilot.enabled && autopilot.autoDispatch && isAutomationTab,
+    blocked: importBusy || showDispatchModal,
+    appointments: allAppointments,
+    appointmentsRef,
+    technicians,
+    fallbackBase: baseLocation?.coords || null,
+    settings: autopilot,
+    commit: setAllAppointments,
+    isBusy: isImportOrDispatchBusy,
+    setBusy: setAutoDispatchBusy,
+  });
+
+  // Attende la fine di un altro import / smistamento automatico (max ~2 minuti)
+  const waitImportSlot = async (onWait?: () => void): Promise<void> => {
+    for (let i = 0; i < 240 && isImportOrDispatchBusy(); i++) {
+      onWait?.();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  };
+
+  // Import silenzioso dal bridge: nuove pratiche (nucleo comune) + telefoni
+  // arrivati sulle pratiche che non l'avevano (mai sovrascritti)
+  const importFromBridge = useCallback(async (
+    rows: ImportRow[],
+    phoneUpdates: { id: string; changes: Partial<Appointment> }[]
+  ): Promise<BridgeImportOutcome> => {
+    importBusyRef.current = true;
+    setImportBusy(true);
+    try {
+      const result = rows.length > 0
+        ? await importRowsToAppointments(rows, appointmentsRef.current, techniciansRef.current)
+        : { newAppointments: [], updates: new Map<string, Partial<Appointment>>(), failures: [], approximates: [] };
+      // Le pratiche già presenti le gestisce il diff (solo telefono mancante)
+      result.updates.clear();
+      const phoneById = new Map(phoneUpdates.map(u => [u.id, u.changes]));
+      let updated = 0;
+      setAllAppointments(prev => applyImportResult(prev, result).map(a => {
+        const changes = phoneById.get(a.id);
+        if (!changes || a.phone?.trim()) return a;
+        updated += 1;
+        return { ...a, ...changes };
+      }));
+      return { added: result.newAppointments.length, updated, failed: result.failures.length };
+    } finally {
+      importBusyRef.current = false;
+      setImportBusy(false);
+    }
+  }, [setAllAppointments]);
+
+  const bridgeInbox = useBridgeInbox({
+    settings: bridgeSettings,
+    isLeader: isAutomationTab,
+    appointmentsRef,
+    importBridge: importFromBridge,
+    isImportBusy: isImportOrDispatchBusy,
+  });
 
   // --- Sync verso il gestionale Effetre (Firestore) ---
   const handleSyncGestionale = useCallback(async (automatic = false) => {
@@ -667,6 +752,7 @@ function App() {
     setFailedImports([]);
     setApproxImports([]);
     setUploadProgress('Lettura file in corso...');
+    let ownsImportSlot = false;
 
     try {
       // 1) Formato strutturato: colonne Intestatario/Indirizzo/Comune
@@ -716,97 +802,22 @@ function App() {
         return;
       }
 
-      // Merge per codice pratica: le pratiche già presenti vengono AGGIORNATE
-      // (telefono/note/progetto) invece di essere duplicate — è il flusso del
-      // file arricchito dal bridge Prelios.
-      const byCode = new Map<string, Appointment>();
-      allAppointments.forEach(a => { if (a.periziaCode) byCode.set(a.periziaCode, a); });
+      // Mai in parallelo a un import dal bridge o a uno smistamento automatico
+      await waitImportSlot(() => setUploadProgress('Attendo la fine dell\'import automatico in corso...'));
+      importBusyRef.current = true;
+      ownsImportSlot = true;
+      setImportBusy(true);
 
-      const newAppointments: Appointment[] = [];
-      const updates = new Map<string, Partial<Appointment>>();
-      const failures: string[] = [];
-      const approximates: string[] = [];
-      const seenCodes = new Set<string>();
-      let processedCount = 0;
+      // Merge per codice pratica, geocoding con fallback, tecnico per zona:
+      // nucleo comune con l'inbox del bridge (hooks/importPratiche)
+      const { newAppointments, updates, failures, approximates } = await importRowsToAppointments(
+        importRows,
+        appointmentsRef.current,
+        technicians,
+        (processedCount, total) => setUploadProgress(`Elaborazione pratica ${processedCount} di ${total}...${excludedInfo}`)
+      );
 
-      for (const row of importRows) {
-        processedCount++;
-        setUploadProgress(`Elaborazione pratica ${processedCount} di ${importRows.length}...${excludedInfo}`);
-
-        // Dedupe righe duplicate nello stesso file
-        if (row.codice) {
-          if (seenCodes.has(row.codice)) continue;
-          seenCodes.add(row.codice);
-        }
-
-        const existing = row.codice ? byCode.get(row.codice) : undefined;
-        if (existing) {
-          updates.set(existing.id, {
-            phone: row.phone || existing.phone,
-            // Le note operative locali (esiti, richieste cliente) NON vanno
-            // sovrascritte dal file: si appende solo contenuto nuovo
-            notes: !existing.notes
-              ? row.notes
-              : (row.notes && !existing.notes.includes(row.notes)
-                  ? appendNote(existing.notes, row.notes)
-                  : existing.notes),
-            project: row.project || existing.project,
-          });
-          continue;
-        }
-
-        try {
-          // Geocoding con fallback: indirizzo esatto, poi varianti (senza
-          // civico, senza prefisso via/piazza) e infine centro del comune.
-          // Il rate limit Nominatim è gestito dentro il servizio.
-          const result = await geocodeAddressParts({
-            street: row.street,
-            civic: row.civic,
-            comune: row.comune,
-            province: row.province,
-          });
-          if (result) {
-            // Provincia: la colonna del file è più affidabile del geocoding
-            const province = provinceToCode(row.province) || result.province;
-            const comune = row.comune || result.comune;
-            const matched = matchTechnician({ coords: result.coords, province }, technicians);
-
-            if (result.approximate) {
-              approximates.push(`${row.fullAddress} (${row.title})`);
-            }
-
-            newAppointments.push({
-              id: Date.now() + Math.random().toString(),
-              // Se la posizione è approssimativa manteniamo l'indirizzo del
-              // file (quello del comune sarebbe fuorviante per il tecnico)
-              address: result.approximate ? row.fullAddress : result.displayName,
-              shortAddress: row.shortAddress,
-              title: row.title,
-              phone: row.phone,
-              notes: row.notes,
-              coords: result.coords,
-              province,
-              comune,
-              urgent: row.urgent || undefined,
-              approximate: result.approximate || undefined,
-              periziaCode: row.codice,
-              project: row.project,
-              technicianId: matched?.id,
-              status: 'pending' // Import as pending
-            });
-          } else {
-            failures.push(`${row.fullAddress} (${row.title})`);
-          }
-        } catch (err) {
-          console.error(err);
-          failures.push(`${row.fullAddress} (Errore di rete)`);
-        }
-      }
-
-      setAllAppointments(prev => [
-        ...prev.map(a => updates.has(a.id) ? { ...a, ...updates.get(a.id) } : a),
-        ...newAppointments
-      ]);
+      setAllAppointments(prev => applyImportResult(prev, { newAppointments, updates }));
 
       setImportStats({ success: newAppointments.length + updates.size, failed: failures.length, approx: approximates.length });
       setFailedImports(failures);
@@ -820,6 +831,10 @@ function App() {
       console.error(error);
       setUploadProgress("Errore durante la lettura del file.");
     } finally {
+      if (ownsImportSlot) {
+        importBusyRef.current = false;
+        setImportBusy(false);
+      }
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -1062,10 +1077,11 @@ function App() {
     }
   };
 
-  // Applica gli esiti dello smistamento automatico (stato 'proposed' + assegnazioni)
-  const handleApplyDispatch = (updates: Appointment[]) => {
+  // Applica gli esiti dello smistamento (stato 'proposed' + assegnazioni) e
+  // il riordino delle tappe già nel giro (sequenza e viaggi, mai gli orari)
+  const handleApplyDispatch = (updates: Appointment[], patches: AppointmentPatch[] = []) => {
     const byId = new Map(updates.map(u => [u.id, u]));
-    setAllAppointments(prev => prev.map(a => byId.get(a.id) || a));
+    setAllAppointments(prev => applyPatches(prev.map(a => byId.get(a.id) || a), patches));
   };
 
   const handleOptimize = useCallback(async () => {
@@ -1252,6 +1268,14 @@ function App() {
       .filter(a => a.status === dragged!.status && a.date === dragged!.date && a.technicianId === dragged!.technicianId)
       .sort((a, b) => (a.sequenceOrder || 0) - (b.sequenceOrder || 0));
 
+    // Pilota: con una chiamata in corso o in coda nel giro gli orari non si
+    // ricalcolano (al cliente sta per essere comunicato quell'orario)
+    const now = new Date();
+    if (dayList.some(a => isCallInFlight(a, now) || !!a.autoCall)) {
+      alert("C'è una chiamata in corso/in coda per questo giro: attendi l'esito o annulla le chiamate in coda prima di riordinare.");
+      return;
+    }
+
     const fromIdx = dayList.findIndex(a => a.id === draggedId);
     const toIdx = dayList.findIndex(a => a.id === targetId);
     if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
@@ -1349,6 +1373,48 @@ function App() {
       (a.status === 'pending' || a.status === 'proposed' ||
         (a.status === 'confirmed' && !!a.date && a.date >= todayStr))
     ).length;
+
+  // --- Pilota automatico: cruscotto, coda, cose da gestire ---
+  const planningNow = getPlanningContext();
+  const apStats = autopilotStats(allAppointments, planningNow);
+  const attention = attentionItems(allAppointments, planningNow);
+  const queuedIds = allAppointments.filter(a => a.autoCall).map(a => a.id);
+
+  // "Approva e chiama": il giro entra nella coda del pilota
+  const handleApproveAndCall = (ids: string[]) => {
+    const now = new Date();
+    setAllAppointments(prev => approveForCalling(prev, ids, now));
+  };
+
+  const handleCancelQueuedCalls = () => {
+    setAllAppointments(prev => cancelAutoCalls(prev, prev.filter(a => a.autoCall || a.autoCallNotBefore).map(a => a.id)));
+  };
+
+  // Giro approvabile: ha almeno una tappa chiamabile non ancora in coda
+  const approvableIds = (items: Appointment[]): string[] => {
+    const now = new Date();
+    const queued = approveForCalling(items, items.map(a => a.id), now);
+    return queued.filter((a, i) => a !== items[i] && !items[i].autoCall).map(a => a.id);
+  };
+
+  const enableAutopilot = () => {
+    setAutopilotIntroSeen(true);
+    setAutopilot(s => ({ ...s, enabled: true }));
+  };
+
+  // Clic su una voce "Da gestire": porta la card in vista, altrimenti apre la
+  // modifica della pratica
+  const handleAttentionSelect = (item: AttentionItem) => {
+    const appt = allAppointments.find(a => a.id === item.id);
+    if (!appt) return;
+    const el = document.getElementById(`appt-${appt.id}`);
+    if (el) {
+      setSelectedAppointmentId(appt.id);
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+      openEditModal(appt);
+    }
+  };
 
   // Small badge showing the AI call state on a card.
   // L'esito della conversazione (quando arriva col polling) ha la precedenza.
@@ -1453,6 +1519,7 @@ function App() {
           appointment={callTarget}
           technicianName={techById(callTarget.technicianId)?.name}
           daySchedule={buildDaySchedule(callTarget)}
+          buildAlternatives={buildAlternatives}
           onClose={() => setCallTarget(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}
@@ -1466,6 +1533,11 @@ function App() {
           appointments={bulkCallList}
           technicianNameById={technicianNameById}
           buildDaySchedule={buildDaySchedule}
+          buildAlternatives={buildAlternatives}
+          isCallBusy={(id) => {
+            const current = appointmentsRef.current.find(a => a.id === id);
+            return !!current && isCallInFlight(current, new Date());
+          }}
           onClose={() => setBulkCallList(null)}
           onCallStarted={handleCallStarted}
           onCallResult={handleCallResult}
@@ -1488,8 +1560,19 @@ function App() {
           pending={pendingAll}
           technicians={technicians}
           fallbackBase={baseLocation?.coords || null}
+          existing={allAppointments}
           onApply={handleApplyDispatch}
           onClose={() => setShowDispatchModal(false)}
+        />
+      )}
+
+      {/* --- PILOTA AUTOMATICO: impostazioni (e bridge) --- */}
+      {showAutopilotSettings && (
+        <AutopilotSettingsModal
+          autopilot={autopilot}
+          bridge={bridgeSettings}
+          onSave={(ap, br) => { setAutopilot(ap); setBridgeSettings(br); }}
+          onClose={() => setShowAutopilotSettings(false)}
         />
       )}
 
@@ -1775,6 +1858,20 @@ function App() {
              </div>
            )}
 
+          {/* Pilota automatico: sempre visibile, fuori dal pannello richiudibile */}
+          <AutopilotBar
+            settings={autopilot}
+            stats={apStats}
+            lock={tabLock === 'pending' ? 'leader' : tabLock}
+            introSeen={autopilotIntroSeen}
+            autoDispatchRunning={autoDispatch.running}
+            bridge={bridgeInbox.status}
+            onEnable={enableAutopilot}
+            onPause={() => setAutopilot(s => ({ ...s, enabled: false }))}
+            onOpenSettings={() => setShowAutopilotSettings(true)}
+            onBridgeSyncNow={() => { void bridgeInbox.syncNow(); }}
+          />
+
           {/* Toggle Impostazioni e azioni: click per chiudere/riaprire e liberare spazio per l'elenco */}
           <button
             onClick={toggleSettingsPanel}
@@ -1893,6 +1990,14 @@ function App() {
           {/* List Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white">
 
+            {/* 0. Da gestire: le eccezioni che il pilota non risolve da solo */}
+            <AttentionPanel
+              items={attention}
+              open={attentionOpen}
+              onToggle={() => setAttentionOpen(o => !o)}
+              onSelect={handleAttentionSelect}
+            />
+
             {/* 1. Proposed (da confermare) */}
             {filters.proposed && listProposed.length > 0 && (
                 <div>
@@ -1908,6 +2013,28 @@ function App() {
                             </button>
                         )}
                     </h3>
+                    {autopilot.enabled && (approvableIds(listProposed).length > 0 || queuedIds.length > 0) && (
+                        <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                            {approvableIds(listProposed).length > 0 && (
+                                <button
+                                    onClick={() => handleApproveAndCall(listProposed.map(a => a.id))}
+                                    title="Approva tutti i giri proposti: il pilota automatico chiamerà i clienti nella fascia oraria"
+                                    className="text-[11px] font-bold text-white bg-violet-600 hover:bg-violet-700 px-2 py-1 rounded"
+                                >
+                                    ✅ Approva e chiama tutti i giri
+                                </button>
+                            )}
+                            {queuedIds.length > 0 && (
+                                <button
+                                    onClick={handleCancelQueuedCalls}
+                                    title="Toglie dalla coda del pilota le chiamate non ancora partite"
+                                    className="text-[11px] font-bold text-violet-700 bg-white border border-violet-300 hover:bg-violet-50 px-2 py-1 rounded"
+                                >
+                                    Annulla chiamate in coda ({queuedIds.length})
+                                </button>
+                            )}
+                        </div>
+                    )}
                     <div className="space-y-3">
                         {proposedGroups.map(group => {
                             const tech = techById(group.techId);
@@ -1937,6 +2064,20 @@ function App() {
                                             </button>
                                         </div>
                                     </div>
+                                    {autopilot.enabled && approvableIds(group.items).length > 0 && (
+                                        <div className="px-2.5 py-1 bg-violet-50 border-b border-violet-100 flex items-center justify-between gap-2">
+                                            <span className="text-[10px] text-violet-700">
+                                                {approvableIds(group.items).length} {approvableIds(group.items).length === 1 ? 'cliente da chiamare' : 'clienti da chiamare'} per confermare il giro
+                                            </span>
+                                            <button
+                                                onClick={() => handleApproveAndCall(group.items.map(a => a.id))}
+                                                className="text-[10px] font-bold text-white bg-violet-600 hover:bg-violet-700 px-1.5 py-0.5 rounded shrink-0"
+                                                title="Approva il giro: il pilota automatico chiamerà i clienti uno dopo l'altro"
+                                            >
+                                                ✅ Approva e chiama
+                                            </button>
+                                        </div>
+                                    )}
                                     <div className="divide-y divide-slate-100">
                                         {group.items.map(appt => (
                                             <div
@@ -1963,6 +2104,8 @@ function App() {
                                                         <CodeChip appt={appt} />
                                                         <ApproxBadge appt={appt} />
                                                         <CallBadge appt={appt} />
+                                                        <AutoCallBadge appt={appt} maxAttempts={autopilot.maxAttempts} />
+                                                        <OfferedAlternatives appt={appt} />
                                                     </div>
                                                 </div>
                                                 <div className="flex flex-col gap-1 shrink-0">
@@ -2096,6 +2239,8 @@ function App() {
                                                     </span>
                                                     {selectedTechId === ALL_TECH && <TechBadge appt={appt} />}
                                                     <CallBadge appt={appt} />
+                                                    <AutoCallBadge appt={appt} maxAttempts={autopilot.maxAttempts} />
+                                                    <OfferedAlternatives appt={appt} />
                                                 </div>
                                             </div>
                                         </div>

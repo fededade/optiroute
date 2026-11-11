@@ -4,6 +4,8 @@ import {
   alternativesForCall,
   approveForCalling,
   attentionItems,
+  nextDueCall,
+  phoneKey,
   reduceCallLaunchResult,
   reduceCallOutcome,
   reduceCallStarted,
@@ -173,5 +175,50 @@ describe('cambi per il giorno stesso', () => {
     const late = planning(at(today, '14:00'), { sameDayChanges: true });
     const out2 = reduceCallOutcome(all, 'x', outcome('rifiutato'), 'k', late);
     expect(byId(out2, 'attesa').status).toBe('pending');
+  });
+});
+
+describe('stesso telefono su più pratiche', () => {
+  const SAME = '+39 333 1234567';
+  const world = (): Appointment[] => [
+    stop('a', D, '09:00', '09:20', P.milano, { phone: SAME, autoCall: 'route' }),
+    stop('b', D, '10:00', '10:20', P.portaVenezia, { phone: '333.1234567', autoCall: 'route' }), // stesso numero, scritto diversamente
+    stop('c', D, '11:00', '11:20', P.sesto, { phone: '+390299999999', autoCall: 'route' }),
+  ];
+
+  it('riconosce lo stesso numero scritto in modi diversi', () => {
+    expect(phoneKey('+39 333 1234567')).toBe('3331234567');
+    expect(phoneKey('0039 333-1234567')).toBe('3331234567');
+    expect(phoneKey('333.1234567')).toBe('3331234567');
+    expect(phoneKey('02 1234567')).toBe('021234567');
+    expect(phoneKey(undefined)).toBe('');
+  });
+
+  it('non parte una seconda chiamata allo stesso numero finché la prima non ha un esito', () => {
+    let all = world();
+    const first = nextDueCall(all, ON)!;
+    expect(first.id).toBe('a');
+    all = reduceCallLaunchResult(reduceCallStarted(all, 'a', [], NOW), 'a', { ok: true, callId: 'k1' }, NOW);
+    // "b" ha lo stesso numero: si salta, tocca a "c"
+    expect(nextDueCall(all, ON)?.id).toBe('c');
+    all = reduceCallLaunchResult(reduceCallStarted(all, 'c', [], NOW), 'c', { ok: true, callId: 'k2' }, NOW);
+    expect(nextDueCall(all, ON)).toBeNull();
+    // arriva l'esito di "a": ora "b" può partire
+    all = reduceCallOutcome(all, 'a', outcome('confermato'), 'k1', ON);
+    expect(nextDueCall(all, ON)?.id).toBe('b');
+  });
+
+  it('con lo stesso numero su tutte le pratiche le chiamate partono una alla volta', () => {
+    let all: Appointment[] = [1, 2, 3, 4, 5].map(i =>
+      stop(`t${i}`, D, `${String(8 + i).padStart(2, '0')}:00`, `${String(8 + i).padStart(2, '0')}:20`, P.milano, { phone: SAME, autoCall: 'route' }));
+    const launched: string[] = [];
+    for (let step = 0; step < 5; step++) {
+      const next = nextDueCall(all, ON)!;
+      launched.push(next.id);
+      all = reduceCallLaunchResult(reduceCallStarted(all, next.id, [], NOW), next.id, { ok: true, callId: `k-${next.id}` }, NOW);
+      expect(nextDueCall(all, ON)).toBeNull(); // finché questa è in corso, nessun'altra
+      all = reduceCallOutcome(all, next.id, outcome('confermato'), `k-${next.id}`, ON);
+    }
+    expect(launched).toEqual(['t1', 't2', 't3', 't4', 't5']);
   });
 });

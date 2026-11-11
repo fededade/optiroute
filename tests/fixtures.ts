@@ -49,6 +49,14 @@ export const appt = (over: Partial<Appointment> = {}): Appointment => {
   };
 };
 
+// Ogni tappa ha un telefono diverso, come nella realtà (il pilota non chiama
+// due volte insieme lo stesso numero)
+let phoneSeq = 0;
+const nextPhone = (): string => {
+  phoneSeq += 1;
+  return `+39020${String(phoneSeq).padStart(7, '0')}`;
+};
+
 // Tappa nel giro
 export const stop = (
   id: string,
@@ -58,7 +66,7 @@ export const stop = (
   coords: Coordinates,
   over: Partial<Appointment> = {}
 ): Appointment =>
-  appt({ id, status: 'proposed', date, startTime: start, endTime: end, coords, technicianId: 'tech-1', phone: '+390200000000', ...over });
+  appt({ id, status: 'proposed', date, startTime: start, endTime: end, coords, technicianId: 'tech-1', phone: nextPhone(), ...over });
 
 export const outcome = (result: CallOutcome['result'], over: Partial<CallOutcome> = {}): CallOutcome => ({
   result,

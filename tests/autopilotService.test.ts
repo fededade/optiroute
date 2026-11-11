@@ -114,9 +114,10 @@ describe('reduceCallOutcome: mappatura esiti (pilota spento)', () => {
     expect(off.autoCall).toBeUndefined();
     const on = byId(reduceCallOutcome(world(), 'x', o, 'c1', ON), 'x');
     expect(on.autoCall).toBe('route');
-    const noPhone = byId(reduceCallOutcome(world(), 'x', outcome('altro_referente', { newContactName: 'Tizio' }), 'c1', ON), 'x');
+    const before = world();
+    const noPhone = byId(reduceCallOutcome(before, 'x', outcome('altro_referente', { newContactName: 'Tizio' }), 'c1', ON), 'x');
     expect(noPhone.callOutcome?.result).toBe('altro_referente');
-    expect(noPhone.phone).toBe('+390200000000');
+    expect(noPhone.phone).toBe(byId(before, 'x').phone); // senza un numero nuovo il telefono resta quello di prima
     expect(noPhone.status).toBe('proposed');
   });
 

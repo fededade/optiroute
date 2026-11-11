@@ -209,11 +209,25 @@ const byPriority = (x: Appointment, y: Appointment): number =>
   (x.date || '').localeCompare(y.date || '') ||
   (x.startTime || '').localeCompare(y.startTime || '');
 
+// Numero "nudo" per confrontare due telefoni scritti in modo diverso
+// (+39 333 1234567, 0039 3331234567, 333.1234567 sono lo stesso numero)
+export const phoneKey = (phone: string | undefined): string => {
+  let digits = (phone || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.length > 10 && digits.startsWith('39')) digits = digits.slice(2);
+  return digits;
+};
+
 export const nextDueCall = (all: Appointment[], ctx: PlanningContext, maxInFlight = 4): Appointment | null => {
   if (!ctx.settings.enabled) return null;
   if (!isWithinCallWindow(ctx.now, ctx.settings)) return null;
-  if (all.filter(a => isCallInFlight(a, ctx.now)).length >= maxInFlight) return null;
-  const due = all.filter(a => isDue(a, ctx.now)).sort(byPriority);
+  const inFlight = all.filter(a => isCallInFlight(a, ctx.now));
+  if (inFlight.length >= maxInFlight) return null;
+  // Mai due chiamate insieme allo stesso telefono: lo stesso referente può
+  // comparire su più pratiche (un'agenzia, un proprietario con più immobili).
+  // La seconda parte quando la prima ha un esito.
+  const busy = new Set(inFlight.map(a => phoneKey(a.phone)).filter(Boolean));
+  const due = all.filter(a => isDue(a, ctx.now) && !busy.has(phoneKey(a.phone))).sort(byPriority);
   return due[0] || null;
 };
 

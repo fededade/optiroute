@@ -1488,11 +1488,19 @@ var nextCallWindowStart = (now, s) => {
 var PRIORITY = { backfill: 0, route: 1, retry: 2 };
 var isDue = (a, now) => !!a.autoCall && !!a.phone && isInRoute(a) && !isCallInFlight(a, now) && (!a.autoCallNotBefore || new Date(a.autoCallNotBefore).getTime() <= now.getTime()) && !slotPassed(a, now);
 var byPriority = (x, y) => (PRIORITY[x.autoCall || ""] ?? 9) - (PRIORITY[y.autoCall || ""] ?? 9) || (x.date || "").localeCompare(y.date || "") || (x.startTime || "").localeCompare(y.startTime || "");
+var phoneKey = (phone) => {
+  let digits = (phone || "").replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.length > 10 && digits.startsWith("39")) digits = digits.slice(2);
+  return digits;
+};
 var nextDueCall = (all, ctx, maxInFlight = 4) => {
   if (!ctx.settings.enabled) return null;
   if (!isWithinCallWindow(ctx.now, ctx.settings)) return null;
-  if (all.filter((a) => isCallInFlight(a, ctx.now)).length >= maxInFlight) return null;
-  const due = all.filter((a) => isDue(a, ctx.now)).sort(byPriority);
+  const inFlight = all.filter((a) => isCallInFlight(a, ctx.now));
+  if (inFlight.length >= maxInFlight) return null;
+  const busy = new Set(inFlight.map((a) => phoneKey(a.phone)).filter(Boolean));
+  const due = all.filter((a) => isDue(a, ctx.now) && !busy.has(phoneKey(a.phone))).sort(byPriority);
   return due[0] || null;
 };
 var expireStaleAutoCalls = (all, now) => all.map(

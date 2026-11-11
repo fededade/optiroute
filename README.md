@@ -38,7 +38,8 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
 2. Crea un agente vocale (lingua: italiano) e associalo al numero per le chiamate outbound.
 3. Nel prompt dell'agente puoi usare le variabili dinamiche inviate da OptiRoute:
    - `{{call_script}}` — script completo già pronto (saluto, presentazione, dati appuntamento, eventuale avviso di urgenza, richiesta di conferma). Il prompt minimo dell'agente può essere semplicemente: *"Segui queste istruzioni: {{call_script}}"*.
-   - Oppure le variabili singole: `{{company_name}}`, `{{client_name}}`, `{{appointment_date}}`, `{{appointment_time}}`, `{{appointment_time_spoken}}`, `{{appointment_end_time}}`, `{{appointment_address}}`, `{{appointment_notes}}`, `{{appointment_urgent}}` ("URGENTE"/"normale"), `{{urgency_notice}}` (frase pronta sull'urgenza, vuota se non urgente), `{{technician_name}}` (chi effettuerà il sopralluogo).
+   - Oppure le variabili singole: `{{company_name}}`, `{{client_name}}`, `{{appointment_date}}`, `{{appointment_time}}`, `{{appointment_time_spoken}}`, `{{appointment_end_time}}`, `{{appointment_address}}`, `{{appointment_notes}}`, `{{appointment_urgent}}` ("URGENTE"/"normale"), `{{urgency_notice}}` (frase pronta sull'urgenza, vuota se non urgente), `{{technician_name}}` (chi effettuerà il sopralluogo), `{{alternative_disponibili}}` (slot alternativi in testo parlato, uno per riga; vuota se non ce ne sono), `{{alternativa_a}}`, `{{alternativa_b}}`, `{{alternativa_c}}` (singolo slot parlato o vuota), `{{ha_alternative}}` ("si"/"no").
+   - **Slot alternativi in chiamata**: OptiRoute invia fino a 3 slot alternativi già verificati sull'agenda del tecnico. Se il cliente non può nello slot proposto, l'agente li offre uno alla volta e, se ne accetta uno, lo fissa in chiamata (sono le uniche disponibilità che può offrire: non ne inventa altre); l'app poi sposta la pratica da sola. Se nessuno va bene, prende nota della preferenza come prima.
 4. Su Vercel (Settings → Environment Variables) imposta:
    - `RETELL_API_KEY` — API key Retell
    - `RETELL_FROM_NUMBER` — numero in uscita in formato E.164 (es. `+39...`)
@@ -61,6 +62,7 @@ conversazione è conclusa e analizzata **applica da sola l'esito alla pratica**:
 | Esito conversazione | Effetto sulla pratica |
 |---|---|
 | Confermato | La proposta passa in **Confermate** (data/orario mantenuti) + badge "✅ Confermato dal cliente" |
+| Accetta uno slot alternativo offerto in chiamata | La pratica viene spostata sullo slot accettato e passa in **Confermate** (se nel frattempo lo slot non è più libero: da riprogrammare) |
 | Chiede un'altra data | Torna **In Attesa** con la richiesta del cliente nelle note + badge "🔁 Da riprogrammare" |
 | Da richiamare | Passa in 📆 **Problematiche · Da richiamare**, con la data indicata come rientro (alert + vincoli smistamento) |
 | Numero errato | 📵 **Problematiche · Numeri non corretti** (anche quando Retell segnala numero non componibile) |
@@ -86,6 +88,16 @@ aggiungi questi campi custom:
 4. `nuovo_referente_nome`, `nuovo_referente_telefono`, `nuovo_referente_ruolo` — tipo *Text* —
    compilati se il cliente indica un'altra persona da contattare
 5. `note_cliente` — tipo *Text* — annotazioni utili raccolte in chiamata
+6. `alternativa_scelta` — tipo *Selector*, opzioni esatte: `A`, `B`, `C`, `nessuna`
+   - descrizione da incollare: *"Se il cliente ha accettato uno degli slot alternativi offerti
+     in chiamata, la sua lettera; altrimenti nessuna"*
+   - **consigliato ma non indispensabile**: se manca, l'app deduce l'alternativa da sola quando
+     data e ora richieste coincidono con uno slot offerto. Per questo, quando il cliente accetta
+     un'alternativa, `nuova_data_richiesta` e `nuovo_orario_richiesto` vanno comunque compilati
+     con data (AAAA-MM-GG) e ora (HH:MM) dello slot accettato (lo script lo indica già all'analisi,
+     con la corrispondenza lettera → slot)
+   - accettati anche gli alias `alternativa_accettata`, `alternativa`, `slot_scelto`,
+     `chosen_alternative`; valori come "alternativa B" o "opzione c" vengono normalizzati
 
 Lo script inviato all'agente istruisce già l'operatore a chiedere e annotare queste
 informazioni. Senza i campi custom l'automazione resta prudente: classifica solo i segnali

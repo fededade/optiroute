@@ -8,8 +8,11 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 //                             numero_errato | lavori_non_ultimati | annullato |
 //                             rifiutato | altro_referente | non_risposto
 //   nuova_data_richiesta   -> testo libero (se riprogrammare)
-//   nuovo_orario_richiesto -> testo libero (se riprogrammare)
-//   data_rientro           -> data richiamo / fine lavori (AAAA-MM-GG o GG/MM)
+//   nuovo_orario_richiesto -> testo libero (se riprogrammare o se ha accettato
+//                             un'alternativa: ora HH:MM dello slot)
+//   alternativa_scelta     -> A | B | C | nessuna: slot alternativo accettato in
+//                             chiamata (esposto come outcome.chosenAlternative)
+//   data_rientro          -> data richiamo / fine lavori (AAAA-MM-GG o GG/MM)
 //   nuovo_referente_nome / nuovo_referente_telefono / nuovo_referente_ruolo
 //   note_cliente           -> testo libero
 
@@ -32,6 +35,28 @@ const pickString = (obj: Record<string, unknown> | undefined, keys: string[]): s
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return undefined;
+};
+
+// Alternativa accettata in chiamata: "A", "b", "alternativa B", "opzione c",
+// "Slot A" -> 'A'|'B'|'C'. "nessuna", "no", "-", vuoto o testo che non si
+// riconduce a UNA sola lettera -> undefined. Si considerano solo lettere
+// isolate (token di un carattere), mai lettere dentro le parole: "nessuna"
+// contiene delle "a" ma non è l'alternativa A.
+export const normalizeChosenAlternative = (raw: unknown): 'A' | 'B' | 'C' | undefined => {
+  if (typeof raw !== 'string') return undefined;
+  const v = raw.trim().toLowerCase();
+  if (!v) return undefined;
+  const tokens = v.split(/[^a-z0-9àèéìòù]+/).filter(Boolean);
+  // Parole ammesse attorno alla lettera; qualsiasi altra parola rende il
+  // valore ambiguo (es. "a domani", "va bene la b o la c")
+  const ALLOWED = new Set(['alternativa', 'alternative', 'opzione', 'slot', 'scelta', 'lettera', 'la', 'l', 'proposta']);
+  const letters: string[] = [];
+  for (const t of tokens) {
+    if (t === 'a' || t === 'b' || t === 'c') letters.push(t);
+    else if (!ALLOWED.has(t)) return undefined;
+  }
+  if (letters.length !== 1) return undefined;
+  return letters[0].toUpperCase() as 'A' | 'B' | 'C';
 };
 
 const classifyOutcome = (
@@ -145,6 +170,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result,
         requestedDate: pickString(custom, ['nuova_data_richiesta', 'data_richiesta', 'data_preferita', 'nuova_data', 'requested_date']),
         requestedTime: pickString(custom, ['nuovo_orario_richiesto', 'orario_richiesto', 'orario_preferito', 'requested_time']),
+        chosenAlternative: normalizeChosenAlternative(
+          pickString(custom, ['alternativa_scelta', 'alternativa_accettata', 'alternativa', 'slot_scelto', 'chosen_alternative'])
+        ),
         followUpRaw: pickString(custom, ['data_rientro', 'data_richiamo', 'follow_up_date']),
         clientNotes: pickString(custom, ['note_cliente', 'note', 'client_notes']),
         newContactName,

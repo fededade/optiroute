@@ -20,7 +20,9 @@ può essere minimale e delegare a quella. Sotto trovi **due opzioni**.
 > capisci, chiedi cortesemente di ripetere. Alla fine ringrazia e saluta.
 
 Con questa opzione tutta la logica (presentazione, dati pratica, gestione
-delle risposte, referente alternativo) arriva già pronta da OptiRoute.
+delle risposte, referente alternativo, slot alternativi da offrire se il
+cliente non può nello slot proposto) arriva già pronta da OptiRoute: non serve
+aggiungere nulla al prompt per le alternative.
 
 ---
 
@@ -30,7 +32,9 @@ Usa questo se vuoi che il comportamento stia nell'agente e non dipenda dallo
 script. I dati della singola chiamata restano nelle variabili dinamiche
 `{{presentazione}}`, `{{immobile}}`, `{{appointment_date}}`,
 `{{appointment_time}}`, `{{client_name}}`, `{{contact_person}}`,
-`{{referred_by}}`.
+`{{referred_by}}`, `{{alternative_disponibili}}` (fino a 3 slot alternativi
+in testo parlato, uno per riga; vuota se non ce ne sono), `{{ha_alternative}}`
+("si"/"no"), `{{alternativa_a}}`, `{{alternativa_b}}`, `{{alternativa_c}}`.
 
 > # Ruolo
 > Sei {{agent_name}}, assistente telefonico di {{company_name}}. Parli
@@ -55,9 +59,23 @@ script. I dati della singola chiamata restano nelle variabili dinamiche
 >
 > # Come gestire la risposta
 > - ACCETTA giorno e ora proposti → conferma l'appuntamento, ringrazia, saluta.
-> - Chiede ALTRO giorno/ora → prendi nota della preferenza (giorno + fascia
->   oraria); di' che verrà ricontattato per confermare la nuova data. Non
->   garantire tu la data.
+> - Chiede ALTRO giorno/ora:
+>   - se {{ha_alternative}} è "si" → offri gli slot alternativi qui sotto UNO
+>     ALLA VOLTA, nell'ordine, dicendo solo giorno e ora (mai lettere o numeri
+>     delle alternative):
+>
+>     {{alternative_disponibili}}
+>
+>     Se ne accetta uno, confermalo ripetendo giorno e ora ("Perfetto, allora le
+>     confermo il sopralluogo per ...") e spiega che è un appuntamento fissato:
+>     da quel momento vale quello. Se nessuno va bene, NON inventare altre
+>     disponibilità e non promettere orari: chiedi giorno e fascia preferiti,
+>     prendi nota e di' che verrà ricontattato con una nuova proposta.
+>   - se {{ha_alternative}} è "no" → prendi nota della preferenza (giorno +
+>     fascia oraria); di' che verrà ricontattato per confermare la nuova data.
+>     Non garantire tu la data.
+>   - In ogni caso le uniche disponibilità che puoi offrire o fissare sono
+>     l'appuntamento proposto e gli slot alternativi: mai altre.
 > - RIFIUTA / non serve più → prendi atto cortesemente e chiudi.
 > - Dice che NON è lui la persona giusta (geometra di cantiere, agente
 >   immobiliare, familiare con le chiavi, ecc.) → fatti dare NOME, NUMERO di
@@ -84,6 +102,13 @@ personalizzati (nome ESATTO, tipo testo salvo diversa indicazione):
 | `nuovo_referente_telefono` | (se contattare_altro) numero della persona corretta |
 | `nuovo_referente_ruolo` | (se contattare_altro) ruolo (geometra, agente, familiare...) |
 | `note_cliente` | eventuali note/richieste particolari |
+| `alternativa_scelta` | (consigliato) tipo Selector `A`, `B`, `C`, `nessuna` — *"Se il cliente ha accettato uno degli slot alternativi offerti in chiamata, la sua lettera; altrimenti nessuna"* |
+
+Se il cliente accetta uno slot alternativo, `nuova_data_richiesta` e
+`nuovo_orario_richiesto` vanno compilati con data (AAAA-MM-GG) e ora (HH:MM)
+dello slot: anche senza `alternativa_scelta` OptiRoute riconosce lo slot dalla
+data/ora e sposta la pratica da solo. Con l'Opzione A lo script contiene già
+la corrispondenza lettera → slot per l'analisi.
 
 OptiRoute legge questi campi via `/api/call-status` e:
 - mostra l'esito sulla card,

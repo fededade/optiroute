@@ -1,4 +1,4 @@
-import type { AlternativeSlot, Appointment, CallOutcome } from '../types';
+import type { AlternativeLabel, AlternativeSlot, Appointment, CallOutcome } from '../types';
 
 // Client for the /api/retell-call serverless endpoint (Retell AI outbound call)
 // e per /api/call-status (esito della conversazione via polling).
@@ -123,16 +123,25 @@ export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll>
     }
 
     const o = data.outcome;
+    // NB: con esito "confermato" (es. alternativa accettata) la data richiesta
+    // NON diventa una data di rientro: resta solo in requestedDate
     const followUpDate =
       parseFollowUpDate(`${o.followUpRaw || ''}`) ||
       ((o.result === 'da_richiamare' || o.result === 'lavori_non_ultimati' || o.result === 'riprogrammare')
         ? parseFollowUpDate(`${o.requestedDate || ''}`)
         : undefined);
 
+    // Alternativa accettata in chiamata: solo se è davvero una delle tre etichette
+    const chosenAlternative: AlternativeLabel | undefined =
+      o.chosenAlternative === 'A' || o.chosenAlternative === 'B' || o.chosenAlternative === 'C'
+        ? o.chosenAlternative
+        : undefined;
+
     const outcome: CallOutcome = {
       result: o.result || 'sconosciuto',
       requestedDate: o.requestedDate || undefined,
       requestedTime: o.requestedTime || undefined,
+      chosenAlternative,
       followUpDate,
       clientNotes: o.clientNotes || undefined,
       newContactName: o.newContactName || undefined,

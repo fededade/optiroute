@@ -10,6 +10,48 @@ npm run dev
 ```
 
 Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funzioni in `api/`).
+Test: `npm test` (servizi di pianificazione, pilota automatico, script e esiti delle chiamate).
+
+## Pilota automatico: dal portale alla chiamata
+
+Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con un buco.
+
+1. **Le pratiche arrivano da sole.** Il bridge dei portali (`prelios-bridge/`, modalità
+   `--serve`) gira sul PC dell'operatore: dopo il login al portale (l'MFA resta manuale)
+   legge le pratiche assegnate, recupera i telefoni e li espone all'app su
+   `http://127.0.0.1:8765`. L'app le scarica ogni 5 minuti, le geocodifica e assegna il
+   tecnico. L'import da Excel resta disponibile.
+2. **I giri si formano da soli.** Le pratiche in attesa con telefono vengono smistate in giri
+   proposti, inserite negli spazi liberi dei giri esistenti senza mai spostare l'orario di
+   una tappa già fissata. Le date che un cliente ha rifiutato non gli vengono riproposte.
+3. **L'operatore approva il giro**: un clic su "✅ Approva e chiama" (per giro o per tutti).
+4. **Il pilota chiama.** Dentro la fascia oraria impostata chiama i clienti uno alla volta.
+   - Se il cliente **non può**, l'agente gli offre subito fino a 3 **slot alternativi reali**
+     (già verificati sull'agenda del tecnico); se ne accetta uno la pratica viene spostata
+     e confermata da sola.
+   - Se **rifiuta, rimanda o risulta irreperibile**, lo slot liberato viene **riempito**
+     con un'altra pratica (in attesa, o anticipata da un giorno successivo), che viene
+     chiamata a sua volta.
+   - Chi **non risponde** viene richiamato (di default dopo 2 ore, fino a 3 tentativi,
+     e mai a ridosso dell'appuntamento).
+5. **Solo le eccezioni arrivano all'operatore**, nel riquadro "Da gestire": esiti non
+   chiari, numeri errati, irreperibili, rifiuti, pratiche senza telefono o senza tecnico.
+
+Si accende dalla barra "🤖 Pilota automatico" in cima all'elenco; da ⚙ si regolano fascia
+chiamate, tentativi, alternative, rimpiazzi, anticipo minimo, smistamento automatico e
+bridge (indirizzo e token, stampato dal bridge al primo avvio). L'opzione "Chiama senza
+approvazione" salta il punto 3: è spenta di default.
+
+Da sapere:
+- Il pilota lavora **finché l'app è aperta in una scheda del browser** (anche in secondo
+  piano). Con più schede aperte gli automatismi girano in una sola, per non chiamare due
+  volte lo stesso cliente.
+- A pilota spento l'app funziona come prima: smistamento e chiamate si avviano a mano.
+- Per leggere il bridge locale da un sito https serve Chrome o Edge (al primo accesso il
+  browser chiede il permesso di raggiungere la rete locale).
+- Sull'agente Retell è consigliato aggiungere il campo di analisi `alternativa_scelta`
+  (vedi sotto).
+- Gli orari proposti sono arrotondati ai 5 minuti.
 
 ## Funzionalità principali
 
@@ -18,7 +60,7 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
   - Preconfigurati: *Omar Afifi* (province di Milano e Novara) e *Federica Sala* (provincia di Pavia, comuni attorno a Stradella/Broni/Varzi entro 15 km). Tutto modificabile dalla scheda.
   - Le pratiche nuove o importate vengono **assegnate automaticamente** al tecnico competente (per provincia da Excel/geocoding, o per raggio dalle zone); assegnazione modificabile a mano dal form di modifica.
   - I chip in alto nella sidebar filtrano liste e mappa per tecnico; i colori di marker e percorsi corrispondono al tecnico.
-- **Smistamento automatico ("Smista pratiche per zona")**: le pratiche in attesa vengono distribuite sui prossimi giorni per ogni tecnico, con **data e orario ipotizzati** (rispettando orari, indisponibilità e punto di partenza di ciascuno). Le proposte compaiono nella sezione "Proposte da confermare": l'operatore conferma singolarmente o per giornata intera, oppure rifiuta.
+- **Smistamento automatico ("Smista pratiche per zona")**: le pratiche in attesa vengono distribuite sui prossimi giorni per ogni tecnico, con **data e orario ipotizzati** (rispettando orari, indisponibilità e punto di partenza di ciascuno). Se un giorno ha già tappe, le nuove si inseriscono negli spazi liberi senza toccare gli orari esistenti. Le proposte compaiono nella sezione "Proposte da confermare": l'operatore conferma singolarmente o per giornata intera, oppure rifiuta.
 - **Tag "Urgente"** su ogni pratica (checkbox nel form, colonna `Urgente` in import): badge rosso in lista e mappa, priorità nello smistamento (pianificate per prime nei primi giorni utili) e **annuncio esplicito dell'urgenza nella chiamata AI**.
 - **Inserimento appuntamenti**
   - *Aggiunta rapida*: digita un indirizzo e premi `+` (opzionale pulizia AI con Gemini).
@@ -112,10 +154,15 @@ finestra di chiamata ("Registra esito della telefonata").
   perizie (Prelios/Intesa): vengono tenute solo le pratiche **FULL - Acquisto**, con codice,
   intestatario, indirizzo, progetto e note gestore. Le pratiche già presenti (stesso codice)
   vengono **aggiornate** (telefono/note/progetto), non duplicate.
-- **Bridge Prelios (`prelios-bridge/`)**: app Python separata che parte dall'elenco pratiche,
-  entra su Prelios (login manuale con MFA), recupera il telefono del cliente per ogni perizia
-  e produce l'Excel arricchito pronto per l'import. Vedi `prelios-bridge/README.md`
-  (`python run_giro.py elenco.xlsx --out giro_arricchito.xlsx`).
+- **Bridge dei portali (`prelios-bridge/`)**: app Python separata che entra su Prelios (login
+  manuale con MFA), recupera il telefono del cliente per ogni perizia e consegna le pratiche
+  all'app: in modalità servizio (`python run_giro.py --serve`) direttamente, senza passaggi
+  manuali; oppure come Excel arricchito da importare
+  (`python run_giro.py elenco.xlsx --out giro_arricchito.xlsx`). La lettura dell'elenco
+  direttamente dal portale non è ancora stata provata sul portale reale: il primo giro va
+  fatto sotto supervisione. **Cerved** non è ancora collegato: il bridge ha la struttura
+  per aggiungerlo e uno strumento (`capture_portal.py`) per rilevarne le pagine in forma
+  anonimizzata. Vedi `prelios-bridge/README.md`.
 - **Sync verso il gestionale Effetre**: i sopralluoghi **confermati** (dal cliente in chiamata,
   o senza telefono) con orario calcolato vengono inviati al gestionale (Firestore, collection
   `optiroute_sync`) col pulsante "Sync gestionale" e in automatico **ogni ora**. Ambiente di

@@ -435,3 +435,74 @@ describe('coda delle chiamate', () => {
     expect(isInRoute(all[0])).toBe(true);
   });
 });
+
+describe('alternativa dedotta dalla richiesta del cliente', () => {
+  const withAlternatives = () => {
+    const base = world();
+    const alts = computeAlternativeSlots(byId(base, 'x'), base, [tech()], { now: NOW, fallback: FALLBACK });
+    expect(alts.length).toBeGreaterThan(1);
+    return base.map(a => (a.id === 'x' ? { ...a, offeredAlternatives: alts } : a));
+  };
+
+  it('stessa data e orario di uno slot offerto: spostata e confermata', () => {
+    const all = withAlternatives();
+    const alt = byId(all, 'x').offeredAlternatives![1];
+    const out = reduceCallOutcome(
+      all,
+      'x',
+      outcome('riprogrammare', { followUpDate: alt.date, requestedTime: `alle ${alt.startTime.replace(':', '.')}` }),
+      'c1',
+      ON
+    );
+    expect(byId(out, 'x')).toMatchObject({
+      status: 'confirmed',
+      date: alt.date,
+      startTime: alt.startTime,
+      callOutcome: { result: 'confermato', chosenAlternative: alt.label },
+    });
+  });
+
+  it('orario diverso da quello offerto: nessuna deduzione, resta da riprogrammare', () => {
+    const all = withAlternatives();
+    const alt = byId(all, 'x').offeredAlternatives![1];
+    const lontano = toMin(alt.startTime) >= 14 * 60 ? '09:00' : '17:00';
+    const x = byId(
+      reduceCallOutcome(all, 'x', outcome('riprogrammare', { followUpDate: alt.date, requestedTime: lontano }), 'c1', OFF),
+      'x'
+    );
+    expect(x).toMatchObject({ status: 'pending', followUpDate: alt.date });
+    expect(x.callOutcome?.result).toBe('riprogrammare');
+  });
+});
+
+describe('chiamate rimaste senza esito', () => {
+  // Chiamate partite un\'ora prima di NOW: oltre il limite, l\'esito non arriverà più
+  const stuck = [1, 2, 3, 4].map(i =>
+    stop(`v${i}`, D, '15:00', '15:20', P.milano, {
+      callStatus: 'called',
+      callId: `c${i}`,
+      calledAt: at('2026-11-11', '09:00').toISOString(),
+    })
+  );
+  const q = stop('a', D, '10:00', '10:20', P.milano, { autoCall: 'route' });
+
+  it('non bloccano la coda e non contano come in volo', () => {
+    expect(nextDueCall([...stuck, q], ON)?.id).toBe('a');
+    expect(autopilotStats([...stuck, q], ON).inFlight).toBe(0);
+    // le stesse chiamate, partite da poco, bloccano la coda
+    const fresh = stuck.map(s => ({ ...s, calledAt: at('2026-11-11', '09:50').toISOString() }));
+    expect(nextDueCall([...fresh, q], ON)).toBeNull();
+    expect(autopilotStats([...fresh, q], ON).inFlight).toBe(4);
+  });
+
+  it('finiscono fra le cose da gestire, come i rifiuti', () => {
+    const refused = appt({
+      id: 'rif',
+      status: 'standby',
+      technicianId: 'tech-1',
+      callOutcome: outcome('rifiutato'),
+    });
+    const kinds = Object.fromEntries(attentionItems([stuck[0], refused], ON).map(i => [i.id, i.kind]));
+    expect(kinds).toEqual({ v1: 'esito_da_verificare', rif: 'rifiutato' });
+  });
+});

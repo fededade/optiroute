@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeAlternativeSlots, resolveAlternative } from '../src/services/alternativesService';
+import {
+  computeAlternativeSlots,
+  inferChosenAlternative,
+  parseTimeText,
+  resolveAlternative,
+} from '../src/services/alternativesService';
 import { dateAtMinutes, toMin } from '../src/services/slotService';
 import { FALLBACK, P, at, stop, tech } from './fixtures';
 
@@ -114,5 +119,41 @@ describe('resolveAlternative', () => {
     expect(resolveAlternative(target, 'A', busy, [T], FALLBACK, NOW)).toBeNull();
     expect(resolveAlternative(target, 'C' as const, list, [T], FALLBACK, NOW)?.date).toBe(alts[2].date);
     expect(resolveAlternative({ ...target, offeredAlternatives: undefined }, 'A', list, [T], FALLBACK, NOW)).toBeNull();
+  });
+});
+
+describe('inferChosenAlternative', () => {
+  const offered = [
+    { label: 'A' as const, date: '2026-11-12', startTime: '15:30', endTime: '15:50' },
+    { label: 'B' as const, date: '2026-11-13', startTime: '09:40', endTime: '10:00' },
+  ];
+
+  it('interpreta gli orari in testo libero', () => {
+    expect(parseTimeText('15:30')).toBe(930);
+    expect(parseTimeText('alle 15.30')).toBe(930);
+    expect(parseTimeText('verso le 15 e 30')).toBe(930);
+    expect(parseTimeText('ore 9')).toBe(540);
+    expect(parseTimeText('9')).toBe(540);
+    expect(parseTimeText('nel pomeriggio')).toBeNull();
+    expect(parseTimeText(undefined)).toBeNull();
+  });
+
+  it('etichetta esplicita: vale solo se è fra quelle offerte', () => {
+    expect(inferChosenAlternative({ result: 'riprogrammare', chosenAlternative: 'B' }, offered)).toBe('B');
+    expect(inferChosenAlternative({ result: 'riprogrammare', chosenAlternative: 'C' }, offered)).toBeUndefined();
+    expect(inferChosenAlternative({ result: 'confermato', chosenAlternative: 'A' }, undefined)).toBeUndefined();
+  });
+
+  it('deduce dalla data e dall\'orario richiesti', () => {
+    const req = (result: 'confermato' | 'riprogrammare' | 'da_richiamare', followUpDate?: string, requestedTime?: string) =>
+      inferChosenAlternative({ result, followUpDate, requestedTime }, offered);
+    expect(req('riprogrammare', '2026-11-12', '15:30')).toBe('A');
+    expect(req('riprogrammare', '2026-11-12', 'alle 16')).toBe('A');      // entro 45 minuti
+    expect(req('riprogrammare', '2026-11-12', '9:00')).toBeUndefined();   // altro orario
+    expect(req('riprogrammare', '2026-11-12')).toBeUndefined();           // senza orario non basta
+    expect(req('confermato', '2026-11-13')).toBe('B');                    // conferma di un'altra data
+    expect(req('riprogrammare', '2026-11-20', '15:30')).toBeUndefined();  // data non offerta
+    expect(req('riprogrammare', undefined, '15:30')).toBeUndefined();     // senza data
+    expect(req('da_richiamare', '2026-11-12', '15:30')).toBeUndefined();  // esito non compatibile
   });
 });

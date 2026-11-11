@@ -1,4 +1,4 @@
-import type { AlternativeLabel, AlternativeSlot, Appointment, Technician } from '../types';
+import type { AlternativeLabel, AlternativeSlot, Appointment, CallOutcome, Technician } from '../types';
 import {
   LUNCH_MINUTES,
   type PlanningFallback,
@@ -144,4 +144,44 @@ export const resolveAlternative = (
     (x, y) => Math.abs(x.start - offeredStart) - Math.abs(y.start - offeredStart) || x.detourKm - y.detourKm
   )[0];
   return { date: offered.date, option };
+};
+
+// Orario in minuti da un testo libero dell'analisi post-chiamata
+// ("15:30", "15.30", "alle 15 e 30", "ore 15"); null se non interpretabile.
+export const parseTimeText = (text: string | undefined): number | null => {
+  if (!text) return null;
+  const t = text.toLowerCase();
+  const hm = t.match(/\b([01]?\d|2[0-3])\s*(?:[:.,]|\s+e\s+)\s*([0-5]\d)\b/);
+  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
+  const h = t.match(/\b(?:ore|alle|all[e']?)\s*([01]?\d|2[0-3])\b/) || t.match(/^\s*([01]?\d|2[0-3])\s*$/);
+  if (h) return parseInt(h[1], 10) * 60;
+  return null;
+};
+
+const INFER_TOLERANCE = 45; // minuti fra l'orario richiesto e lo slot offerto
+
+// Alternativa accettata dal cliente. Vale l'etichetta esplicita dell'analisi
+// post-chiamata (campo `alternativa_scelta`); se manca, la si deduce dalla
+// richiesta del cliente: stessa DATA di uno slot offerto e orario entro 45
+// minuti (senza orario basta la data, ma solo se l'esito è una conferma).
+// Prudente di proposito: nel dubbio nessuna deduzione, la pratica segue
+// l'esito dichiarato (da riprogrammare, da richiamare...).
+export const inferChosenAlternative = (
+  outcome: Pick<CallOutcome, 'result' | 'chosenAlternative' | 'followUpDate' | 'requestedTime'>,
+  offered: AlternativeSlot[] | undefined
+): AlternativeLabel | undefined => {
+  if (!offered || offered.length === 0) return undefined;
+  if (outcome.chosenAlternative) {
+    return offered.some(o => o.label === outcome.chosenAlternative) ? outcome.chosenAlternative : undefined;
+  }
+  if (outcome.result !== 'confermato' && outcome.result !== 'riprogrammare') return undefined;
+  if (!outcome.followUpDate) return undefined;
+
+  const sameDate = offered.filter(o => o.date === outcome.followUpDate);
+  if (sameDate.length !== 1) return undefined;
+  const slot = sameDate[0];
+
+  const requested = parseTimeText(outcome.requestedTime);
+  if (requested === null) return outcome.result === 'confermato' ? slot.label : undefined;
+  return Math.abs(requested - toMin(slot.startTime)) <= INFER_TOLERANCE ? slot.label : undefined;
 };

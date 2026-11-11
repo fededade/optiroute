@@ -1,5 +1,5 @@
 import type { AlternativeSlot, Appointment, CallOutcome, CallOutcomeResult, Technician } from '../types';
-import { resolveAlternative } from './alternativesService';
+import { inferChosenAlternative, resolveAlternative } from './alternativesService';
 import {
   type PlanningFallback,
   type SlotOption,
@@ -34,6 +34,7 @@ export interface AutopilotSettings {
   minLeadHours: number;        // 3: non proporre/riempire slot che iniziano entro N ore
   autoDispatch: boolean;       // true (usato dalla UI)
   dispatchHorizonDays: number; // 14 (usato dalla UI)
+  autoApprove: boolean;        // false (usato dalla UI): chiama le nuove proposte senza attendere l'approvazione del giro
 }
 
 export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
@@ -48,6 +49,7 @@ export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
   minLeadHours: 3,
   autoDispatch: true,
   dispatchHorizonDays: 14,
+  autoApprove: false,
 };
 
 export interface PlanningContext {
@@ -59,9 +61,25 @@ export interface PlanningContext {
 
 // --- Utilità ---
 
-// Chiamata "in volo": partita e senza ancora un esito
-export const isCallInFlight = (a: Appointment): boolean =>
-  a.callStatus === 'calling' || (a.callStatus === 'called' && !!a.callId && !a.callOutcome);
+// Oltre questo tempo senza esito la chiamata non è più "in volo": l'esito non
+// è arrivato (stesso limite del polling) e non deve bloccare la coda. Finisce
+// fra le cose da gestire a mano.
+export const CALL_OUTCOME_MAX_AGE_MS = 45 * 60 * 1000;
+
+const outcomeOverdue = (a: Appointment, now: Date): boolean =>
+  a.callStatus === 'called' &&
+  !!a.callId &&
+  !a.callOutcome &&
+  !!a.calledAt &&
+  now.getTime() - new Date(a.calledAt).getTime() >= CALL_OUTCOME_MAX_AGE_MS;
+
+// Chiamata "in volo": partita e senza ancora un esito. Con `now` le chiamate
+// rimaste senza esito oltre il limite non contano più.
+export const isCallInFlight = (a: Appointment, now?: Date): boolean => {
+  if (a.callStatus === 'calling') return true;
+  if (a.callStatus !== 'called' || !a.callId || a.callOutcome) return false;
+  return !(now && outcomeOverdue(a, now));
+};
 
 // Istante di inizio dello slot (null se la pratica non è nel giro)
 export const slotStartOf = (a: Appointment): Date | null =>
@@ -133,7 +151,7 @@ export const approveForCalling = (all: Appointment[], ids: string[], now: Date):
   const set = new Set(ids);
   return all.map(a => {
     if (!set.has(a.id)) return a;
-    if (!isInRoute(a) || !a.phone || isCallInFlight(a)) return a;
+    if (!isInRoute(a) || !a.phone || isCallInFlight(a, now)) return a;
     if (a.callOutcome?.result === 'confermato') return a;
     if (slotPassed(a, now)) return a;
     return { ...a, autoCall: 'route', autoCallNotBefore: undefined, callAttempts: 0 };
@@ -156,7 +174,7 @@ const isDue = (a: Appointment, now: Date): boolean =>
   !!a.autoCall &&
   !!a.phone &&
   isInRoute(a) &&
-  !isCallInFlight(a) &&
+  !isCallInFlight(a, now) &&
   (!a.autoCallNotBefore || new Date(a.autoCallNotBefore).getTime() <= now.getTime()) &&
   !slotPassed(a, now);
 
@@ -168,7 +186,7 @@ const byPriority = (x: Appointment, y: Appointment): number =>
 export const nextDueCall = (all: Appointment[], ctx: PlanningContext, maxInFlight = 4): Appointment | null => {
   if (!ctx.settings.enabled) return null;
   if (!isWithinCallWindow(ctx.now, ctx.settings)) return null;
-  if (all.filter(isCallInFlight).length >= maxInFlight) return null;
+  if (all.filter(a => isCallInFlight(a, ctx.now)).length >= maxInFlight) return null;
   const due = all.filter(a => isDue(a, ctx.now)).sort(byPriority);
   return due[0] || null;
 };
@@ -299,7 +317,9 @@ export const reduceCallOutcome = (
   };
 
   // 1) Alternativa accettata in chiamata
-  const chosen = outcome.chosenAlternative;
+  // (etichetta esplicita dall'analisi post-chiamata, oppure dedotta dalla
+  // data/ora richieste se coincidono con uno slot offerto)
+  const chosen = inferChosenAlternative(outcome, a.offeredAlternatives);
   const offered = chosen ? a.offeredAlternatives?.find(o => o.label === chosen) : undefined;
   if (offered && ALTERNATIVE_RESULTS.includes(outcome.result)) {
     const resolved = resolveAlternative(a, offered.label, list, ctx.technicians, ctx.fallback, ctx.now);
@@ -316,7 +336,7 @@ export const reduceCallOutcome = (
         },
         {
           status: 'confirmed',
-          callOutcome: { ...outcome, result: 'confermato' },
+          callOutcome: { ...outcome, result: 'confermato', chosenAlternative: offered.label },
           declinedDates: a.date && a.date !== resolved.date ? addDeclined(a.declinedDates, a.date) : a.declinedDates,
           callAttempts: 0,
           autoCall: undefined,
@@ -459,7 +479,7 @@ const backfillSlot = (all: Appointment[], freed: FreedSlot, leftId: string, ctx:
       cand.status === 'proposed' &&
       isInRoute(cand) &&
       (cand.date as string) > freed.date &&
-      !isCallInFlight(cand) &&
+      !isCallInFlight(cand, ctx.now) &&
       cand.callOutcome?.result !== 'confermato';
     if (!waiting && !advance) continue;
 
@@ -525,7 +545,7 @@ export const autopilotStats = (all: Appointment[], ctx: PlanningContext): Autopi
   if (ctx.settings.enabled) {
     let earliest: number | null = null;
     for (const a of queuedList) {
-      if (!a.phone || !isInRoute(a) || isCallInFlight(a) || slotPassed(a, ctx.now)) continue;
+      if (!a.phone || !isInRoute(a) || isCallInFlight(a, ctx.now) || slotPassed(a, ctx.now)) continue;
       const t = a.autoCallNotBefore
         ? Math.max(ctx.now.getTime(), new Date(a.autoCallNotBefore).getTime())
         : ctx.now.getTime();
@@ -536,7 +556,7 @@ export const autopilotStats = (all: Appointment[], ctx: PlanningContext): Autopi
 
   return {
     queued: queuedList.length,
-    inFlight: all.filter(isCallInFlight).length,
+    inFlight: all.filter(a => isCallInFlight(a, ctx.now)).length,
     dueNow,
     nextCallAt,
     windowOpen: isWithinCallWindow(ctx.now, ctx.settings),
@@ -553,7 +573,8 @@ export type AttentionKind =
   | 'senza_tecnico'
   | 'posizione_approssimativa'
   | 'irreperibile'
-  | 'numero_errato';
+  | 'numero_errato'
+  | 'rifiutato';
 
 export interface AttentionItem {
   id: string;
@@ -571,6 +592,12 @@ export const attentionItems = (all: Appointment[], ctx: PlanningContext): Attent
     const result = a.callOutcome?.result;
     if (result === 'sconosciuto') {
       push(a, 'esito_da_verificare', a.callSummary || 'Esito della chiamata non classificabile: ascolta e verifica');
+    }
+    if (outcomeOverdue(a, ctx.now)) {
+      push(a, 'esito_da_verificare', 'Esito della chiamata non ricevuto: verifica com\'è andata e aggiorna la pratica');
+    }
+    if (a.status === 'standby' && result === 'rifiutato') {
+      push(a, 'rifiutato', a.callSummary || 'Il cliente ha rifiutato l\'appuntamento: decidi se ricontattarlo o annullare');
     }
     if (result === 'altro_referente' && !a.callOutcome?.newContactPhone) {
       const chi = [a.callOutcome?.newContactName, a.callOutcome?.newContactRole].filter(Boolean).join(' — ');

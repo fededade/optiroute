@@ -5,7 +5,7 @@ import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
 import { syncConfirmedToGestionale, getSyncableAppointments, getSyncEnvName } from './services/syncService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
-import { loadAppointments, saveAppointments, loadBase, saveBase, loadSettings, saveSettings, loadAutopilotSettings, loadBridgeSettings } from './services/storageService';
+import { loadAppointments, saveAppointments, appointmentsFromStorageEvent, loadBase, saveBase, loadSettings, saveSettings, loadAutopilotSettings, loadBridgeSettings } from './services/storageService';
 import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, workWindowOn } from './services/technicianService';
 import { fetchCallOutcome, startConfirmationCall } from './services/callService';
 import {
@@ -158,8 +158,7 @@ type ViewMode = 'day' | 'week' | 'month';
 
 // Lancio interrotto: la chiamata nuova non ha ancora un id (quello della
 // chiamata precedente non deve essere interrogato dal polling dell'esito)
-const startCallReducer = (all: Appointment[], id: string, alternatives: AlternativeSlot[]): Appointment[] =>
-  reduceCallStarted(all, id, alternatives).map(a => (a.id === id ? { ...a, callId: undefined, calledAt: undefined } : a));
+const startCallReducer = reduceCallStarted;
 
 const ALL_TECH = 'all';
 
@@ -494,6 +493,26 @@ function App() {
     ));
   };
 
+  // --- Automatismi: una sola scheda (Web Locks) ---
+  // Polling degli esiti, pilota automatico, smistamento automatico e inbox
+  // del bridge girano solo nella scheda che ha il lock; le altre schede ne
+  // ricevono i risultati tramite l'elenco condiviso (vedi sotto).
+  const tabLock = useTabLock('optiroute-automazione');
+  const isAutomationTab = tabLock === 'leader';
+
+  // Più schede aperte: ognuna adotta l'elenco salvato dalle altre, così
+  // nessuna lavora (e salva) su una copia vecchia delle pratiche.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      const next = appointmentsFromStorageEvent(e.key, e.newValue);
+      if (!next) return;
+      if (JSON.stringify(next) === JSON.stringify(appointmentsRef.current)) return;
+      setAllAppointments(next);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [setAllAppointments]);
+
   // --- Esito chiamata via polling: la risposta del cliente determina lo stato ---
 
   const CALL_POLL_INTERVAL_MS = 12000;
@@ -543,7 +562,7 @@ function App() {
   const outcomePollInFlight = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!callPollKey) return;
+    if (!callPollKey || !isAutomationTab) return;
     let cancelled = false;
 
     const tick = async () => {
@@ -576,7 +595,7 @@ function App() {
     const firstCheck = setTimeout(tick, 4000); // primo controllo poco dopo l'avvio
     const timer = setInterval(tick, CALL_POLL_INTERVAL_MS);
     return () => { cancelled = true; clearTimeout(firstCheck); clearInterval(timer); };
-  }, [callPollKey, awaitingCallOutcome, applyCallOutcome]);
+  }, [callPollKey, isAutomationTab, awaitingCallOutcome, applyCallOutcome]);
 
   // Agenda del giorno per l'agente AI: fasce già impegnate del giro dello
   // stesso tecnico, così al telefono può rispondere onesto sulle richieste
@@ -621,10 +640,6 @@ function App() {
     const now = new Date();
     setAllAppointments(prev => reduceCallLaunchResult(prev, current.id, result, now));
   }, [buildAlternatives, setAllAppointments]);
-
-  // --- Automatismi: una sola scheda (Web Locks) ---
-  const tabLock = useTabLock('optiroute-automazione');
-  const isAutomationTab = tabLock === 'leader';
 
   useAutopilot({
     active: autopilot.enabled && isAutomationTab,

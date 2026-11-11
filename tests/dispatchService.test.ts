@@ -36,17 +36,20 @@ const expectNoOverlap = (all: Appointment[]) => {
 };
 
 describe('computeDispatch', () => {
-  it('giorno vuoto: stessi orari dell\'algoritmo precedente', async () => {
+  it('giorno vuoto: catena del più vicino, orari tondi ai 5 minuti', async () => {
     const pending = pendingBatch('p', ['sesto', 'assago', 'rho', 'navigli', 'segrate'], {});
     pending[3].urgent = true;
 
-    // Algoritmo precedente, ricostruito: catena nearest-neighbor + calculateSchedule
+    // Algoritmo del giorno vuoto, ricostruito: catena nearest-neighbor +
+    // calculateSchedule con gli inizi arrotondati per eccesso ai 5 minuti
+    // (orari "tondi" da proporre al telefono)
     const urgents = nearestNeighborChain(pending.filter(a => a.urgent), P.milano);
     const normals = nearestNeighborChain(pending.filter(a => !a.urgent), urgents[urgents.length - 1].coords);
     const expected = await calculateSchedule([...urgents, ...normals], P.milano, 8, 30, 18, 20, {
       useEstimates: true,
       startFromBase: true,
       maxEndTimeMinutes: 0,
+      roundToMinutes: 5,
     });
 
     const res = await computeDispatch(pending, [T], null, params);
@@ -60,6 +63,8 @@ describe('computeDispatch', () => {
       expected.scheduled.map(a => [a.id, a.startTime, a.endTime, a.sequenceOrder])
     );
     expect(monday.every(a => a.status === 'proposed' && a.technicianId === 'tech-1')).toBe(true);
+    expect(monday.length).toBeGreaterThan(2);
+    expect(monday.every(a => parseInt(a.startTime!.split(':')[1], 10) % 5 === 0)).toBe(true);
     expect(resWithOthers.updates.filter(u => u.date === MON)).toEqual(monday);
     expect(res.patches).toEqual([]);
   });

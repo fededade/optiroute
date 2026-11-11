@@ -250,7 +250,7 @@ export const computeDispatch = async (
         start.m,
         end.h,
         20,
-        { useEstimates: true, startFromBase: true, maxEndTimeMinutes: end.m }
+        { useEstimates: true, startFromBase: true, maxEndTimeMinutes: end.m, roundToMinutes: 5 }
       );
 
       if (scheduled.length > 0) {

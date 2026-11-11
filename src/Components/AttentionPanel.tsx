@@ -11,7 +11,7 @@ const KIND_META: Record<AttentionKind, { icon: string; label: string }> = {
   numero_errato: { icon: '☎️', label: 'Numero errato' },
   rifiutato: { icon: '🚫', label: 'Rifiutati dal cliente' },
   referente_senza_numero: { icon: '👤', label: 'Referente senza numero' },
-  senza_telefono: { icon: '📞', label: 'Tappe senza telefono' },
+  senza_telefono: { icon: '📞', label: 'Senza telefono' },
   senza_tecnico: { icon: '🧭', label: 'Senza tecnico' },
   posizione_approssimativa: { icon: '≈', label: 'Posizione approssimativa' },
 };

@@ -75,7 +75,8 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
         fallbackBase,
         { startDate, horizonDays: horizon, includeWeekends },
         (msg) => { if (!closedRef.current) setProgress(msg); },
-        existing ?? []
+        existing ?? [],
+        new Date()
       );
       if (closedRef.current) return; // finestra chiusa durante il calcolo
       setProposal(result);

@@ -45,6 +45,16 @@ export const loadAppointments = (): Appointment[] => {
     .map(a => recoverInterruptedCall(a, new Date()));
 };
 
+// Elenco salvato da UN'ALTRA scheda (evento `storage`): va adottato così
+// com'è, senza "recuperi": lì una chiamata può essere davvero in partenza.
+// null se la chiave non è quella delle pratiche o il contenuto non è valido.
+export const appointmentsFromStorageEvent = (key: string | null, newValue: string | null): Appointment[] | null => {
+  if (key !== APPOINTMENTS_KEY) return null;
+  const data = safeParse<Appointment[]>(newValue);
+  if (!Array.isArray(data)) return null;
+  return data.filter(a => a && a.id && a.coords);
+};
+
 // Stati rimasti a metà: pagina chiusa durante il lancio di una chiamata
 // ('calling'). Se il lancio aveva già registrato callId e calledAt recenti la
 // chiamata era partita davvero: si passa a 'called' e il polling dell'esito

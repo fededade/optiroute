@@ -129,7 +129,8 @@ export const useAutoDispatch = ({
           base,
           { startDate: autoDispatchStartDate(now, s), horizonDays: s.dispatchHorizonDays, includeWeekends: false },
           undefined,
-          before
+          before,
+          now
         );
 
         // Nel frattempo i giri sono cambiati (rimpiazzo, esito...): si scarta

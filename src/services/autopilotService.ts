@@ -165,13 +165,14 @@ export const nextCallWindowStart = (now: Date, s: AutopilotSettings): Date => {
 
 // --- Coda delle chiamate ---
 
-// Mette in coda le pratiche del giro con telefono, non in volo e non già
-// confermate dal cliente (e con lo slot non ancora trascorso).
+// Mette in coda le PROPOSTE del giro con telefono, non in volo e non già
+// confermate dal cliente (e con lo slot non ancora trascorso). Le tappe
+// confermate a mano dall'operatore non si richiamano in automatico.
 export const approveForCalling = (all: Appointment[], ids: string[], now: Date): Appointment[] => {
   const set = new Set(ids);
   return all.map(a => {
     if (!set.has(a.id)) return a;
-    if (!isInRoute(a) || !a.phone || isCallInFlight(a, now)) return a;
+    if (a.status !== 'proposed' || !isInRoute(a) || !a.phone || isCallInFlight(a, now)) return a;
     if (a.callOutcome?.result === 'confermato') return a;
     if (slotPassed(a, now)) return a;
     return { ...a, autoCall: 'route', autoCallNotBefore: undefined, callAttempts: 0 };
@@ -241,6 +242,10 @@ export const reduceCallStarted = (
       ? {
           ...a,
           callStatus: 'calling',
+          // via i riferimenti alla chiamata precedente: il suo esito non deve
+          // essere scambiato per quello della chiamata che sta partendo
+          callId: undefined,
+          calledAt: undefined,
           autoCall: undefined,
           autoCallNotBefore: undefined,
           callOutcome: undefined,
@@ -428,7 +433,10 @@ export const reduceCallOutcome = (
         });
         break;
       case 'altro_referente':
-        if (outcome.newContactPhone) {
+        // Pilota acceso e pratica già passata da un referente all'altro: ci
+        // si ferma (niente rimbalzi infiniti fra numeri), l'esito resta sulla
+        // pratica e finisce fra le cose da gestire.
+        if (outcome.newContactPhone && !(pilot && a.referredBy)) {
           // Il cliente ha indicato un'altra persona: si aggiorna il numero e
           // la pratica torna pronta per una nuova chiamata ("per conto di...")
           list = replaceById(list, {
@@ -453,7 +461,9 @@ export const reduceCallOutcome = (
         break;
       case 'non_risposto': {
         const attempts = (a.callAttempts || 0) + 1;
-        if (!pilot || !eraNelGiro) {
+        // Una tappa già confermata (a mano o dal cliente) non esce dal giro
+        // perché non risponde: si contano solo i tentativi
+        if (!pilot || !eraNelGiro || a.status !== 'proposed') {
           list = replaceById(list, { ...base, callAttempts: attempts });
           break;
         }
@@ -475,7 +485,7 @@ export const reduceCallOutcome = (
             callAttempts: attempts,
             autoCall: undefined,
             autoCallNotBefore: undefined,
-            notes: addNote(a.notes, `Non raggiungibile dopo ${attempts} tentativi`),
+            notes: addNote(a.notes, `Non raggiungibile dopo ${attempts} ${attempts === 1 ? 'tentativo' : 'tentativi'}`),
           });
         }
         break;
@@ -643,8 +653,16 @@ export const attentionItems = (all: Appointment[], ctx: PlanningContext): Attent
       const chi = [a.callOutcome?.newContactName, a.callOutcome?.newContactRole].filter(Boolean).join(' — ');
       push(a, 'referente_senza_numero', chi ? `Referente indicato senza numero: ${chi}` : 'Indicato un altro referente, senza numero');
     }
+    if (result === 'altro_referente' && a.callOutcome?.newContactPhone) {
+      // esito rimasto sulla pratica: secondo cambio di referente, non applicato da solo
+      const chi = [a.callOutcome.newContactName, a.callOutcome.newContactRole, a.callOutcome.newContactPhone].filter(Boolean).join(' · ');
+      push(a, 'esito_da_verificare', `Indicato un altro referente per la seconda volta (${chi}): verifica chi contattare`);
+    }
     if (a.status === 'proposed' && isInRoute(a) && !a.phone) {
       push(a, 'senza_telefono', `Tappa proposta il ${formatDate(a.date as string)} alle ${a.startTime} senza telefono: non chiamabile`);
+    }
+    if (a.status === 'pending' && !a.phone?.trim()) {
+      push(a, 'senza_telefono', 'In attesa senza telefono: non viene smistata né chiamata in automatico');
     }
     if (a.callStatus === 'failed' && !a.callOutcome) {
       push(a, 'chiamata_non_avviata', a.callSummary || 'La chiamata non è partita');

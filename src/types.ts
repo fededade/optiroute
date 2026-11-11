@@ -28,10 +28,24 @@ export type CallOutcomeResult =
   | 'non_risposto'         // nessuna risposta / segreteria / non raggiungibile
   | 'sconosciuto';         // esito non classificabile: verifica manuale
 
+// Slot alternativo REALE (già verificato in agenda) che l'agente AI può
+// offrire in chiamata se il cliente rifiuta la proposta principale.
+export type AlternativeLabel = 'A' | 'B' | 'C';
+export interface AlternativeSlot {
+  label: AlternativeLabel;
+  date: string;      // YYYY-MM-DD
+  startTime: string; // HH:MM
+  endTime: string;   // HH:MM
+}
+
+// Motivo per cui una pratica è in coda al pilota automatico delle chiamate
+export type AutoCallReason = 'route' | 'retry' | 'backfill';
+
 export interface CallOutcome {
   result: CallOutcomeResult;
   requestedDate?: string;    // data chiesta dal cliente (testo libero dall'AI)
   requestedTime?: string;    // orario chiesto dal cliente
+  chosenAlternative?: AlternativeLabel; // alternativa accettata in chiamata (A/B/C)
   followUpDate?: string;     // data di rientro normalizzata YYYY-MM-DD, se estraibile
   clientNotes?: string;      // annotazioni raccolte in chiamata
   newContactName?: string;   // referente alternativo indicato dal cliente
@@ -87,6 +101,14 @@ export interface Appointment {
   calledAt?: string; // ISO timestamp of last call attempt
   callOutcome?: CallOutcome; // esito della conversazione (arriva col polling)
   callSummary?: string;      // riassunto AI della chiamata (copia comoda per la UI)
+
+  // Pilota automatico
+  autoCall?: AutoCallReason;      // in coda: la chiamata parte da sola
+  autoCallNotBefore?: string;     // ISO: non chiamare prima di questo istante (retry)
+  callAttempts?: number;          // chiamate senza risposta già fatte per lo slot attuale
+  offeredAlternatives?: AlternativeSlot[]; // alternative offerte nell'ultima chiamata
+  declinedDates?: string[];       // date rifiutate dal cliente: non riproporle
+  backfillOf?: string;            // "rimpiazza <cliente>": slot liberato che sta coprendo
 }
 
 // --- Tecnici / soggetti che effettuano i sopralluoghi ---

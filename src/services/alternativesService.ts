@@ -14,6 +14,7 @@ import {
   toHHMM,
   toMin,
 } from './slotService';
+import { parseFollowUpDate } from './callService';
 
 // Alternative REALI da offrire in chiamata: slot già verificati sul giro del
 // tecnico (senza spostare nessuna tappa), su date diverse, scelti in modo da
@@ -167,7 +168,7 @@ const INFER_TOLERANCE = 45; // minuti fra l'orario richiesto e lo slot offerto
 // Prudente di proposito: nel dubbio nessuna deduzione, la pratica segue
 // l'esito dichiarato (da riprogrammare, da richiamare...).
 export const inferChosenAlternative = (
-  outcome: Pick<CallOutcome, 'result' | 'chosenAlternative' | 'followUpDate' | 'requestedTime'>,
+  outcome: Pick<CallOutcome, 'result' | 'chosenAlternative' | 'followUpDate' | 'requestedDate' | 'requestedTime'>,
   offered: AlternativeSlot[] | undefined
 ): AlternativeLabel | undefined => {
   if (!offered || offered.length === 0) return undefined;
@@ -175,9 +176,11 @@ export const inferChosenAlternative = (
     return offered.some(o => o.label === outcome.chosenAlternative) ? outcome.chosenAlternative : undefined;
   }
   if (outcome.result !== 'confermato' && outcome.result !== 'riprogrammare') return undefined;
-  if (!outcome.followUpDate) return undefined;
+  // Data richiesta: quella già normalizzata, altrimenti dal testo libero
+  const date = outcome.followUpDate || (outcome.requestedDate ? parseFollowUpDate(outcome.requestedDate) : undefined);
+  if (!date) return undefined;
 
-  const sameDate = offered.filter(o => o.date === outcome.followUpDate);
+  const sameDate = offered.filter(o => o.date === date);
   if (sameDate.length !== 1) return undefined;
   const slot = sameDate[0];
 

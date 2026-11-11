@@ -1,4 +1,4 @@
-import type { Appointment, CallOutcome } from '../types';
+import type { AlternativeSlot, Appointment, CallOutcome } from '../types';
 
 // Client for the /api/retell-call serverless endpoint (Retell AI outbound call)
 // e per /api/call-status (esito della conversazione via polling).
@@ -12,7 +12,10 @@ export interface CallResult {
 export const startConfirmationCall = async (
   appointment: Appointment,
   technicianName?: string,
-  daySchedule?: string
+  daySchedule?: string,
+  // Slot alternativi reali che l'agente può offrire (e fissare) se il cliente
+  // rifiuta la proposta principale
+  alternatives?: AlternativeSlot[]
 ): Promise<CallResult> => {
   if (!appointment.phone) {
     return { ok: false, error: 'Nessun numero di telefono per questo appuntamento.' };
@@ -39,6 +42,7 @@ export const startConfirmationCall = async (
         contactPerson: appointment.contactPerson,
         referredBy: appointment.referredBy,
         daySchedule: daySchedule || undefined,
+        alternatives: alternatives && alternatives.length > 0 ? alternatives : undefined,
       }),
     });
 

@@ -155,5 +155,8 @@ describe('inferChosenAlternative', () => {
     expect(req('riprogrammare', '2026-11-20', '15:30')).toBeUndefined();  // data non offerta
     expect(req('riprogrammare', undefined, '15:30')).toBeUndefined();     // senza data
     expect(req('da_richiamare', '2026-11-12', '15:30')).toBeUndefined();  // esito non compatibile
+    // data solo nel testo libero (es. conferma di un'altra data: nessun "rientro" normalizzato)
+    expect(inferChosenAlternative({ result: 'confermato', requestedDate: '2026-11-13' }, offered)).toBe('B');
+    expect(inferChosenAlternative({ result: 'riprogrammare', requestedDate: '12/11/2026', requestedTime: '15.30' }, offered)).toBe('A');
   });
 });

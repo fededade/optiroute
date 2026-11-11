@@ -871,12 +871,15 @@ var calculateDistance = (coord1, coord2) => {
 var deg2rad = (deg) => {
   return deg * (Math.PI / 180);
 };
+var TORTUOSITY = 1.4;
+var URBAN_KMH = 20;
+var OPEN_ROAD_KMH = 60;
+var SPEED_RAMP_KM = 30;
+var BASE_PENALTY_MINUTES = 5;
 var estimateTravelTimeMinutes = (distanceKm) => {
-  const AVERAGE_SPEED_KPM = 0.35;
-  const TORTUOSITY = 1.4;
-  const BASE_PENALTY_MINUTES = 5;
-  const estimatedDrive = Math.ceil(distanceKm * TORTUOSITY / AVERAGE_SPEED_KPM);
-  return estimatedDrive + BASE_PENALTY_MINUTES;
+  const roadKm = Math.max(0, distanceKm) * TORTUOSITY;
+  const kmh = URBAN_KMH + (OPEN_ROAD_KMH - URBAN_KMH) * (1 - Math.exp(-roadKm / SPEED_RAMP_KM));
+  return Math.ceil(roadKm / kmh * 60) + BASE_PENALTY_MINUTES;
 };
 
 // src/utils/provinces.ts

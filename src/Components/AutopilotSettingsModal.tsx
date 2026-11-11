@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import type { AutopilotSettings } from '../services/autopilotService';
 import { checkBridgeHealth, fetchBridgeSnapshot, type BridgeSettings } from '../services/bridgeService';
+import type { Appointment } from '../types';
+import type { CloudConfig } from '../services/cloudProtocol';
+import type { CloudSettings } from '../services/cloudSettings';
+import CloudSection from './CloudSection';
 
 // Impostazioni del pilota automatico e del bridge dei portali. Si modifica
 // una bozza: nulla cambia finché non si preme "Salva".
@@ -10,6 +14,12 @@ interface AutopilotSettingsModalProps {
   bridge: BridgeSettings;
   onSave: (autopilot: AutopilotSettings, bridge: BridgeSettings) => void;
   onClose: () => void;
+  // Cloud (pilota che lavora anche a browser chiuso)
+  cloud: CloudSettings;
+  getLocalCloudData: () => { appointments: Appointment[]; config: CloudConfig };
+  onCloudActivate: (key: string) => void;   // attiva il cloud su questo browser
+  onCloudDisconnect: () => void;            // scollega (pilota locale spento)
+  onCloudKeySave: (key: string) => void;    // salva solo la chiave
 }
 
 const clampInt = (raw: string, min: number, max: number, fallback: number): number => {
@@ -18,7 +28,10 @@ const clampInt = (raw: string, min: number, max: number, fallback: number): numb
   return Math.min(max, Math.max(min, n));
 };
 
-const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({ autopilot, bridge, onSave, onClose }) => {
+const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
+  autopilot, bridge, onSave, onClose, cloud, getLocalCloudData, onCloudActivate, onCloudDisconnect, onCloudKeySave,
+}) => {
+  const [cloudKeyDraft, setCloudKeyDraft] = useState(cloud.key);
   const [ap, setAp] = useState<AutopilotSettings>(autopilot);
   const [br, setBr] = useState<BridgeSettings>(bridge);
   // Campi numerici come testo durante la digitazione
@@ -75,6 +88,8 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({ autopil
       dispatchHorizonDays: clampInt(nums.dispatchHorizonDays, 1, 60, autopilot.dispatchHorizonDays),
     };
     onSave(next, { ...br, url: br.url.trim() || bridge.url, token: br.token.trim() });
+    // La chiave serve anche alle chiamate manuali: si salva pure a cloud spento
+    if (cloudKeyDraft.trim() !== cloud.key) onCloudKeySave(cloudKeyDraft.trim());
     onClose();
   };
 
@@ -187,6 +202,16 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({ autopil
               </div>
             </div>
           </section>
+
+          <CloudSection
+            cloud={cloud}
+            getLocalCloudData={getLocalCloudData}
+            onActivate={key => { setCloudKeyDraft(key); onCloudActivate(key); }}
+            onDisconnect={() => { set('enabled', false); onCloudDisconnect(); }}
+            onKeySave={onCloudKeySave}
+            keyDraft={cloudKeyDraft}
+            setKeyDraft={setCloudKeyDraft}
+          />
         </div>
 
         {error && <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded p-2 mt-3 shrink-0">{error}</p>}

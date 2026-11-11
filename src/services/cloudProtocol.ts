@@ -21,7 +21,7 @@ export interface CloudConfig {
   technicians: Technician[];
   autopilot: AutopilotSettings;
   // Orari e base generali dell'app (usati se la pratica non ha tecnico)
-  fallback: { start: string; end: string; base: Coordinates | null };
+  fallback: { start: string; end: string; base: Coordinates | null; baseAddress?: string };
 }
 
 // --- Differenze fra elenchi ---

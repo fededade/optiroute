@@ -10,6 +10,7 @@ import { loadAppointments, saveAppointments, appointmentsFromStorageEvent, loadB
 import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, workWindowOn } from './services/technicianService';
 import { fetchCallOutcome, startConfirmationCall } from './services/callService';
 import {
+  DEFAULT_AUTOPILOT_SETTINGS,
   type AutopilotSettings,
   type AttentionItem,
   type PlanningContext,
@@ -30,6 +31,9 @@ import { useTabLock } from './hooks/useTabLock';
 import { useAutopilot, autopilotQueueKey } from './hooks/useAutopilot';
 import { useAutoDispatch } from './hooks/useAutoDispatch';
 import { useBridgeInbox, type BridgeImportOutcome } from './hooks/useBridgeInbox';
+import { useCloudSync } from './hooks/useCloudSync';
+import { loadCloudSettings, saveCloudSettings, type CloudSettings } from './services/cloudSettings';
+import type { CloudConfig } from './services/cloudProtocol';
 import MapComponent from './Components/MapComponent';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
@@ -231,6 +235,14 @@ function App() {
   const [bridgeSettings, setBridgeSettings] = useState<BridgeSettings>(() => loadBridgeSettings());
   const [attentionOpen, setAttentionOpen] = useState<boolean>(() => loadSettings()?.attentionOpen ?? true);
   const [showAutopilotSettings, setShowAutopilotSettings] = useState(false);
+  // Pilota in cloud: con il cloud attivo il motore gira sul server e questo
+  // browser è una finestra sui suoi dati (vedi useCloudSync)
+  const [cloud, setCloud] = useState<CloudSettings>(() => loadCloudSettings());
+  const cloudActive = cloud.enabled && !!cloud.key;
+  const updateCloud = useCallback((next: CloudSettings) => {
+    saveCloudSettings(next);
+    setCloud(next);
+  }, []);
   // Import in corso (file o bridge): mai due import in parallelo, né uno
   // smistamento automatico durante un import
   const importBusyRef = useRef(false);
@@ -515,6 +527,17 @@ function App() {
     return () => window.removeEventListener('storage', onStorage);
   }, [setAllAppointments]);
 
+  // Cloud attivato/scollegato da un'altra scheda: la barra resta coerente
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== 'optiroute_cloud_v1') return;
+      const next = loadCloudSettings();
+      setCloud(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   // --- Esito chiamata via polling: la risposta del cliente determina lo stato ---
 
   const CALL_POLL_INTERVAL_MS = 12000;
@@ -535,8 +558,8 @@ function App() {
   techniciansRef.current = technicians;
   const autopilotRef = useRef(autopilot);
   autopilotRef.current = autopilot;
-  const fallbackRef = useRef({ start: startTime, end: endTimeLimit, base: baseLocation?.coords || null });
-  fallbackRef.current = { start: startTime, end: endTimeLimit, base: baseLocation?.coords || null };
+  const fallbackRef = useRef<CloudConfig['fallback']>({ start: startTime, end: endTimeLimit, base: baseLocation?.coords || null, baseAddress: baseLocation?.address });
+  fallbackRef.current = { start: startTime, end: endTimeLimit, base: baseLocation?.coords || null, baseAddress: baseLocation?.address };
 
   const getPlanningContext = useCallback((): PlanningContext => ({
     technicians: techniciansRef.current,
@@ -544,6 +567,61 @@ function App() {
     settings: autopilotRef.current,
     now: new Date(),
   }), []);
+
+  // --- Pilota in cloud: sincronizzazione (solo nella scheda principale) ---
+  // Configurazione condivisa col motore del server: tecnici, impostazioni del
+  // pilota, orari e base generali. Letta dai ref (sempre aggiornati).
+  const getCloudConfig = useCallback((): CloudConfig => ({
+    technicians: techniciansRef.current,
+    autopilot: autopilotRef.current,
+    fallback: fallbackRef.current,
+  }), []);
+
+  // Configurazione arrivata dal server: si applica allo stato (e quindi al
+  // localStorage). I ref si aggiornano subito, così il confronto con l'ultima
+  // sincronizzata non fa ripartire una push.
+  const applyCloudConfig = useCallback((cfg: CloudConfig): CloudConfig => {
+    const technicians = Array.isArray(cfg.technicians) ? cfg.technicians : techniciansRef.current;
+    const autopilotNext: AutopilotSettings = { ...DEFAULT_AUTOPILOT_SETTINGS, ...(cfg.autopilot || {}) };
+    const base = cfg.fallback?.base ?? null;
+    const fallback: CloudConfig['fallback'] = {
+      start: cfg.fallback?.start || fallbackRef.current.start,
+      end: cfg.fallback?.end || fallbackRef.current.end,
+      base,
+      // l'indirizzo della base viaggia con la configurazione (se manca: coordinate)
+      baseAddress: base ? cfg.fallback?.baseAddress || `Base (${base.lat.toFixed(4)}, ${base.lng.toFixed(4)})` : undefined,
+    };
+    techniciansRef.current = technicians;
+    autopilotRef.current = autopilotNext;
+    fallbackRef.current = fallback;
+    setTechnicians(technicians);
+    setAutopilot(autopilotNext);
+    setStartTime(fallback.start);
+    setEndTimeLimit(fallback.end);
+    setBaseLocation(prev => {
+      if (!fallback.base) return null;
+      const address = fallback.baseAddress || '';
+      if (prev && prev.coords.lat === fallback.base.lat && prev.coords.lng === fallback.base.lng && prev.address === address) return prev;
+      return { coords: fallback.base, address };
+    });
+    return { technicians, autopilot: autopilotNext, fallback };
+  }, []);
+
+  const cloudSync = useCloudSync({
+    active: cloudActive && isAutomationTab,
+    cloudKey: cloud.key,
+    deviceId: cloud.deviceId,
+    appointments: allAppointments,
+    configDeps: [technicians, autopilot, startTime, endTimeLimit, baseLocation],
+    appointmentsRef,
+    setAppointments: setAllAppointments,
+    getConfig: getCloudConfig,
+    applyConfig: applyCloudConfig,
+  });
+  // Smistamento automatico e inbox del bridge: con il cloud, un solo
+  // dispositivo alla volta (quello che ha il turno)
+  const cloudLeaseHolder = cloudSync.state?.lease?.holder === true;
+  const browserAutomationsHere = isAutomationTab && (!cloudActive || cloudLeaseHolder);
 
   // Applica l'esito della conversazione alla pratica (riduttore puro del
   // pilota). Pilota spento: mappatura di sempre (confermato -> Confermata,
@@ -564,7 +642,8 @@ function App() {
   const outcomePollInFlight = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!callPollKey || !isAutomationTab) return;
+    // Con il cloud attivo gli esiti li applica il server (arrivano col pull)
+    if (!callPollKey || !isAutomationTab || cloudActive) return;
     let cancelled = false;
 
     const tick = async () => {
@@ -597,7 +676,7 @@ function App() {
     const firstCheck = setTimeout(tick, 4000); // primo controllo poco dopo l'avvio
     const timer = setInterval(tick, CALL_POLL_INTERVAL_MS);
     return () => { cancelled = true; clearTimeout(firstCheck); clearInterval(timer); };
-  }, [callPollKey, isAutomationTab, awaitingCallOutcome, applyCallOutcome]);
+  }, [callPollKey, isAutomationTab, cloudActive, awaitingCallOutcome, applyCallOutcome]);
 
   // Agenda del giorno per l'agente AI: fasce già impegnate del giro dello
   // stesso tecnico, così al telefono può rispondere onesto sulle richieste
@@ -628,7 +707,8 @@ function App() {
   }, [buildAlternatives, setAllAppointments]);
 
   useAutopilot({
-    active: autopilot.enabled && isAutomationTab,
+    // Con il cloud attivo i lanci li fa il motore sul server
+    active: autopilot.enabled && isAutomationTab && !cloudActive,
     appointmentsRef,
     commit: setAllAppointments,
     getContext: getPlanningContext,
@@ -658,7 +738,7 @@ function App() {
   const setAutoDispatchBusy = useCallback((busy: boolean) => { autoDispatchBusyRef.current = busy; }, []);
 
   const autoDispatch = useAutoDispatch({
-    active: autopilot.enabled && autopilot.autoDispatch && isAutomationTab,
+    active: autopilot.enabled && autopilot.autoDispatch && browserAutomationsHere,
     blocked: importBusy || showDispatchModal,
     appointments: allAppointments,
     appointmentsRef,
@@ -709,11 +789,24 @@ function App() {
 
   const bridgeInbox = useBridgeInbox({
     settings: bridgeSettings,
-    isLeader: isAutomationTab,
+    isLeader: browserAutomationsHere,
     appointmentsRef,
     importBridge: importFromBridge,
     isImportBusy: isImportOrDispatchBusy,
+    followerMessage: cloudActive && isAutomationTab ? 'Bridge: gestito da un altro dispositivo collegato al cloud' : undefined,
   });
+
+  // --- Cloud: attivazione, chiave, scollegamento (dalle impostazioni) ---
+  const getLocalCloudData = () => ({ appointments: appointmentsRef.current, config: getCloudConfig() });
+  const handleCloudActivate = (key: string) => updateCloud({ ...cloud, key, enabled: true });
+  const handleCloudKeySave = (key: string) => updateCloud({ ...cloud, key });
+  // Scollegato: il pilota continua sul cloud; qui il pilota LOCALE si spegne
+  // (la sincronizzazione si ferma nello stesso aggiornamento: la modifica non
+  // arriva al server), per non avere due motori sugli stessi clienti
+  const handleCloudDisconnect = () => {
+    updateCloud({ ...cloud, enabled: false });
+    setAutopilot(s => ({ ...s, enabled: false }));
+  };
 
   // --- Sync verso il gestionale Effetre (Firestore) ---
   const handleSyncGestionale = useCallback(async (automatic = false) => {
@@ -1574,6 +1667,11 @@ function App() {
           bridge={bridgeSettings}
           onSave={(ap, br) => { setAutopilot(ap); setBridgeSettings(br); }}
           onClose={() => setShowAutopilotSettings(false)}
+          cloud={cloud}
+          getLocalCloudData={getLocalCloudData}
+          onCloudActivate={handleCloudActivate}
+          onCloudDisconnect={handleCloudDisconnect}
+          onCloudKeySave={handleCloudKeySave}
         />
       )}
 
@@ -1871,6 +1969,7 @@ function App() {
             onPause={() => setAutopilot(s => ({ ...s, enabled: false }))}
             onOpenSettings={() => setShowAutopilotSettings(true)}
             onBridgeSyncNow={() => { void bridgeInbox.syncNow(); }}
+            cloud={cloudActive ? { mirror: !isAutomationTab, state: cloudSync.state, leaseHolder: cloudLeaseHolder } : null}
           />
 
           {/* Toggle Impostazioni e azioni: click per chiudere/riaprire e liberare spazio per l'elenco */}

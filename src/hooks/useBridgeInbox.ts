@@ -51,6 +51,8 @@ interface UseBridgeInboxOptions {
   // Import silenzioso delle righe nuove (nucleo comune) + aggiornamenti telefono
   importBridge: (rows: ImportRow[], updates: { id: string; changes: Partial<Appointment> }[]) => Promise<BridgeImportOutcome>;
   isImportBusy: () => boolean;
+  // Testo del chip quando gli automatismi girano altrove (default: altra scheda)
+  followerMessage?: string;
 }
 
 const hhmm = (d: Date) => d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
@@ -72,7 +74,7 @@ const initialStatus = (settings: BridgeSettings): BridgeInboxStatus => ({
   portals: [],
 });
 
-export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBridge, isImportBusy }: UseBridgeInboxOptions) => {
+export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBridge, isImportBusy, followerMessage }: UseBridgeInboxOptions) => {
   const [status, setStatus] = useState<BridgeInboxStatus>(() => initialStatus(settings));
   const runningRef = useRef(false);
   const lastResultRef = useRef<string | undefined>(undefined);
@@ -166,9 +168,9 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
     if (!settings.enabled) { setStatus(st => ({ ...initialStatus(settings), lastResult: st.lastResult })); return; }
     if (!settings.token.trim()) { setStatus(st => ({ ...initialStatus(settings), lastResult: st.lastResult })); return; }
     if (!isLeader) {
-      setStatus(st => ({ ...st, kind: 'follower', message: 'Bridge: gestito dall\'altra scheda' }));
+      setStatus(st => ({ ...st, kind: 'follower', message: followerMessage || 'Bridge: gestito dall\'altra scheda' }));
     }
-  }, [settings, isLeader]);
+  }, [settings, isLeader, followerMessage]);
 
   // Avvio + ogni 5 minuti (solo nella scheda che ha il lock)
   useEffect(() => {

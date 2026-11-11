@@ -1,5 +1,5 @@
 import type { AlternativeSlot, Appointment, CallOutcome, CallOutcomeResult, Technician } from '../types';
-import { inferChosenAlternative, resolveAlternative } from './alternativesService';
+import { computeAlternativeSlots, inferChosenAlternative, resolveAlternative } from './alternativesService';
 import {
   type PlanningFallback,
   type SlotOption,
@@ -80,6 +80,26 @@ export const isCallInFlight = (a: Appointment, now?: Date): boolean => {
   if (a.callStatus !== 'called' || !a.callId || a.callOutcome) return false;
   return !(now && outcomeOverdue(a, now));
 };
+
+// Slot offerti come alternativa nelle chiamate ancora in corso: finché non
+// arriva l'esito vanno considerati occupati, altrimenti due clienti
+// potrebbero accettare lo stesso slot (o un rimpiazzo potrebbe prenderselo).
+// Restituisce tappe "fantasma" da aggiungere all'elenco solo per i calcoli.
+export const reservedOfferStops = (all: Appointment[], now: Date, excludeId?: string): Appointment[] =>
+  all.flatMap(a =>
+    a.id !== excludeId && a.offeredAlternatives && isCallInFlight(a, now)
+      ? a.offeredAlternatives.map(o => ({
+          ...a,
+          id: `${a.id}#${o.label}`,
+          status: 'proposed' as const,
+          date: o.date,
+          startTime: o.startTime,
+          endTime: o.endTime,
+          hasLunchBreakBefore: false,
+          sequenceOrder: undefined,
+        }))
+      : []
+  );
 
 // Istante di inizio dello slot (null se la pratica non è nel giro)
 export const slotStartOf = (a: Appointment): Date | null =>
@@ -198,6 +218,18 @@ export const expireStaleAutoCalls = (all: Appointment[], now: Date): Appointment
   );
 
 // --- Eventi di chiamata ---
+
+// Alternative da offrire nella chiamata che sta per partire (vuoto se
+// l'opzione è spenta o la pratica non ha uno slot proposto). Non riusa gli
+// slot già offerti nelle chiamate in corso.
+export const alternativesForCall = (appt: Appointment, all: Appointment[], ctx: PlanningContext): AlternativeSlot[] => {
+  if (!ctx.settings.offerAlternatives || !isInRoute(appt)) return [];
+  return computeAlternativeSlots(appt, [...all, ...reservedOfferStops(all, ctx.now, appt.id)], ctx.technicians, {
+    now: ctx.now,
+    fallback: ctx.fallback,
+    minLeadMinutes: ctx.settings.minLeadHours * 60,
+  });
+};
 
 export const reduceCallStarted = (
   all: Appointment[],
@@ -468,6 +500,8 @@ const backfillSlot = (all: Appointment[], freed: FreedSlot, leftId: string, ctx:
   if (!day) return all;
 
   const minStartAbs = ctx.now.getTime() + ctx.settings.minLeadHours * 3600000;
+  // Gli slot offerti in chiamate ancora in corso restano riservati a quei clienti
+  const occupied = [...all, ...reservedOfferStops(all, ctx.now, leftId)];
 
   let best: { cand: Appointment; option: SlotOption; score: number } | null = null;
   for (const cand of all) {
@@ -483,7 +517,7 @@ const backfillSlot = (all: Appointment[], freed: FreedSlot, leftId: string, ctx:
       cand.callOutcome?.result !== 'confermato';
     if (!waiting && !advance) continue;
 
-    const route = getDayRoute(all, freed.technicianId, freed.date, cand.id);
+    const route = getDayRoute(occupied, freed.technicianId, freed.date, cand.id);
     const options = findFeasibleSlots(route, day, cand.coords, durationOf(cand), {
       notBefore: freed.start - 30,
       notAfter: freed.start + 120,

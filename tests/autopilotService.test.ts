@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Appointment } from '../src/types';
 import { computeAlternativeSlots } from '../src/services/alternativesService';
 import {
+  alternativesForCall,
   approveForCalling,
   attentionItems,
   autopilotStats,
@@ -13,6 +14,7 @@ import {
   reduceCallLaunchResult,
   reduceCallOutcome,
   reduceCallStarted,
+  reservedOfferStops,
   DEFAULT_AUTOPILOT_SETTINGS,
 } from '../src/services/autopilotService';
 import { getDayRoute, isInRoute, toMin, travelMinutes } from '../src/services/slotService';
@@ -504,5 +506,64 @@ describe('chiamate rimaste senza esito', () => {
     });
     const kinds = Object.fromEntries(attentionItems([stuck[0], refused], ON).map(i => [i.id, i.kind]));
     expect(kinds).toEqual({ v1: 'esito_da_verificare', rif: 'rifiutato' });
+  });
+});
+
+describe('slot offerti in chiamate in corso', () => {
+  const twoCalls = () => {
+    // "x" e "y": stesso tecnico, stessa zona, due chiamate una dopo l'altra
+    const base = [
+      ...world({ callStatus: undefined, callId: undefined }),
+      stop('y', D, '14:00', '14:20', P.portaVenezia, { title: 'Cliente Y' }),
+    ];
+    const altsX = alternativesForCall(byId(base, 'x'), base, ON);
+    const afterX = reduceCallLaunchResult(reduceCallStarted(base, 'x', altsX), 'x', { ok: true, callId: 'c1' }, NOW);
+    return { base, altsX, afterX };
+  };
+
+  it('la seconda chiamata non offre gli slot già offerti nella prima', () => {
+    const { base, altsX, afterX } = twoCalls();
+    expect(altsX.length).toBeGreaterThan(0);
+    const key = (a: { date: string; startTime: string }) => `${a.date} ${a.startTime}`;
+    const altsY = alternativesForCall(byId(afterX, 'y'), afterX, ON);
+    const taken = new Set(altsX.map(key));
+    expect(altsY.some(a => taken.has(key(a)))).toBe(false);
+    // senza la prima chiamata in corso gli stessi slot sarebbero stati offerti anche a Y
+    const altsYAlone = alternativesForCall(byId(base, 'y'), base, ON);
+    expect(altsYAlone.some(a => taken.has(key(a)))).toBe(true);
+    // gli slot fantasma non entrano mai nell'elenco delle pratiche
+    expect(reservedOfferStops(afterX, NOW).map(s => s.id)).toEqual(altsX.map(a => `x#${a.label}`));
+    expect(afterX.some(a => a.id.includes('#'))).toBe(false);
+  });
+
+  it('opzione spenta o pratica senza slot: nessuna alternativa', () => {
+    const { base } = twoCalls();
+    expect(alternativesForCall(byId(base, 'x'), base, planning(NOW, { offerAlternatives: false }))).toEqual([]);
+    expect(alternativesForCall(byId(base, 'near'), base, ON)).toEqual([]);
+  });
+
+  it('il rimpiazzo non occupa uno slot riservato a una chiamata in corso', () => {
+    // "y" è in chiamata con un'alternativa offerta proprio nel varco che "x" sta per liberare
+    // (09:35 è esattamente l'inizio che il rimpiazzo sceglierebbe se lo slot fosse libero)
+    const reserved = { label: 'A' as const, date: D, startTime: '09:35', endTime: '09:55' };
+    const all = [
+      ...world(),
+      stop('y', MON, '09:00', '09:20', P.portaVenezia, {
+        callStatus: 'called',
+        callId: 'c2',
+        calledAt: NOW.toISOString(),
+        offeredAlternatives: [reserved],
+      }),
+    ];
+    const out = reduceCallOutcome(all, 'x', outcome('rifiutato'), 'c1', ON);
+    expect(byId(out, 'near')).toMatchObject({ status: 'proposed', date: D, autoCall: 'backfill' });
+    for (const a of out) {
+      if (a.id === 'y' || !isInRoute(a) || a.date !== D) continue;
+      const overlaps = toMin(a.startTime!) < toMin(reserved.endTime) && toMin(a.endTime!) > toMin(reserved.startTime);
+      expect(overlaps, `${a.id} ${a.startTime}-${a.endTime}`).toBe(false);
+    }
+    // e l'alternativa resta confermabile per "y"
+    const done = reduceCallOutcome(out, 'y', outcome('riprogrammare', { chosenAlternative: 'A' }), 'c2', ON);
+    expect(byId(done, 'y')).toMatchObject({ status: 'confirmed', date: D, startTime: '09:35' });
   });
 });

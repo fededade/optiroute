@@ -351,10 +351,13 @@ export const reduceCallOutcome = (
   // 1) Alternativa accettata in chiamata
   // (etichetta esplicita dall'analisi post-chiamata, oppure dedotta dalla
   // data/ora richieste se coincidono con uno slot offerto)
-  const chosen = inferChosenAlternative(outcome, a.offeredAlternatives);
+  const chosen = inferChosenAlternative(outcome, a.offeredAlternatives, eraNelGiro ? a : undefined);
   const offered = chosen ? a.offeredAlternatives?.find(o => o.label === chosen) : undefined;
   if (offered && ALTERNATIVE_RESULTS.includes(outcome.result)) {
-    const resolved = resolveAlternative(a, offered.label, list, ctx.technicians, ctx.fallback, ctx.now);
+    // Rivalidazione anche contro gli slot offerti in altre chiamate ancora in
+    // corso (un esito arrivato in ritardo non può prendersi lo slot di un altro)
+    const occupied = [...list, ...reservedOfferStops(list, ctx.now, id)];
+    const resolved = resolveAlternative(a, offered.label, occupied, ctx.technicians, ctx.fallback, ctx.now);
     const quando = `${formatDate(offered.date)} ${offered.startTime}`;
     if (resolved) {
       list = placeAppointment(
@@ -507,13 +510,16 @@ const backfillSlot = (all: Appointment[], freed: FreedSlot, leftId: string, ctx:
   for (const cand of all) {
     if (cand.id === leftId || cand.technicianId !== freed.technicianId || !cand.phone) continue;
     if (cand.declinedDates?.includes(freed.date)) continue;
+    // Mai prima della data di rientro (vale anche per chi viene anticipato da
+    // un giorno successivo), mai chi ha una chiamata ancora in corso
+    if (cand.followUpDate && cand.followUpDate > freed.date) continue;
+    if (isCallInFlight(cand, ctx.now)) continue;
 
-    const waiting = cand.status === 'pending' && (!cand.followUpDate || cand.followUpDate <= freed.date);
+    const waiting = cand.status === 'pending';
     const advance =
       cand.status === 'proposed' &&
       isInRoute(cand) &&
       (cand.date as string) > freed.date &&
-      !isCallInFlight(cand, ctx.now) &&
       cand.callOutcome?.result !== 'confermato';
     if (!waiting && !advance) continue;
 

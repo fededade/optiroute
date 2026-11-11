@@ -2,6 +2,7 @@ import type { Appointment, Coordinates, Technician } from '../types';
 import { calculateSchedule, nearestNeighborChain } from '../utils/geo';
 import { hasCachedReverse, reverseGeocodePlace } from './geocodingService';
 import { matchTechnician, workWindowOn } from './technicianService';
+import { reservedOfferStops } from './autopilotService';
 import {
   type AppointmentPatch,
   type DayContext,
@@ -120,7 +121,8 @@ export const computeDispatch = async (
   fallbackBase: Coordinates | null,
   params: DispatchParams,
   onProgress?: (message: string) => void,
-  existing: Appointment[] = [] // tutte le pratiche correnti: se ne usano le tappe già nel giro
+  existing: Appointment[] = [], // tutte le pratiche correnti: se ne usano le tappe già nel giro
+  now?: Date // per riconoscere le chiamate rimaste senza esito (senza: tutte ancora in corso)
 ): Promise<DispatchProposal> => {
   // 1) Arricchimento: provincia/comune mancanti via reverse geocoding (cache + throttle)
   const enriched: Appointment[] = [];
@@ -169,9 +171,14 @@ export const computeDispatch = async (
   const updates: Appointment[] = [];
   const patches: AppointmentPatch[] = [];
 
-  // Tappe già nel giro (le pratiche da smistare non ne fanno parte)
+  // Tappe già nel giro (le pratiche da smistare non ne fanno parte). Gli slot
+  // offerti come alternativa nelle chiamate ancora in corso contano come
+  // occupati: il cliente potrebbe accettarli. Senza `now` ogni chiamata senza
+  // esito si considera ancora in corso (scelta prudente).
   const pendingIds = new Set(pending.map(a => a.id));
-  const existingInRoute = existing.filter(a => isInRoute(a) && !pendingIds.has(a.id));
+  const reserved = reservedOfferStops(existing, now ?? new Date(0));
+  const existingInRoute = [...existing, ...reserved].filter(a => isInRoute(a) && !pendingIds.has(a.id));
+  const reservedIds = new Set(reserved.map(a => a.id));
 
   for (const tech of technicians.filter(t => t.active)) {
     let queue = queues.get(tech.id) || [];
@@ -204,7 +211,7 @@ export const computeDispatch = async (
       const existingRoute = getDayRoute(existingInRoute, tech.id, date);
       if (existingRoute.length > 0) {
         const ctx: DayContext = { windowStart: toMin(window.start), windowEnd: toMin(window.end), base };
-        const { placed, overflow, existingPatches } = insertIntoRoute(existingRoute, ctx, eligible);
+        const { placed, overflow, existingPatches } = insertIntoRoute(existingRoute, ctx, eligible, reservedIds);
         if (placed.length > 0) {
           const dayAppointments = placed.map(a => ({ ...a, date, technicianId: tech.id }));
           plans.push({
@@ -295,7 +302,8 @@ export const computeDispatch = async (
 const insertIntoRoute = (
   existingRoute: RouteStop[],
   ctx: DayContext,
-  eligible: Appointment[]
+  eligible: Appointment[],
+  reservedIds: Set<string> = new Set() // slot riservati: occupano spazio ma non sono tappe
 ): { placed: Appointment[]; overflow: Appointment[]; existingPatches: AppointmentPatch[] } => {
   const route: RouteStop[] = [...existingRoute];
   const newIds = new Set<string>();
@@ -341,10 +349,13 @@ const insertIntoRoute = (
   if (newIds.size === 0) return { placed: [], overflow, existingPatches: [] };
 
   // Sequenza finale del giorno: nuove tappe complete, esistenti solo riordino
-  const seq = sequenceStops(route, ctx.base);
+  // (gli slot riservati alle chiamate in corso non sono tappe: fuori sequenza)
+  const realExisting = existingRoute.filter(s => !reservedIds.has(s.id));
+  const realRoute = route.filter(s => !reservedIds.has(s.id));
+  const seq = sequenceStops(realRoute, ctx.base);
   const placed: Appointment[] = [];
   const existingPatches: AppointmentPatch[] = [];
-  route.forEach((s, i) => {
+  realRoute.forEach((s, i) => {
     const v = seq[i];
     if (newIds.has(s.id)) {
       placed.push({
@@ -358,9 +369,9 @@ const insertIntoRoute = (
       return;
     }
     // Tappa esistente: i viaggi si ricalcolano solo se è cambiata la tappa precedente
-    const oldIndex = existingRoute.findIndex(e => e.id === s.id);
-    const prevBefore = oldIndex > 0 ? existingRoute[oldIndex - 1].id : null;
-    const prevNow = i > 0 ? route[i - 1].id : null;
+    const oldIndex = realExisting.findIndex(e => e.id === s.id);
+    const prevBefore = oldIndex > 0 ? realExisting[oldIndex - 1].id : null;
+    const prevNow = i > 0 ? realRoute[i - 1].id : null;
     const changes: Partial<Appointment> = {};
     if (s.appt.sequenceOrder !== v.sequenceOrder) changes.sequenceOrder = v.sequenceOrder;
     if (prevBefore !== prevNow) {

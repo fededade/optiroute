@@ -152,8 +152,10 @@ export interface SlotSearchOptions {
 // Tutti gli inserimenti fattibili di una tappa nel giro, ordinati per inizio.
 // Pausa pranzo coerente con calculateSchedule (45' alla prima tappa raggiunta
 // dalle 12:00): se la pausa è già prima di una tappa resta in quel varco; se
-// il giro non ha ancora pausa e la nuova tappa si accoda dopo le 12:00, la
-// pausa si aggiunge prima della nuova tappa.
+// il giro non ha una pausa segnata e la nuova tappa inizia dalle 12:00 in poi,
+// la pausa si aggiunge prima della nuova tappa; se invece la nuova tappa
+// inizia prima delle 12:00, i 45' restano liberi prima della tappa successiva
+// pomeridiana (il varco del pranzo non si riempie).
 export const findFeasibleSlots = (
   route: RouteStop[],
   ctx: DayContext,
@@ -162,21 +164,25 @@ export const findFeasibleSlots = (
   opts: SlotSearchOptions = {}
 ): SlotOption[] => {
   const hasLunch = route.some(s => s.lunchBefore);
-  const anyAfterNoon = route.some(s => s.start >= LUNCH_THRESHOLD_MIN);
   const options: SlotOption[] = [];
+  let busyUntil = -Infinity; // fine più tarda delle tappe precedenti (anche se sovrapposte)
 
   for (let p = 0; p <= route.length; p++) {
     const prev = p > 0 ? route[p - 1] : undefined;
     const next = p < route.length ? route[p] : undefined;
+    if (prev) busyUntil = Math.max(busyUntil, prev.end);
 
     let start = prev
-      ? prev.end + travelMinutes(prev.coords, coords)
+      ? Math.max(prev.end + travelMinutes(prev.coords, coords), busyUntil)
       : ctx.windowStart + (ctx.base ? travelMinutes(ctx.base, coords) : 0);
+    // mai prima dell'inizio della finestra (es. indisponibilità del mattino
+    // registrata dopo che il giro aveva già tappe)
+    start = Math.max(start, ctx.windowStart);
     if (opts.notBefore !== undefined) start = Math.max(start, opts.notBefore);
     start = ceil5(start);
 
     let lunchBefore = false;
-    if (!next?.lunchBefore && !hasLunch && !anyAfterNoon && start >= LUNCH_THRESHOLD_MIN) {
+    if (!hasLunch && start >= LUNCH_THRESHOLD_MIN) {
       start += LUNCH_MINUTES;
       lunchBefore = true;
     }
@@ -185,7 +191,8 @@ export const findFeasibleSlots = (
     if (end > ctx.windowEnd) continue;
     if (opts.notAfter !== undefined && start > opts.notAfter) continue;
     if (next) {
-      const lunchGap = next.lunchBefore ? LUNCH_MINUTES : 0;
+      const lunchAfter = next.lunchBefore || (!hasLunch && !lunchBefore && next.start >= LUNCH_THRESHOLD_MIN);
+      const lunchGap = lunchAfter ? LUNCH_MINUTES : 0;
       if (end + travelMinutes(coords, next.coords) + lunchGap > next.start) continue;
     }
 
@@ -331,6 +338,10 @@ export const removeFromRoute = (
     hasLunchBreakBefore: undefined,
     travelTimeFromPrev: undefined,
     distanceFromPrev: undefined,
+    // fuori dal giro non c'è uno slot da chiamare: la coda si svuota, altrimenti
+    // al rientro nel giro partirebbe una chiamata mai approvata
+    autoCall: undefined,
+    autoCallNotBefore: undefined,
     ...changes,
   };
 

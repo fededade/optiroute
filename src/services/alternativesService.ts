@@ -45,11 +45,16 @@ const daysBetween = (from: string, to: string): number =>
   Math.round((new Date(`${to}T00:00:00`).getTime() - new Date(`${from}T00:00:00`).getTime()) / 86400000);
 
 // Minuti da mezzanotte di `date` a partire dai quali uno slot rispetta
-// l'anticipo minimo (0 se tutto il giorno va bene)
+// l'anticipo minimo (0 se tutto il giorno va bene). Si ragiona sull'orario
+// LOCALE del limite, non sui minuti trascorsi dalla mezzanotte: nel giorno del
+// cambio d'ora i due differiscono di 60'.
 const minStartOn = (date: string, now: Date, leadMinutes: number): number => {
-  const limit = now.getTime() + leadMinutes * 60000;
-  const midnight = dateAtMinutes(date, 0).getTime();
-  return Math.max(0, Math.ceil((limit - midnight) / 60000));
+  const limit = new Date(now.getTime() + leadMinutes * 60000);
+  const limitDate = localDateStr(limit);
+  if (limitDate < date) return 0;
+  if (limitDate > date) return 24 * 60; // giorno già fuori anticipo
+  const partial = limit.getSeconds() > 0 || limit.getMilliseconds() > 0 ? 1 : 0;
+  return limit.getHours() * 60 + limit.getMinutes() + partial;
 };
 
 export const computeAlternativeSlots = (
@@ -167,9 +172,13 @@ const INFER_TOLERANCE = 45; // minuti fra l'orario richiesto e lo slot offerto
 // minuti (senza orario basta la data, ma solo se l'esito è una conferma).
 // Prudente di proposito: nel dubbio nessuna deduzione, la pratica segue
 // l'esito dichiarato (da riprogrammare, da richiamare...).
+// `current` = slot proposto in chiamata: se l'alternativa cade nella sua stessa
+// data, "confermo per giovedì" può riferirsi alla proposta principale, quindi
+// serve un orario richiesto più vicino all'alternativa che alla proposta.
 export const inferChosenAlternative = (
   outcome: Pick<CallOutcome, 'result' | 'chosenAlternative' | 'followUpDate' | 'requestedDate' | 'requestedTime'>,
-  offered: AlternativeSlot[] | undefined
+  offered: AlternativeSlot[] | undefined,
+  current?: Pick<Appointment, 'date' | 'startTime'>
 ): AlternativeLabel | undefined => {
   if (!offered || offered.length === 0) return undefined;
   if (outcome.chosenAlternative) {
@@ -185,6 +194,11 @@ export const inferChosenAlternative = (
   const slot = sameDate[0];
 
   const requested = parseTimeText(outcome.requestedTime);
+  if (current?.date === date && current.startTime) {
+    if (requested === null) return undefined; // ambiguo: potrebbe confermare la proposta
+    const currentStart = toMin(current.startTime);
+    if (Math.abs(requested - currentStart) <= Math.abs(requested - toMin(slot.startTime))) return undefined;
+  }
   if (requested === null) return outcome.result === 'confermato' ? slot.label : undefined;
   return Math.abs(requested - toMin(slot.startTime)) <= INFER_TOLERANCE ? slot.label : undefined;
 };

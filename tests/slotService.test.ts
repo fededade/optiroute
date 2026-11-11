@@ -122,14 +122,22 @@ describe('findFeasibleSlots', () => {
     expect(last.start).toBe(minStart + 45);
   });
 
-  it('nessuna pausa aggiuntiva se il giro ha già tappe dal pomeriggio', () => {
+  // Prima: "nessuna pausa aggiuntiva se il giro ha già tappe dal pomeriggio".
+  // Era sbagliato: un giro con tappe pomeridiane ma SENZA pausa segnata (tappe
+  // messe a mano, o la tappa con la pausa uscita dal giro) veniva riempito fino
+  // a togliere al tecnico il pranzo. Ora la pausa si aggiunge alla nuova tappa
+  // dalle 12:00, e una tappa del mattino lascia i 45' prima della pomeridiana.
+  it('giro con tappe pomeridiane ma senza pausa: il varco del pranzo non si riempie', () => {
     const route = getDayRoute(
       [stop('a', D, '11:30', '11:50', P.milano), stop('b', D, '14:00', '14:20', P.milano)],
       'tech-1',
       D
     );
     const options = findFeasibleSlots(route, ctx, P.portaVenezia, 20);
-    expect(options.every(o => !o.lunchBefore)).toBe(true);
+    const between = options.find(o => o.position === 1)!;
+    expect(between.start).toBeGreaterThanOrEqual(toMin('12:45'));
+    expect(between.lunchBefore).toBe(true);
+    for (const o of options) if (o.start >= 720) expect(o.lunchBefore).toBe(true);
   });
 
   it('rispetta la fine della finestra', () => {

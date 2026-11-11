@@ -529,9 +529,43 @@ export const replaceCloudData = async (
 ): Promise<CloudResult<CloudSnapshot>> =>
   cloudInit(client, { device: local.deviceId, appointments: local.appointments, config: local.config });
 
-// Lo scheduler è passato di recente?
+// Orario dello scheduler, come in vercel.json: ogni 15 minuti dalle 7:00
+// alle 21:45, ora italiana. Di notte non passa: non è un guasto.
+export const SCHEDULE_TIMEZONE = 'Europe/Rome';
+export const SCHEDULE_FIRST_MINUTE = 7 * 60;
+export const SCHEDULE_LAST_MINUTE = 21 * 60 + 45;
+export const SCHEDULE_EVERY_MINUTES = 15;
+
+// Ultimo passaggio previsto dallo scheduler non dopo l'istante `at`
+// (epoch ms), tenendo conto della pausa notturna.
+export const lastScheduledRun = (at: number): number => {
+  // ora "di orologio" in Italia, letta come se fosse UTC
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: SCHEDULE_TIMEZONE, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(new Date(at));
+  const n = (type: string) => Number(parts.find(p => p.type === type)?.value);
+  const wall = Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'));
+  const offset = wall - Math.floor(at / 60000) * 60000;
+  const minutes = n('hour') * 60 + n('minute');
+
+  let dayShift = 0;
+  let slot: number;
+  if (minutes < SCHEDULE_FIRST_MINUTE) { slot = SCHEDULE_LAST_MINUTE; dayShift = -1; } // prima delle 7: vale l'ultimo di ieri
+  else if (minutes > SCHEDULE_LAST_MINUTE) slot = SCHEDULE_LAST_MINUTE;
+  else slot = Math.floor(minutes / SCHEDULE_EVERY_MINUTES) * SCHEDULE_EVERY_MINUTES;
+  return Date.UTC(n('year'), n('month') - 1, n('day') + dayShift, 0, slot) - offset;
+};
+
+// Lo scheduler sta passando regolarmente? Si guarda l'ultimo passaggio
+// previsto fino a 45 minuti fa (Vercel può ritardare un passaggio fino a 15
+// minuti e ogni tanto saltarne uno): lo scheduler deve essersi visto da
+// quel momento, con un passaggio di tolleranza. Di notte vale l'ultimo
+// passaggio della sera.
 export const schedulerFresh = (seenAt: string | null | undefined, now: number): boolean => {
   if (!seenAt) return false;
   const t = new Date(seenAt).getTime();
-  return !isNaN(t) && now - t < SCHEDULER_FRESH_MS;
+  if (isNaN(t)) return false;
+  const expected = lastScheduledRun(now - SCHEDULER_FRESH_MS) - SCHEDULE_EVERY_MINUTES * 60000;
+  return t >= expected;
 };

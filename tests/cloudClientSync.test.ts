@@ -520,10 +520,26 @@ describe('attivazione del cloud', () => {
     expect(cloud.ops('init')).toHaveLength(0);
   });
 
-  it('scheduler visto di recente', () => {
-    const now = Date.parse('2026-11-11T10:00:00Z');
-    expect(schedulerFresh(null, now)).toBe(false);
-    expect(schedulerFresh('2026-11-11T09:30:00Z', now)).toBe(true);
-    expect(schedulerFresh('2026-11-11T09:00:00Z', now)).toBe(false);
+  it('scheduler visto di recente (passa ogni 15 minuti fra le 7 e le 21, ora italiana)', () => {
+    // mercoledì 11/11/2026: l'Italia è a UTC+1
+    const rome = (hhmm: string, day = '2026-11-11') => Date.parse(`${day}T${hhmm}:00+01:00`);
+    const seen = (hhmm: string, day = '2026-11-11') => new Date(rome(hhmm, day)).toISOString();
+
+    expect(schedulerFresh(null, rome('11:00'))).toBe(false);
+    // di giorno: visto da poco sì, da oltre un'ora no
+    expect(schedulerFresh(seen('10:35'), rome('11:00'))).toBe(true);
+    expect(schedulerFresh(seen('10:02'), rome('11:00'))).toBe(true);  // un passaggio saltato è tollerato
+    expect(schedulerFresh(seen('09:40'), rome('11:00'))).toBe(false);
+    // di notte non passa: basta l'ultimo passaggio della sera
+    expect(schedulerFresh(seen('21:50'), rome('23:30'))).toBe(true);
+    expect(schedulerFresh(seen('21:50'), rome('03:00', '2026-11-12'))).toBe(true);
+    expect(schedulerFresh(seen('21:50'), rome('07:10', '2026-11-12'))).toBe(true);  // il primo del mattino può tardare
+    expect(schedulerFresh(seen('18:00'), rome('23:30'))).toBe(false);               // fermo dal pomeriggio
+    // al mattino deve ripartire
+    expect(schedulerFresh(seen('21:50'), rome('08:30', '2026-11-12'))).toBe(false);
+    expect(schedulerFresh(seen('07:05', '2026-11-12'), rome('08:00', '2026-11-12'))).toBe(true);
+    // d'estate (UTC+2) gli orari restano quelli italiani
+    expect(schedulerFresh('2026-07-15T19:50:00Z', Date.parse('2026-07-15T22:30:00Z'))).toBe(true);  // 21:50 -> 00:30
+    expect(schedulerFresh('2026-07-15T16:00:00Z', Date.parse('2026-07-15T22:30:00Z'))).toBe(false); // 18:00 -> 00:30
   });
 });

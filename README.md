@@ -10,6 +10,48 @@ npm run dev
 ```
 
 Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funzioni in `api/`).
+Test: `npm test` (servizi di pianificazione, pilota automatico, script e esiti delle chiamate).
+
+## Pilota automatico: dal portale alla chiamata
+
+Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con un buco.
+
+1. **Le pratiche arrivano da sole.** Il bridge dei portali (`prelios-bridge/`, modalità
+   `--serve`) gira sul PC dell'operatore: dopo il login al portale (l'MFA resta manuale)
+   legge le pratiche assegnate, recupera i telefoni e li espone all'app su
+   `http://127.0.0.1:8765`. L'app le scarica ogni 5 minuti, le geocodifica e assegna il
+   tecnico. L'import da Excel resta disponibile.
+2. **I giri si formano da soli.** Le pratiche in attesa con telefono vengono smistate in giri
+   proposti, inserite negli spazi liberi dei giri esistenti senza mai spostare l'orario di
+   una tappa già fissata. Le date che un cliente ha rifiutato non gli vengono riproposte.
+3. **L'operatore approva il giro**: un clic su "✅ Approva e chiama" (per giro o per tutti).
+4. **Il pilota chiama.** Dentro la fascia oraria impostata chiama i clienti uno alla volta.
+   - Se il cliente **non può**, l'agente gli offre subito fino a 3 **slot alternativi reali**
+     (già verificati sull'agenda del tecnico); se ne accetta uno la pratica viene spostata
+     e confermata da sola.
+   - Se **rifiuta, rimanda o risulta irreperibile**, lo slot liberato viene **riempito**
+     con un'altra pratica (in attesa, o anticipata da un giorno successivo), che viene
+     chiamata a sua volta.
+   - Chi **non risponde** viene richiamato (di default dopo 2 ore, fino a 3 tentativi,
+     e mai a ridosso dell'appuntamento).
+5. **Solo le eccezioni arrivano all'operatore**, nel riquadro "Da gestire": esiti non
+   chiari, numeri errati, irreperibili, rifiuti, pratiche senza telefono o senza tecnico.
+
+Si accende dalla barra "🤖 Pilota automatico" in cima all'elenco; da ⚙ si regolano fascia
+chiamate, tentativi, alternative, rimpiazzi, anticipo minimo, smistamento automatico e
+bridge (indirizzo e token, stampato dal bridge al primo avvio). L'opzione "Chiama senza
+approvazione" salta il punto 3: è spenta di default.
+
+Da sapere:
+- Il pilota lavora **finché l'app è aperta in una scheda del browser** (anche in secondo
+  piano). Con più schede aperte gli automatismi girano in una sola, per non chiamare due
+  volte lo stesso cliente.
+- A pilota spento l'app funziona come prima: smistamento e chiamate si avviano a mano.
+- Per leggere il bridge locale da un sito https serve Chrome o Edge (al primo accesso il
+  browser chiede il permesso di raggiungere la rete locale).
+- Sull'agente Retell è consigliato aggiungere il campo di analisi `alternativa_scelta`
+  (vedi sotto).
+- Gli orari proposti sono arrotondati ai 5 minuti.
 
 ## Funzionalità principali
 
@@ -18,16 +60,19 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
   - Preconfigurati: *Omar Afifi* (province di Milano e Novara) e *Federica Sala* (provincia di Pavia, comuni attorno a Stradella/Broni/Varzi entro 15 km). Tutto modificabile dalla scheda.
   - Le pratiche nuove o importate vengono **assegnate automaticamente** al tecnico competente (per provincia da Excel/geocoding, o per raggio dalle zone); assegnazione modificabile a mano dal form di modifica.
   - I chip in alto nella sidebar filtrano liste e mappa per tecnico; i colori di marker e percorsi corrispondono al tecnico.
-- **Smistamento automatico ("Smista pratiche per zona")**: le pratiche in attesa vengono distribuite sui prossimi giorni per ogni tecnico, con **data e orario ipotizzati** (rispettando orari, indisponibilità e punto di partenza di ciascuno). Le proposte compaiono nella sezione "Proposte da confermare": l'operatore conferma singolarmente o per giornata intera, oppure rifiuta.
+- **Smistamento automatico ("Smista pratiche per zona")**: le pratiche in attesa vengono distribuite sui prossimi giorni per ogni tecnico, con **data e orario ipotizzati** (rispettando orari, indisponibilità e punto di partenza di ciascuno). Se un giorno ha già tappe, le nuove si inseriscono negli spazi liberi senza toccare gli orari esistenti. Le proposte compaiono nella sezione "Proposte da confermare": l'operatore conferma singolarmente o per giornata intera, oppure rifiuta.
 - **Tag "Urgente"** su ogni pratica (checkbox nel form, colonna `Urgente` in import): badge rosso in lista e mappa, priorità nello smistamento (pianificate per prime nei primi giorni utili) e **annuncio esplicito dell'urgenza nella chiamata AI**.
 - **Inserimento appuntamenti**
   - *Aggiunta rapida*: digita un indirizzo e premi `+` (opzionale pulizia AI con Gemini).
   - *Inserimento completo*: pulsante "Nuovo completo" per cliente, telefono, indirizzo, note, durata, urgenza e tecnico.
   - *Modifica*: icona matita su qualsiasi appuntamento.
   - *Import Excel*: colonne supportate `Intestatario`, `Indirizzo`, `N.Civ.`, `Comune`, `Prov.` e in più `Telefono` (o `Tel`/`Cellulare`), `Note` e `Urgente` (sì/x/1).
+  - *Import da Google My Maps* ("Importa Maps", file `.kmz`/`.kml`): ogni **livello** della mappa viene mappato su una destinazione (confermate con data, in attesa, stand-by, categorie problematiche, annullate) con proposta automatica dal nome del livello (es. "9/07" → confermate al 9 luglio, "annullate" → archivio). Dalle schede vengono estratti intestatari, telefono, riferimento pratica (ISP/CER/…), note, orario ("ore 9:00") e tecnico ("slp Federica"); niente geocoding, le coordinate arrivano dal file. I duplicati vengono saltati.
+- **Riordino del giro con drag & drop**: in vista Giorno tieni premuto il clic su una scheda confermata e trascinala su un'altra tappa dello stesso tecnico: sequenza, orari e percorso in mappa si ricalcolano subito.
+- **Categorie problematiche**: ogni pratica può essere smistata in 📵 *Numeri non corretti*, 📆 *Da richiamare*, 🚧 *Lavori da ultimare*, oppure segnata *Annullata* (archivio, filtro spento di default). Ci si arriva dal form di modifica, in automatico dall'import Maps, oppure **direttamente dalla finestra di chiamata** ("Registra esito della telefonata": un clic per numero errato, da richiamare o lavori da ultimare, con data di rientro). Con **data di rientro** (richiamo concordato / fine lavori): dal giorno prima compare l'alert 🔔 **"Slot da riservare"** in cima alla sidebar, con azione rapida "→ In attesa"; lo smistamento automatico dà priorità alle pratiche rientrate e **non propone mai date precedenti al rientro**.
 - **Persistenza locale**: appuntamenti, tecnici, base di partenza e orari di lavoro sopravvivono al refresh (localStorage).
 - **Ottimizzazione**: percorso "furthest first", orari con traffico (Google Directions con fallback OSRM), pausa pranzo automatica, durata personalizzabile per appuntamento. Con un tecnico selezionato, "Ottimizza" usa base, orari e indisponibilità della sua scheda. Le tratte già calcolate sono in cache: ri-ottimizzare o scambiare l'ordine è quasi istantaneo.
-- **Chiamata AI di conferma (Retell)**: alla conferma di un appuntamento con numero di telefono si apre la finestra di chiamata; puoi anche avviarla in ogni momento con l'icona 📞 sulla card o dal popup sulla mappa. L'operatore AI riceve tutti i dati dell'appuntamento (cliente, data, orario, indirizzo, note, tecnico) e, per le pratiche urgenti, **dichiara esplicitamente l'urgenza durante la chiamata**.
+- **Chiamata AI di conferma (Retell)**: alla conferma di un appuntamento con numero di telefono si apre la finestra di chiamata; puoi anche avviarla in ogni momento con l'icona 📞 sulla card o dal popup sulla mappa, oppure in blocco con "Chiama tutte" sulle proposte smistate. L'operatore AI riceve tutti i dati dell'appuntamento (cliente, data, orario, indirizzo, note, tecnico) e, per le pratiche urgenti, **dichiara esplicitamente l'urgenza durante la chiamata**. A fine conversazione **l'esito torna nell'app e aggiorna da solo lo stato della pratica** (confermata, da riprogrammare, non risponde: vedi sezione dedicata).
 
 ## Configurazione chiamate AI (Retell)
 
@@ -35,14 +80,93 @@ Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funz
 2. Crea un agente vocale (lingua: italiano) e associalo al numero per le chiamate outbound.
 3. Nel prompt dell'agente puoi usare le variabili dinamiche inviate da OptiRoute:
    - `{{call_script}}` — script completo già pronto (saluto, presentazione, dati appuntamento, eventuale avviso di urgenza, richiesta di conferma). Il prompt minimo dell'agente può essere semplicemente: *"Segui queste istruzioni: {{call_script}}"*.
-   - Oppure le variabili singole: `{{company_name}}`, `{{client_name}}`, `{{appointment_date}}`, `{{appointment_time}}`, `{{appointment_time_spoken}}`, `{{appointment_end_time}}`, `{{appointment_address}}`, `{{appointment_notes}}`, `{{appointment_urgent}}` ("URGENTE"/"normale"), `{{urgency_notice}}` (frase pronta sull'urgenza, vuota se non urgente), `{{technician_name}}` (chi effettuerà il sopralluogo).
+   - Oppure le variabili singole: `{{company_name}}`, `{{client_name}}`, `{{appointment_date}}`, `{{appointment_time}}`, `{{appointment_time_spoken}}`, `{{appointment_end_time}}`, `{{appointment_address}}`, `{{appointment_notes}}`, `{{appointment_urgent}}` ("URGENTE"/"normale"), `{{urgency_notice}}` (frase pronta sull'urgenza, vuota se non urgente), `{{technician_name}}` (chi effettuerà il sopralluogo), `{{alternative_disponibili}}` (slot alternativi in testo parlato, uno per riga; vuota se non ce ne sono), `{{alternativa_a}}`, `{{alternativa_b}}`, `{{alternativa_c}}` (singolo slot parlato o vuota), `{{ha_alternative}}` ("si"/"no").
+   - **Slot alternativi in chiamata**: OptiRoute invia fino a 3 slot alternativi già verificati sull'agenda del tecnico. Se il cliente non può nello slot proposto, l'agente li offre uno alla volta e, se ne accetta uno, lo fissa in chiamata (sono le uniche disponibilità che può offrire: non ne inventa altre); l'app poi sposta la pratica da sola. Se nessuno va bene, prende nota della preferenza come prima.
 4. Su Vercel (Settings → Environment Variables) imposta:
    - `RETELL_API_KEY` — API key Retell
    - `RETELL_FROM_NUMBER` — numero in uscita in formato E.164 (es. `+39...`)
    - `RETELL_AGENT_ID` — (opzionale) per forzare un agente specifico
-   - `RETELL_COMPANY_NAME` — (opzionale) nome aziendale pronunciato dall'operatore
+   - `RETELL_COMPANY_NAME` — nome della società che chiama (default "Effetre Properties")
+   - `RETELL_AGENT_NAME` — nome dell'operatrice AI (default "Misi")
+   - `RETELL_MANDANTE` — mandante citato nella presentazione ufficiale (default
+     "Prelios - Banca Intesa"): l'apertura è sempre "sono {nome} di {società}, incaricata
+     per conto di {mandante} per la perizia relativa all'immobile di ..." — così la
+     presentazione è coerente in ogni chiamata
 
 I numeri italiani senza prefisso internazionale vengono normalizzati automaticamente a `+39`.
+
+### Esito automatico della chiamata → stato della pratica
+
+Dopo l'avvio di una chiamata l'app interroga Retell (`api/call-status.ts`, polling ogni ~12
+secondi; anche riaprendo l'app più tardi l'esito viene comunque recuperato) e quando la
+conversazione è conclusa e analizzata **applica da sola l'esito alla pratica**:
+
+| Esito conversazione | Effetto sulla pratica |
+|---|---|
+| Confermato | La proposta passa in **Confermate** (data/orario mantenuti) + badge "✅ Confermato dal cliente" |
+| Accetta uno slot alternativo offerto in chiamata | La pratica viene spostata sullo slot accettato e passa in **Confermate** (se nel frattempo lo slot non è più libero: da riprogrammare) |
+| Chiede un'altra data | Torna **In Attesa** con la richiesta del cliente nelle note + badge "🔁 Da riprogrammare" |
+| Da richiamare | Passa in 📆 **Problematiche · Da richiamare**, con la data indicata come rientro (alert + vincoli smistamento) |
+| Numero errato | 📵 **Problematiche · Numeri non corretti** (anche quando Retell segnala numero non componibile) |
+| Lavori non ultimati | 🚧 **Problematiche · Lavori da ultimare**, con la data fine lavori come rientro |
+| Annullato | Pratica **Annullata** (archivio) |
+| Rifiutato | Passa in **Stand-by** + nota |
+| Indica un altro referente | Il telefono viene sostituito con quello del referente e la pratica torna in coda chiamate (la nuova chiamata si presenta "per conto di...") |
+| Non risponde / segreteria | Stato invariato + badge "📵 Non risponde · da richiamare" |
+| Esito non chiaro | Stato invariato + badge "❓ Esito da verificare" (riassunto AI nel tooltip) |
+
+**Configurazione necessaria sull'agente Retell** (Dashboard → Agent → *Post-Call Analysis*),
+aggiungi questi campi custom:
+
+1. `esito_appuntamento` — tipo *Selector*, opzioni esatte:
+   `confermato`, `riprogrammare`, `da_richiamare`, `numero_errato`, `lavori_non_ultimati`,
+   `annullato`, `rifiutato`, `altro_referente`, `non_risposto`
+   - descrizione suggerita: *"Esito della chiamata di conferma del sopralluogo"*
+   - (per compatibilità è accettato anche il vecchio nome `esito_chiamata`)
+2. `data_rientro` — tipo *Text* — *"Se il cliente ha indicato quando richiamarlo o quando i
+   lavori saranno finiti: AAAA-MM-GG (accettato anche GG/MM); altrimenti vuoto"*
+3. `nuova_data_richiesta` e `nuovo_orario_richiesto` — tipo *Text* — data/orario preferiti se
+   chiede di riprogrammare (testo libero)
+4. `nuovo_referente_nome`, `nuovo_referente_telefono`, `nuovo_referente_ruolo` — tipo *Text* —
+   compilati se il cliente indica un'altra persona da contattare
+5. `note_cliente` — tipo *Text* — annotazioni utili raccolte in chiamata
+6. `alternativa_scelta` — tipo *Selector*, opzioni esatte: `A`, `B`, `C`, `nessuna`
+   - descrizione da incollare: *"Se il cliente ha accettato uno degli slot alternativi offerti
+     in chiamata, la sua lettera; altrimenti nessuna"*
+   - **consigliato ma non indispensabile**: se manca, l'app deduce l'alternativa da sola quando
+     data e ora richieste coincidono con uno slot offerto. Per questo, quando il cliente accetta
+     un'alternativa, `nuova_data_richiesta` e `nuovo_orario_richiesto` vanno comunque compilati
+     con data (AAAA-MM-GG) e ora (HH:MM) dello slot accettato (lo script lo indica già all'analisi,
+     con la corrispondenza lettera → slot)
+   - accettati anche gli alias `alternativa_accettata`, `alternativa`, `slot_scelto`,
+     `chosen_alternative`; valori come "alternativa B" o "opzione c" vengono normalizzati
+
+Lo script inviato all'agente istruisce già l'operatore a chiedere e annotare queste
+informazioni. Senza i campi custom l'automazione resta prudente: classifica solo i segnali
+certi (segreteria, mancata risposta, numero non componibile) e per il resto mostra
+"❓ Esito da verificare" senza toccare lo stato; l'esito si può registrare a mano dalla
+finestra di chiamata ("Registra esito della telefonata").
+
+
+## Pratiche MISI/Prelios e gestionale
+
+- **Import elenco pratiche MISI**: "Importa Excel" accetta anche l'export grezzo dell'elenco
+  perizie (Prelios/Intesa): vengono tenute solo le pratiche **FULL - Acquisto**, con codice,
+  intestatario, indirizzo, progetto e note gestore. Le pratiche già presenti (stesso codice)
+  vengono **aggiornate** (telefono/note/progetto), non duplicate.
+- **Bridge dei portali (`prelios-bridge/`)**: app Python separata che entra su Prelios (login
+  manuale con MFA), recupera il telefono del cliente per ogni perizia e consegna le pratiche
+  all'app: in modalità servizio (`python run_giro.py --serve`) direttamente, senza passaggi
+  manuali; oppure come Excel arricchito da importare
+  (`python run_giro.py elenco.xlsx --out giro_arricchito.xlsx`). La lettura dell'elenco
+  direttamente dal portale non è ancora stata provata sul portale reale: il primo giro va
+  fatto sotto supervisione. **Cerved** non è ancora collegato: il bridge ha la struttura
+  per aggiungerlo e uno strumento (`capture_portal.py`) per rilevarne le pagine in forma
+  anonimizzata. Vedi `prelios-bridge/README.md`.
+- **Sync verso il gestionale Effetre**: i sopralluoghi **confermati** (dal cliente in chiamata,
+  o senza telefono) con orario calcolato vengono inviati al gestionale (Firestore, collection
+  `optiroute_sync`) col pulsante "Sync gestionale" e in automatico **ogni ora**. Ambiente di
+  default: collaudo; produzione con `VITE_SYNC_ENV=production`.
 
 ## Altre variabili d'ambiente
 

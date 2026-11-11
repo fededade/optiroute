@@ -144,7 +144,14 @@ export interface ScheduleOptions {
   startFromBase?: boolean;
   // Minuti del limite di fine giornata (es. 17:30 -> maxEndTimeHours=17, qui 30).
   maxEndTimeMinutes?: number;
+  // Arrotonda per eccesso l'inizio di ogni tappa a multipli di N minuti:
+  // orari "tondi", più naturali da proporre al telefono (9:15 invece di 9:11).
+  // Default 5; 1 (o 0) per gli orari esatti al minuto.
+  roundToMinutes?: number;
 }
+
+// Gli orari delle tappe sono multipli di 5 minuti (salvo diversa richiesta)
+export const DEFAULT_ROUND_TO_MINUTES = 5;
 
 // Async Schedule Calculation using Real Roads
 export const calculateSchedule = async (
@@ -207,6 +214,16 @@ export const calculateSchedule = async (
         travelTime = leg.travelTime;
         currentTime = new Date(currentTime.getTime() + travelTime * 60000);
       }
+    }
+
+    // Orario tondo (prima della pausa pranzo: chi arriva alle 11:58 inizia
+    // alle 12:00 e quindi dopo la pausa, come ogni tappa dalle 12:00 in poi)
+    const roundTo = options.roundToMinutes ?? DEFAULT_ROUND_TO_MINUTES;
+    if (roundTo > 1) {
+      const minutes = currentTime.getHours() * 60 + currentTime.getMinutes() + (currentTime.getSeconds() > 0 ? 1 : 0);
+      const rounded = Math.ceil(minutes / roundTo) * roundTo;
+      currentTime = new Date(currentTime);
+      currentTime.setHours(0, rounded, 0, 0);
     }
 
     let hasLunchBreakBefore = false;

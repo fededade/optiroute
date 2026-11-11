@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+# Modalità servizio: dati personali e segreto locale, MAI nel repository
+bridge_cache.json
+bridge_cache.json.corrotto
+.bridge_cache_*.tmp
+bridge_token.txt
+
+# Catture e dump diagnostici (possono contenere dati personali)
+captures/
+elenco_dump*.json
+campi_*.json

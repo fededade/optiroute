@@ -3,12 +3,58 @@ export interface Coordinates {
   lng: number;
 }
 
-// 'proposed' = data/ora ipotizzate dallo smistamento automatico,
-// in attesa di conferma da parte dell'operatore.
-export type AppointmentStatus = 'confirmed' | 'proposed' | 'pending' | 'standby';
+// 'proposed'  = data/ora ipotizzate dallo smistamento automatico, da confermare.
+// 'issue'     = pratica con problematica (numero errato, da richiamare, lavori).
+// 'cancelled' = pratica annullata (archivio).
+export type AppointmentStatus = 'confirmed' | 'proposed' | 'pending' | 'standby' | 'issue' | 'cancelled';
+
+// Categorie problematiche
+export type IssueType = 'wrong_phone' | 'callback' | 'works_pending';
 
 // Status of the AI confirmation call (Retell AI)
 export type CallStatus = 'calling' | 'called' | 'failed';
+
+// Esito della conversazione (post-call analysis Retell, via polling):
+// determina automaticamente lo stato della pratica.
+export type CallOutcomeResult =
+  | 'confermato'           // il cliente ha confermato l'appuntamento
+  | 'riprogrammare'        // chiede un'altra data/orario
+  | 'da_richiamare'        // chiede di essere ricontattato più avanti
+  | 'numero_errato'        // il numero non corrisponde al cliente
+  | 'lavori_non_ultimati'  // immobile non pronto: sopralluogo rimandato
+  | 'annullato'            // il sopralluogo non serve più (pratica annullata)
+  | 'rifiutato'            // rifiuta l'appuntamento proposto
+  | 'altro_referente'      // indica un'altra persona da contattare
+  | 'non_risposto'         // nessuna risposta / segreteria / non raggiungibile
+  | 'sconosciuto';         // esito non classificabile: verifica manuale
+
+// Slot alternativo REALE (già verificato in agenda) che l'agente AI può
+// offrire in chiamata se il cliente rifiuta la proposta principale.
+export type AlternativeLabel = 'A' | 'B' | 'C';
+export interface AlternativeSlot {
+  label: AlternativeLabel;
+  date: string;      // YYYY-MM-DD
+  startTime: string; // HH:MM
+  endTime: string;   // HH:MM
+}
+
+// Motivo per cui una pratica è in coda al pilota automatico delle chiamate
+export type AutoCallReason = 'route' | 'retry' | 'backfill';
+
+export interface CallOutcome {
+  result: CallOutcomeResult;
+  requestedDate?: string;    // data chiesta dal cliente (testo libero dall'AI)
+  requestedTime?: string;    // orario chiesto dal cliente
+  chosenAlternative?: AlternativeLabel; // alternativa accettata in chiamata (A/B/C)
+  followUpDate?: string;     // data di rientro normalizzata YYYY-MM-DD, se estraibile
+  clientNotes?: string;      // annotazioni raccolte in chiamata
+  newContactName?: string;   // referente alternativo indicato dal cliente
+  newContactPhone?: string;
+  newContactRole?: string;
+  summary?: string;          // riassunto AI della conversazione
+  sentiment?: string;
+  receivedAt: string;        // ISO timestamp di ricezione esito
+}
 
 export interface Appointment {
   id: string;
@@ -31,6 +77,18 @@ export interface Appointment {
   province?: string;     // Sigla provincia (es. "MI"), da Excel o dal geocoding
   comune?: string;       // Comune, quando noto
   urgent?: boolean;      // Tag "urgente": priorità nello smistamento e annuncio in chiamata
+  approximate?: boolean; // Indirizzo esatto non trovato: coordinate al centro del comune
+
+  // Problematiche e rientri
+  issueType?: IssueType;  // valorizzato quando status === 'issue'
+  followUpDate?: string;  // YYYY-MM-DD: data richiamo / fine lavori prevista
+
+  // Dati pratica (perizie MISI/Prelios)
+  shortAddress?: string;  // indirizzo breve "via civico" per la chiamata
+  periziaCode?: string;   // codice pratica (merge/update in import)
+  project?: string;       // progetto/committente della pratica
+  contactPerson?: string; // referente alternativo da contattare (nome + ruolo)
+  referredBy?: string;    // chi ha indicato il referente (intestatario originario)
 
   // Client & appointment details
   phone?: string;           // Client phone number for the AI confirmation call
@@ -41,6 +99,16 @@ export interface Appointment {
   callStatus?: CallStatus;
   callId?: string;   // Retell call id
   calledAt?: string; // ISO timestamp of last call attempt
+  callOutcome?: CallOutcome; // esito della conversazione (arriva col polling)
+  callSummary?: string;      // riassunto AI della chiamata (copia comoda per la UI)
+
+  // Pilota automatico
+  autoCall?: AutoCallReason;      // in coda: la chiamata parte da sola
+  autoCallNotBefore?: string;     // ISO: non chiamare prima di questo istante (retry)
+  callAttempts?: number;          // chiamate senza risposta già fatte per lo slot attuale
+  offeredAlternatives?: AlternativeSlot[]; // alternative offerte nell'ultima chiamata
+  declinedDates?: string[];       // date rifiutate dal cliente: non riproporle
+  backfillOf?: string;            // "rimpiazza <cliente>": slot liberato che sta coprendo
 }
 
 // --- Tecnici / soggetti che effettuano i sopralluoghi ---

@@ -67,6 +67,26 @@ const createPendingIcon = (urgent?: boolean) => {
   });
 };
 
+const createIssueIcon = () => {
+  return L.divIcon({
+    className: 'custom-div-icon',
+    html: `<div style="background-color: #e11d48; width: 24px; height: 24px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); font-weight: bold; font-size: 14px;">⚠</div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    popupAnchor: [0, -10]
+  });
+};
+
+const createCancelledIcon = () => {
+  return L.divIcon({
+    className: 'custom-div-icon',
+    html: `<div style="background-color: #94a3b8; opacity: 0.75; width: 18px; height: 18px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 1px 3px rgba(0,0,0,0.3); font-weight: bold; font-size: 11px;">✕</div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+    popupAnchor: [0, -8]
+  });
+};
+
 const createStandbyIcon = () => {
   return L.divIcon({
     className: 'custom-div-icon',
@@ -227,13 +247,23 @@ const MapComponent: React.FC<MapComponentProps> = ({
         );
     } else if (appt.status === 'standby') {
         return createStandbyIcon();
+    } else if (appt.status === 'issue') {
+        return createIssueIcon();
+    } else if (appt.status === 'cancelled') {
+        return createCancelledIcon();
     } else {
         return createPendingIcon(appt.urgent);
     }
   };
 
   const statusLabel = (s: AppointmentStatus): string =>
-    s === 'confirmed' ? 'Confermato' : s === 'proposed' ? 'Proposto' : s === 'standby' ? 'Stand-by' : 'In attesa';
+    s === 'confirmed' ? 'Confermato' : s === 'proposed' ? 'Proposto' : s === 'standby' ? 'Stand-by'
+      : s === 'issue' ? 'Problematica' : s === 'cancelled' ? 'Annullata' : 'In attesa';
+
+  const issueLabel = (t?: string): string =>
+    t === 'wrong_phone' ? '📵 Numero non corretto'
+      : t === 'works_pending' ? '🚧 Lavori da ultimare'
+      : '📆 Da richiamare';
 
   return (
     <div className="flex flex-col h-full w-full rounded-xl overflow-hidden shadow-lg border border-slate-200 bg-white">
@@ -311,6 +341,16 @@ const MapComponent: React.FC<MapComponentProps> = ({
                           {statusLabel(appt.status)}: da confermare
                         </span>
                       )}
+                      {appt.status === 'issue' && (
+                        <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded">
+                          {issueLabel(appt.issueType)}
+                        </span>
+                      )}
+                      {appt.status === 'cancelled' && (
+                        <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-300 px-1.5 py-0.5 rounded">
+                          ✖ Annullata
+                        </span>
+                      )}
                       {tech && (
                         <span className="text-[10px] font-bold text-white px-1.5 py-0.5 rounded" style={{ backgroundColor: tech.color }}>
                           {tech.name}
@@ -318,7 +358,18 @@ const MapComponent: React.FC<MapComponentProps> = ({
                       )}
                     </div>
                     <p className="mt-1">{appt.address}</p>
+                    {appt.approximate && (
+                      <p className="mt-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                        ≈ Posizione approssimativa: pin al centro del comune (indirizzo esatto non trovato)
+                      </p>
+                    )}
                     {appt.phone && <p className="mt-1 text-xs text-slate-500">📞 {appt.phone}</p>}
+                    {appt.followUpDate && appt.status === 'issue' && (
+                      <p className="mt-1 text-xs font-bold text-amber-700">🔔 Rientra il {appt.followUpDate}</p>
+                    )}
+                    {appt.callSummary && (
+                      <p className="mt-1 text-xs text-slate-500 italic">🤖 {appt.callSummary}</p>
+                    )}
 
                     {isScheduled && appt.startTime && (
                         <div className="mt-2 text-xs bg-slate-100 p-1 rounded">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { Appointment, Technician } from '../types';
+import type { Appointment, IssueType, Technician } from '../types';
 import { geocodeAddress } from '../services/geocodingService';
 import { parseAddressInput } from '../services/geminiService';
 import { matchTechnician } from '../services/technicianService';
@@ -15,6 +15,24 @@ interface AppointmentModalProps {
 const AUTO_TECH = '__auto__';
 const NO_TECH = '__none__';
 
+// Categoria della pratica: normale, problematica (3 tipi) o annullata
+const CATEGORY_NONE = 'none';
+const CATEGORY_CANCELLED = 'cancelled';
+const CATEGORY_OPTIONS: { value: string; label: string }[] = [
+  { value: CATEGORY_NONE, label: 'Nessuna (pratica normale)' },
+  { value: 'wrong_phone', label: '📵 Numero non corretto (da richiedere)' },
+  { value: 'callback', label: '📆 Da richiamare' },
+  { value: 'works_pending', label: '🚧 Lavori da ultimare' },
+  { value: CATEGORY_CANCELLED, label: '✖ Pratica annullata' },
+];
+
+const followUpLabel = (category: string): string => {
+  if (category === 'callback') return 'Data richiamo concordata';
+  if (category === 'works_pending') return 'Data prevista fine lavori';
+  if (category === 'wrong_phone') return 'Data ricontatto (opzionale)';
+  return 'Non pianificare prima del (opzionale)';
+};
+
 const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technicians, onSave, onClose }) => {
   const isEdit = !!initial;
 
@@ -29,6 +47,12 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
       ? initial.technicianId
       : AUTO_TECH
   );
+  const [category, setCategory] = useState<string>(
+    initial?.status === 'issue' ? (initial.issueType || 'callback')
+      : initial?.status === 'cancelled' ? CATEGORY_CANCELLED
+      : CATEGORY_NONE
+  );
+  const [followUpDate, setFollowUpDate] = useState(initial?.followUpDate || '');
 
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
@@ -55,6 +79,7 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
       let displayAddress = initial?.address || '';
       let province = initial?.province;
       let comune = initial?.comune;
+      let approximate = initial?.approximate;
 
       // Geocode only when the address is new or was changed
       const addressChanged = !initial || trimmedAddress !== initial.address;
@@ -70,6 +95,7 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
         displayAddress = result.displayName;
         province = result.province || province;
         comune = result.comune || comune;
+        approximate = undefined; // indirizzo trovato con precisione: via il flag
       }
 
       const parsedDuration = parseInt(duration, 10);
@@ -96,8 +122,33 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
         province,
         comune,
         urgent: urgent || undefined,
+        approximate,
         technicianId,
+        followUpDate: followUpDate || undefined,
       };
+
+      // Categoria: problematica/annullata esce dalla pianificazione; tornando
+      // a "normale" da problematica/annullata la pratica riparte da "in attesa"
+      const clearSchedule = () => {
+        appointment.date = undefined;
+        appointment.sequenceOrder = undefined;
+        appointment.startTime = undefined;
+        appointment.endTime = undefined;
+      };
+      if (category === CATEGORY_CANCELLED) {
+        appointment.status = 'cancelled';
+        appointment.issueType = undefined;
+        clearSchedule();
+      } else if (category !== CATEGORY_NONE) {
+        appointment.status = 'issue';
+        appointment.issueType = category as IssueType;
+        clearSchedule();
+      } else {
+        appointment.issueType = undefined;
+        if (initial && (initial.status === 'issue' || initial.status === 'cancelled')) {
+          appointment.status = 'pending';
+        }
+      }
 
       onSave(appointment);
       onClose();
@@ -161,6 +212,12 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
             {initial?.province && (
               <p className="text-[11px] text-slate-400 mt-1">Provincia rilevata: {provinceLabel(initial.province)}</p>
             )}
+            {initial?.approximate && (
+              <p className="text-[11px] text-amber-600 mt-1">
+                ≈ Posizione approssimativa (centro del comune): l'indirizzo esatto non è stato trovato
+                sulle mappe. Modificalo (es. controlla via e civico) per riposizionare il pin.
+              </p>
+            )}
           </div>
 
           <div className="flex gap-3">
@@ -206,6 +263,36 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
               priorità nello smistamento; l'operatore AI lo dichiara in chiamata
             </span>
           </label>
+
+          <div className={`rounded-lg border p-2.5 space-y-2 ${category === CATEGORY_NONE ? 'bg-slate-50 border-slate-200' : category === CATEGORY_CANCELLED ? 'bg-slate-100 border-slate-300' : 'bg-rose-50 border-rose-200'}`}>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Categoria / Problematica</label>
+              <select
+                value={category}
+                onChange={e => setCategory(e.target.value)}
+                className="w-full px-2 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+              >
+                {CATEGORY_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            {category !== CATEGORY_CANCELLED && (
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{followUpLabel(category)}</label>
+                <input
+                  type="date"
+                  value={followUpDate}
+                  onChange={e => setFollowUpDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                />
+                <p className="text-[11px] text-slate-400 mt-1 leading-tight">
+                  Dal giorno prima comparirà l'alert "slot da riservare"; lo smistamento automatico
+                  non propone mai date precedenti.
+                </p>
+              </div>
+            )}
+          </div>
 
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Note</label>

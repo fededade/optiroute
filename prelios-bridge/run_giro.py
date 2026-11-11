@@ -11,6 +11,11 @@ USO:
     python run_giro.py elenco.xlsx --out giro_arricchito.xlsx
     python run_giro.py elenco.xlsx --dry-run           # senza Prelios (test)
     python run_giro.py elenco.xlsx --user-id 8468       # override User ID Prelios
+
+MODALITÀ SERVIZIO (consegna diretta alla web app, vedi servizio.py):
+    python run_giro.py --serve                          # elenco letto dal portale
+    python run_giro.py --serve elenco.xlsx              # elenco dal file
+    python run_giro.py --serve --port 8765 --interval 30 --portal prelios
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import sys
 import traceback
 from pathlib import Path
 
+from bridge_cache import componi_note
 from excel_pratiche import Pratica, load_pratiche
 
 # User ID Prelios di default (per mouseClickObj). Sovrascrivibile da --user-id.
@@ -34,10 +40,8 @@ COLONNE_OUTPUT = [
 # --- Output ---------------------------------------------------------------
 
 def _componi_note(pratica: Pratica, nota_contatto: str = "") -> str:
-    parti = [p for p in (pratica.progetto, pratica.note_gestore) if p]
-    if nota_contatto and all(nota_contatto not in p for p in parti):
-        parti.append(f"Contatto Prelios: {nota_contatto[:200]}")
-    return " | ".join(parti)
+    # Stessa composizione usata dalla modalità servizio (bridge_cache.py)
+    return componi_note(pratica, nota_contatto)
 
 
 def _riga_output(pratica: Pratica, telefono: str, esito: str,
@@ -90,16 +94,9 @@ def processa_pratica(browser, pratica: Pratica, user_id: str) -> tuple[str, str,
 
     Returns: (telefono, esito, nota_contatto).
     """
-    import prelios
+    from portals import PreliosAdapter
 
-    if not prelios.search_perizia(browser, pratica.codice):
-        return "", "KO perizia non trovata", ""
-    if not prelios.open_perizia(browser, pratica.codice, user_id):
-        return "", "KO apertura fallita", ""
-
-    telefono, nota_contatto = prelios.extract_phone(browser)
-    esito = "OK" if telefono else "OK (telefono non trovato)"
-    return telefono, esito, nota_contatto
+    return PreliosAdapter(user_id=user_id).enrich(browser, pratica)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -107,7 +104,10 @@ def main(argv: list[str] | None = None) -> int:
         description="Arricchisce l'elenco pratiche (FULL - Acquisto) con i "
                     "telefoni da Prelios e produce l'Excel per OptiRoute."
     )
-    parser.add_argument("elenco", help="File elenco pratiche (.xlsx/.tsv/.csv)")
+    parser.add_argument("elenco", nargs="?", default=None,
+                        help="File elenco pratiche (.xlsx/.tsv/.csv). "
+                             "Obbligatorio, tranne con --serve (dove, se "
+                             "omesso, l'elenco viene letto dal portale)")
     parser.add_argument("--out", default="giro_arricchito.xlsx",
                         help="File Excel di output (default: %(default)s)")
     parser.add_argument("--dry-run", action="store_true",
@@ -118,8 +118,40 @@ def main(argv: list[str] | None = None) -> int:
                              "(default: %(default)s)")
     parser.add_argument("--limit", type=int, default=0,
                         help="Lavora solo le prime N pratiche (0 = tutte). "
-                             "Utile per il primo test su Prelios.")
+                             "Utile per il primo test su Prelios. Con --serve "
+                             "vale per ciclo.")
+    servizio = parser.add_argument_group("modalità servizio")
+    servizio.add_argument("--serve", action="store_true",
+                          help="Resta in esecuzione e consegna i dati alla web "
+                               "app OptiRoute via HTTP locale (127.0.0.1)")
+    servizio.add_argument("--port", type=int, default=8765,
+                          help="Porta HTTP locale (default: %(default)s)")
+    servizio.add_argument("--interval", type=float, default=30,
+                          help="Minuti fra due cicli (default: %(default)s)")
+    servizio.add_argument("--portal", default="prelios",
+                          help="Portale: prelios | cerved (default: %(default)s)")
     args = parser.parse_args(argv)
+
+    if args.serve:
+        from servizio import esegui_servizio
+        return esegui_servizio(args)
+
+    if not args.elenco:
+        parser.error("indicare il file elenco (oppure usare --serve)")
+
+    if args.portal.strip().lower() != "prelios":
+        from portals import PortaleNonConfigurato, get_adapter
+        try:
+            get_adapter(args.portal, user_id=args.user_id)
+        except PortaleNonConfigurato as e:
+            print(str(e))
+            return 5
+        except KeyError as e:
+            print(f"ERRORE: {e}")
+            return 2
+        print("ERRORE: il giro classico (Excel di output) è disponibile solo "
+              "per Prelios; per gli altri portali usare --serve.")
+        return 2
 
     pratiche = load_pratiche(args.elenco)
     print(f"Pratiche FULL - Acquisto trovate: {len(pratiche)}")

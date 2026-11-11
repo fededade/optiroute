@@ -276,6 +276,63 @@ def parse_rows(rows: Iterable[Sequence],
     return pratiche
 
 
+def parse_grid_rows(rows: Iterable[Sequence],
+                    solo_tipologia: str | None = TIPOLOGIA_TARGET,
+                    stats: dict | None = None) -> list[Pratica]:
+    """Parsa righe gia' in memoria lette dalla GRIGLIA del portale (non da file).
+
+    Usa SEMPRE l'euristica ancorata alla cella Tipologia (stessi offset e
+    stesso filtro FULL - Acquisto di `parse_rows` senza header): le righe
+    lette dal DOM possono contenere intestazioni ripetute, righe di layout,
+    totali e la stessa griglia vista da piu' frame, quindi la risoluzione per
+    nome delle colonne non e' affidabile. In piu' rispetto ai file:
+    - le righe senza codice pratica riconoscibile sono scartate (non si
+      potrebbero cercare sul portale);
+    - deduplica sul codice (tiene la prima occorrenza).
+
+    `load_pratiche`/`parse_rows` NON cambiano comportamento.
+
+    Args:
+        rows: righe come liste di testi delle celle.
+        solo_tipologia: tipologia normalizzata da tenere; None per non filtrare.
+        stats: se passato, viene riempito con i contatori (righe, con_tipologia,
+            altre_tipologie, senza_codice, duplicate, pratiche).
+    """
+    contatori = {"righe": 0, "con_tipologia": 0, "altre_tipologie": 0,
+                 "senza_codice": 0, "duplicate": 0, "pratiche": 0}
+    target = normalizza_tipologia(solo_tipologia) if solo_tipologia else None
+    visti: set[str] = set()
+    pratiche: list[Pratica] = []
+
+    for row in rows:
+        row = list(row)
+        contatori["righe"] += 1
+        if not any(_cell_str(c) for c in row):
+            continue
+        col_t = _trova_colonna_tipologia(row)
+        if col_t < 0:
+            continue  # intestazione, riga di layout, totali, paginazione...
+        contatori["con_tipologia"] += 1
+        tipologia = normalizza_tipologia(_get(row, col_t))
+        if target and tipologia != target:
+            contatori["altre_tipologie"] += 1
+            continue
+        pratica = _pratica_da_riga_euristica(row, col_t)
+        if not pratica.codice:
+            contatori["senza_codice"] += 1
+            continue
+        if pratica.codice in visti:
+            contatori["duplicate"] += 1
+            continue
+        visti.add(pratica.codice)
+        pratiche.append(pratica)
+
+    contatori["pratiche"] = len(pratiche)
+    if stats is not None:
+        stats.update(contatori)
+    return pratiche
+
+
 # === LETTURA FILE ===
 
 def _leggi_excel(path: Path) -> list[list[object]]:

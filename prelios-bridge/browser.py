@@ -6,13 +6,18 @@ così i due possono anche coesistere senza pestarsi i piedi.
 
 Logica ripresa da browser_session.py di MISI, ridotta al minimo necessario
 per il recupero telefoni (login, navigazione, lettura campi).
+
+Chrome viene cercato nei percorsi tipici di Windows, macOS e Linux; la
+variabile d'ambiente CHROME_PATH permette di indicarne uno diverso.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -31,6 +36,24 @@ CHROME_PATHS = [
     os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
 ]
 
+# Chrome su macOS
+CHROME_PATHS_MAC = [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+]
+
+# Chrome/Chromium su Linux: nomi cercati nel PATH, poi percorsi tipici
+CHROME_NAMES_LINUX = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
+CHROME_PATHS_LINUX = [
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/opt/google/chrome/chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/snap/bin/chromium",
+]
+
 # Porta e profilo DEDICATI al bridge (MISI usa 9222 / chrome_prelios_debug):
 # così il bridge è indipendente e può girare anche con MISI aperto.
 DEBUG_PORT = 9223
@@ -40,10 +63,35 @@ PROFILE_DIR = os.path.join(
 
 
 def _find_chrome() -> str:
-    for path in CHROME_PATHS:
+    """Percorso di Chrome. Ordine: variabile d'ambiente CHROME_PATH (override
+    esplicito), poi i percorsi del sistema operativo corrente. Su Windows il
+    comportamento è quello di sempre (percorsi standard, poi 'chrome.exe')."""
+    override = os.environ.get("CHROME_PATH", "").strip().strip('"')
+    if override:
+        if not os.path.exists(override):
+            print(f"ATTENZIONE: CHROME_PATH={override} non esiste; provo comunque.")
+        return override
+
+    if sys.platform.startswith("win"):
+        for path in CHROME_PATHS:
+            if os.path.exists(path):
+                return path
+        return "chrome.exe"
+
+    if sys.platform == "darwin":
+        for path in CHROME_PATHS_MAC:
+            if os.path.exists(path):
+                return path
+        return CHROME_PATHS_MAC[0]
+
+    for name in CHROME_NAMES_LINUX:
+        found = shutil.which(name)
+        if found:
+            return found
+    for path in CHROME_PATHS_LINUX:
         if os.path.exists(path):
             return path
-    return "chrome.exe"
+    return "google-chrome"
 
 
 class PreliosBrowser:

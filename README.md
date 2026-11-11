@@ -43,15 +43,78 @@ bridge (indirizzo e token, stampato dal bridge al primo avvio). L'opzione "Chiam
 approvazione" salta il punto 3: è spenta di default.
 
 Da sapere:
-- Il pilota lavora **finché l'app è aperta in una scheda del browser** (anche in secondo
-  piano). Con più schede aperte gli automatismi girano in una sola, per non chiamare due
-  volte lo stesso cliente.
+- Senza il cloud il pilota lavora **finché l'app è aperta in una scheda del browser**
+  (anche in secondo piano). Con il cloud attivo (sezione sotto) chiamate, richiami, esiti
+  e rimpiazzi proseguono anche a browser chiuso. Con più schede aperte gli automatismi
+  girano in una sola, per non chiamare due volte lo stesso cliente.
+- Alternative e rimpiazzi valgono **dal giorno dopo**: il giro di oggi non viene toccato,
+  perché il tecnico è già in strada. L'opzione "Consenti cambi per il giorno stesso" lo
+  permette (con l'anticipo minimo), per chi segue il giro in tempo reale.
 - A pilota spento l'app funziona come prima: smistamento e chiamate si avviano a mano.
 - Per leggere il bridge locale da un sito https serve Chrome o Edge (al primo accesso il
   browser chiede il permesso di raggiungere la rete locale).
 - Sull'agente Retell è consigliato aggiungere il campo di analisi `alternativa_scelta`
   (vedi sotto).
 - Gli orari proposti sono arrotondati ai 5 minuti.
+
+## Pilota in cloud: anche a browser chiuso
+
+Di base pratiche e pilota vivono nel browser. Attivando il cloud passano sul server
+(Vercel): il motore continua a chiamare, richiamare, applicare gli esiti e riempire gli slot
+liberati anche con il PC spento, e gli stessi dati si vedono da più computer.
+
+**Attivazione (una volta sola)**
+
+1. **Database**: su Vercel, nel progetto, scheda *Storage* → crea un database **Upstash
+   Redis** (piano gratuito) e collegalo al progetto. Scegli una regione europea: conterrà
+   nomi e telefoni dei clienti.
+2. **Chiave**: in *Settings → Environment Variables* aggiungi `CRON_SECRET` con una chiave
+   casuale lunga (almeno 32 caratteri, solo lettere e numeri), per Production e Preview.
+3. **Nuovo deploy** (le variabili valgono dal deploy successivo).
+4. **Nell'app**: ⚙ del pilota → sezione *Cloud* → incolla la chiave → "Prova collegamento"
+   (controlla chiave, database, Retell, fuso orario, scheduler) → "Attiva il cloud su
+   questo browser". Il primo browser carica le sue pratiche; gli altri, inserita la chiave,
+   le ritrovano.
+5. **Facoltativo ma consigliato**: in Retell imposta come webhook l'indirizzo mostrato
+   nella stessa sezione. Così a fine chiamata il motore viene avvisato subito, invece di
+   aspettare il passaggio successivo.
+
+**Come lavora**
+
+- Lo scheduler di Vercel sveglia il motore **ogni 15 minuti** fra le 7 e le 21 (ora
+  italiana); è la frequenza massima del piano gratuito, con un piano Pro si può scendere
+  modificando `schedules` in `vercel.json`. A browser aperto l'app chiede un passaggio ogni
+  30 secondi, quindi tutto resta immediato.
+- Il motore è lo stesso del browser (stessi riduttori, stessi test). Ogni scrittura è
+  protetta: una pratica non può essere chiamata due volte e una modifica dell'operatore
+  arrivata nel mezzo non va persa.
+- Restano nel browser lo smistamento automatico e l'arrivo delle pratiche dal bridge
+  (girano su un solo dispositivo alla volta). L'invio dei confermati al gestionale lo fa
+  anche il server, al massimo una volta l'ora.
+- "Pausa" ferma i lanci anche sul cloud. "Scollega questo browser" riporta quel browser ai
+  soli dati locali, con il pilota locale spento: il motore sul cloud continua.
+
+**Sicurezza**
+
+- Un'unica chiave (`CRON_SECRET`): la usano lo scheduler e l'app, viaggia solo nelle
+  intestazioni. Quando è impostata, anche le API delle chiamate (`/api/retell-call`,
+  `/api/call-status`) la richiedono: prima chiunque conoscesse l'indirizzo poteva far
+  partire telefonate.
+- I dati di produzione e quelli delle anteprime (preview) sono separati.
+- Nei log del server non finiscono nomi, telefoni o indirizzi.
+
+**Per chi sviluppa**
+
+- Sorgenti in `server/`; le due funzioni `api/cloud.js` e `api/cloud-tick.js` sono bundle
+  generati da `npm run build:api` (su Vercel gli import fra file TypeScript non sono
+  affidabili) e vanno committati: un test fallisce se non corrispondono ai sorgenti.
+- `npm run dev:cloud` avvia un server locale con archivio in memoria e Retell finto per le
+  prove (istruzioni in testa a `scripts/dev-cloud-server.mjs`).
+- I test non possono raggiungere servizi veri: ogni richiesta di rete non locale è bloccata.
+
+**Non ancora verificato dal vivo**: Upstash e Vercel reali (compreso lo scheduler, che su
+Vercel è un servizio in beta) e i webhook di Retell. La sezione Cloud dell'app mostra se
+ogni pezzo risponde.
 
 ## Funzionalità principali
 

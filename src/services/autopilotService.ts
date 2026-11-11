@@ -9,6 +9,7 @@ import {
   findFeasibleSlots,
   getDayRoute,
   isInRoute,
+  localDateStr,
   placeAppointment,
   removeFromRoute,
   toMin,
@@ -32,6 +33,9 @@ export interface AutopilotSettings {
   offerAlternatives: boolean;  // true
   backfill: boolean;           // true
   minLeadHours: number;        // 3: non proporre/riempire slot che iniziano entro N ore
+  // false: alternative e rimpiazzi mai per il giorno stesso (il tecnico è già
+  // in giro e potrebbe non saperlo in tempo). true: ammessi, con l'anticipo minimo.
+  sameDayChanges: boolean;
   autoDispatch: boolean;       // true (usato dalla UI)
   dispatchHorizonDays: number; // 14 (usato dalla UI)
   autoApprove: boolean;        // false (usato dalla UI): chiama le nuove proposte senza attendere l'approvazione del giro
@@ -47,6 +51,7 @@ export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
   offerAlternatives: true,
   backfill: true,
   minLeadHours: 3,
+  sameDayChanges: false,
   autoDispatch: true,
   dispatchHorizonDays: 14,
   autoApprove: false,
@@ -229,6 +234,7 @@ export const alternativesForCall = (appt: Appointment, all: Appointment[], ctx: 
     now: ctx.now,
     fallback: ctx.fallback,
     minLeadMinutes: ctx.settings.minLeadHours * 60,
+    skipToday: !ctx.settings.sameDayChanges,
   });
 };
 
@@ -510,6 +516,8 @@ export const reduceCallOutcome = (
 // rimpiazzi (il giorno da cui arriva un anticipo viene solo risequenziato).
 const backfillSlot = (all: Appointment[], freed: FreedSlot, leftId: string, ctx: PlanningContext): Appointment[] => {
   if (!freed.technicianId) return all;
+  // Giro di oggi: senza l'opzione dedicata non si aggiungono tappe a un tecnico già in strada
+  if (!ctx.settings.sameDayChanges && freed.date === localDateStr(ctx.now)) return all;
   const tech = techById(ctx.technicians, freed.technicianId);
   const day = dayContextFor(tech, freed.date, ctx.fallback);
   if (!day) return all;

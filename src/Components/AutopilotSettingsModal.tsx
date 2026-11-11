@@ -96,7 +96,7 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
   const row = 'flex items-center justify-between gap-3 py-1.5';
   const label = 'text-sm text-slate-700';
   const numInput = 'w-20 px-2 py-1 rounded border border-slate-300 text-sm text-right';
-  const check = (key: 'callSaturday' | 'offerAlternatives' | 'backfill' | 'autoDispatch' | 'autoApprove', text: React.ReactNode, hint?: string) => (
+  const check = (key: 'callSaturday' | 'offerAlternatives' | 'backfill' | 'sameDayChanges' | 'autoDispatch' | 'autoApprove', text: React.ReactNode, hint?: string) => (
     <label className={`${row} cursor-pointer`}>
       <span className={label}>
         {text}
@@ -143,6 +143,7 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
               </span>
               <input type="number" min={0} max={72} value={nums.minLeadHours} onChange={e => setNums(n => ({ ...n, minLeadHours: e.target.value }))} className={numInput} />
             </div>
+            {check('sameDayChanges', 'Consenti cambi per il giorno stesso', 'Spento: alternative e rimpiazzi valgono solo dal giorno dopo. Accendilo solo se i tecnici vedono in tempo reale le modifiche al giro.')}
           </section>
 
           <section>

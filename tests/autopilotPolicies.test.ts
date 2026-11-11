@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Appointment } from '../src/types';
 import {
+  alternativesForCall,
   approveForCalling,
   attentionItems,
   reduceCallLaunchResult,
@@ -135,5 +136,42 @@ describe('orari tondi nelle proposte', () => {
     const lunch = round.scheduled.filter(a => a.hasLunchBreakBefore);
     expect(lunch.length).toBe(1);
     expect(min(lunch[0].startTime)).toBeGreaterThanOrEqual(12 * 60 + 45);
+  });
+});
+
+describe('cambi per il giorno stesso', () => {
+  // Oggi (mercoledì 11/11) alle 9:00: un giro per oggi pomeriggio e uno per venerdì
+  const today = '2026-11-11';
+  const now = at(today, '09:00');
+  const world = (): Appointment[] => [
+    stop('oggi1', today, '15:00', '15:20', P.milano),
+    stop('x', today, '16:00', '16:20', P.portaVenezia, { title: 'Cliente X', callStatus: 'called', callId: 'k' }),
+    stop('ven1', D, '10:00', '10:20', P.sesto),
+    appt({ id: 'attesa', coords: P.portaVenezia, technicianId: 'tech-1', phone: '+390211111111' }),
+  ];
+
+  it('di default niente alternative né rimpiazzi per oggi', () => {
+    const ctx = planning(now);
+    const all = world();
+    const alts = alternativesForCall(byId(all, 'ven1'), all, ctx);
+    expect(alts.length).toBeGreaterThan(0);
+    expect(alts.some(a => a.date === today)).toBe(false);
+    // lo slot di oggi alle 16:00 si libera: nessuno viene aggiunto al giro di oggi
+    const out = reduceCallOutcome(all, 'x', outcome('rifiutato'), 'k', ctx);
+    expect(byId(out, 'x').status).toBe('standby');
+    expect(byId(out, 'attesa')).toMatchObject({ status: 'pending' });
+    expect(byId(out, 'attesa').date).toBeUndefined();
+  });
+
+  it('con l\'opzione accesa sono ammessi, rispettando l\'anticipo minimo', () => {
+    const ctx = planning(now, { sameDayChanges: true });
+    const all = world();
+    expect(alternativesForCall(byId(all, 'ven1'), all, ctx).some(a => a.date === today)).toBe(true);
+    const out = reduceCallOutcome(all, 'x', outcome('rifiutato'), 'k', ctx);
+    expect(byId(out, 'attesa')).toMatchObject({ status: 'proposed', date: today, autoCall: 'backfill' });
+    // a meno di 3 ore dallo slot nemmeno con l'opzione accesa
+    const late = planning(at(today, '14:00'), { sameDayChanges: true });
+    const out2 = reduceCallOutcome(all, 'x', outcome('rifiutato'), 'k', late);
+    expect(byId(out2, 'attesa').status).toBe('pending');
   });
 });

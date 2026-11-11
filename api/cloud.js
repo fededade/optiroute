@@ -1351,7 +1351,7 @@ var computeAlternativeSlots = (appt, all, technicians, opts) => {
   const currentStart = appt.date && appt.startTime ? toMin(appt.startTime) : null;
   const duration = durationOf(appt);
   const candidates = [];
-  for (let i = 0; i <= horizonDays; i++) {
+  for (let i = opts.skipToday ? 1 : 0; i <= horizonDays; i++) {
     const date = addDaysStr(today, i);
     if (!includeWeekends && isWeekend(date)) continue;
     if (appt.declinedDates?.includes(date)) continue;
@@ -1433,6 +1433,7 @@ var DEFAULT_AUTOPILOT_SETTINGS = {
   offerAlternatives: true,
   backfill: true,
   minLeadHours: 3,
+  sameDayChanges: false,
   autoDispatch: true,
   dispatchHorizonDays: 14,
   autoApprove: false
@@ -1516,7 +1517,8 @@ var alternativesForCall = (appt, all, ctx) => {
   return computeAlternativeSlots(appt, [...all, ...reservedOfferStops(all, ctx.now, appt.id)], ctx.technicians, {
     now: ctx.now,
     fallback: ctx.fallback,
-    minLeadMinutes: ctx.settings.minLeadHours * 60
+    minLeadMinutes: ctx.settings.minLeadHours * 60,
+    skipToday: !ctx.settings.sameDayChanges
   });
 };
 var reduceCallStarted = (all, id, alternatives, now) => all.map(
@@ -1717,6 +1719,7 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
 };
 var backfillSlot = (all, freed, leftId, ctx) => {
   if (!freed.technicianId) return all;
+  if (!ctx.settings.sameDayChanges && freed.date === localDateStr(ctx.now)) return all;
   const tech = techById(ctx.technicians, freed.technicianId);
   const day = dayContextFor(tech, freed.date, ctx.fallback);
   if (!day) return all;

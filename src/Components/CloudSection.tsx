@@ -63,12 +63,18 @@ const runCloudChecks = async (key: string): Promise<{ checks: CloudCheck[]; webh
   checks.push(st.timezone?.ok
     ? { id: 'tz', state: 'ok', label: 'Fuso orario del server', detail: `Corretto (${st.timezone.zone}).` }
     : { id: 'tz', state: 'ko', label: 'Fuso orario del server', detail: `Non corretto (${st.timezone?.zone || 'sconosciuto'}): le fasce orarie delle chiamate non sarebbero rispettate.` });
+  // Sulle anteprime (Preview) Vercel crea gli Schedules spenti: vanno accesi a mano.
+  // In produzione partono accesi. Senza questa indicazione la prova "a browser
+  // chiuso" su un'anteprima sembra un guasto.
+  const schedulerHelp = st.env === 'preview'
+    ? ' Questa è un\'anteprima (Preview): qui Vercel crea lo scheduler spento. Per provare a browser chiuso accendilo da Vercel → Schedules → Environment: Preview → questo ramo → "pilota-automatico" → menu accanto a "Run Schedule" → Enable. In produzione è acceso da solo.'
+    : ' Controlla gli Schedules del progetto su Vercel.';
   if (!st.schedulerSeenAt) {
-    checks.push({ id: 'scheduler', state: 'ko', label: 'Scheduler visto di recente', detail: 'Non ancora visto. Passa ogni 15 minuti fra le 7 e le 21: il primo passaggio arriva in quella fascia. Senza scheduler il pilota avanza solo a browser aperto.' });
+    checks.push({ id: 'scheduler', state: 'ko', label: 'Scheduler visto di recente', detail: `Non ancora visto. Passa ogni 15 minuti fra le 7 e le 21 (può tardare fino a 15 minuti): il primo passaggio arriva in quella fascia. Senza scheduler il pilota avanza solo a browser aperto.${st.env === 'preview' ? schedulerHelp : ''}` });
   } else if (schedulerFresh(st.schedulerSeenAt, Date.now())) {
     checks.push({ id: 'scheduler', state: 'ok', label: 'Scheduler visto di recente', detail: `Ultimo passaggio ${fmtWhen(st.schedulerSeenAt)}: si può chiudere il browser.` });
   } else {
-    checks.push({ id: 'scheduler', state: 'ko', label: 'Scheduler visto di recente', detail: `Ultimo passaggio ${fmtWhen(st.schedulerSeenAt)}, da troppo tempo (dovrebbe passare ogni 15 minuti fra le 7 e le 21): a browser chiuso il pilota non avanza. Controlla gli Schedules del progetto su Vercel.` });
+    checks.push({ id: 'scheduler', state: 'ko', label: 'Scheduler visto di recente', detail: `Ultimo passaggio ${fmtWhen(st.schedulerSeenAt)}, da troppo tempo (dovrebbe passare ogni 15 minuti fra le 7 e le 21): a browser chiuso il pilota non avanza.${schedulerHelp}` });
   }
   checks.push(st.webhookSeenAt
     ? { id: 'webhook', state: 'ok', label: 'Avvisi di fine chiamata da Retell', detail: `Ultimo avviso ${fmtWhen(st.webhookSeenAt)}.` }

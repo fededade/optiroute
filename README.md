@@ -82,9 +82,17 @@ liberati anche con il PC spento, e gli stessi dati si vedono da più computer.
 **Come lavora**
 
 - Lo scheduler di Vercel sveglia il motore **ogni 15 minuti** fra le 7 e le 21 (ora
-  italiana); è la frequenza massima del piano gratuito, con un piano Pro si può scendere
-  modificando `schedules` in `vercel.json`. A browser aperto l'app chiede un passaggio ogni
+  italiana), con un ritardo che sul piano gratuito può arrivare a 15 minuti; è la
+  frequenza massima di quel piano, con un piano Pro si può scendere modificando
+  `schedules` in `vercel.json`. A browser aperto l'app chiede un passaggio ogni
   30 secondi, quindi tutto resta immediato.
+- **In produzione lo scheduler parte acceso. Sulle anteprime (Preview) Vercel lo crea
+  spento**, perché un ramo di prova non faccia partire lavori veri per sbaglio: lì il
+  pilota avanza solo a browser aperto finché non lo accendi da Vercel → *Schedules* →
+  *Environment: Preview* → il ramo → `pilota-automatico` → menu accanto a *Run Schedule*
+  → *Enable* (o *Enable for 24 Hours*). *Run Schedule* fa un passaggio subito e nella
+  cronologia si vede se è andato a buon fine. La sezione Cloud dell'app lo ricorda quando
+  rileva di essere su un'anteprima.
 - Il motore è lo stesso del browser (stessi riduttori, stessi test). Ogni scrittura è
   protetta: una pratica non può essere chiamata due volte e una modifica dell'operatore
   arrivata nel mezzo non va persa.

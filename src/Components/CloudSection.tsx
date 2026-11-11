@@ -4,9 +4,14 @@ import type { CloudConfig } from '../services/cloudProtocol';
 import type { CloudSettings } from '../services/cloudSettings';
 import { cloudPing, cloudStatus, describeCloudFailure } from '../services/cloudSync';
 import { replaceCloudData, schedulerFresh, startActivation } from '../services/cloudSyncCore';
+import {
+  Activity, Check, CircleAlert, CircleCheck, CircleDashed, CircleX, Cloud, CloudDownload, CloudUpload, Copy, Info,
+  KeyRound, TriangleAlert, Unplug, type LucideIcon,
+} from 'lucide-react';
+import { Spinner, ic } from './modal/parts';
 
 // Sezione "Cloud" delle impostazioni del pilota: chiave di accesso, prova del
-// collegamento (elenco di controlli ✓/✗), indirizzo del webhook per Retell,
+// collegamento (elenco di controlli con stato), indirizzo del webhook per Retell,
 // attivazione su questo browser e scollegamento. Le azioni hanno effetto
 // subito (non passano dal "Salva" della modale).
 
@@ -75,10 +80,18 @@ const runCloudChecks = async (key: string): Promise<{ checks: CloudCheck[]; webh
   return { checks, webhookUrl };
 };
 
-const CHECK_ICON: Record<CheckState, { icon: string; cls: string }> = {
-  ok: { icon: '✓', cls: 'text-emerald-600' },
-  ko: { icon: '✗', cls: 'text-rose-600' },
-  info: { icon: '○', cls: 'text-slate-400' },
+// Stato di ogni controllo: icona, colore e etichetta leggibile. Il simbolo
+// testuale (✓ ✗ ○) resta per le tecnologie assistive e per le prove.
+const CHECK_ICON: Record<CheckState, { icon: LucideIcon; symbol: string; cls: string }> = {
+  ok: { icon: CircleCheck, symbol: '✓', cls: 'text-emerald-600' },
+  ko: { icon: CircleX, symbol: '✗', cls: 'text-rose-600' },
+  info: { icon: CircleDashed, symbol: '○', cls: 'text-ink-400' },
+};
+
+const checkChip = (c: CloudCheck): { text: string; cls: string } => {
+  if (c.state === 'ok') return { text: 'ok', cls: 'chip-success' };
+  if (c.state === 'ko') return { text: 'errore', cls: 'chip-danger' };
+  return /facoltativ/i.test(c.label) ? { text: 'facoltativo', cls: 'chip-neutral' } : { text: 'da verificare', cls: 'chip-warn' };
 };
 
 interface CloudSectionProps {
@@ -178,120 +191,167 @@ const CloudSection: React.FC<CloudSectionProps> = ({ cloud, getLocalCloudData, o
     setAct({ step: 'done', message: 'Browser scollegato dal cloud. Il pilota locale è spento.' });
   };
 
-  const btn = 'text-xs font-bold px-2 py-1 rounded disabled:opacity-50 shrink-0';
   return (
-    <section data-testid="cloud-section">
-      <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">☁️ Cloud: il pilota lavora anche a browser chiuso</h4>
-      <p className="text-[11px] text-slate-400 mb-1">
-        Pratiche e pilota stanno sul server (Vercel): le chiamate partono anche a PC spento e gli stessi dati si vedono da più computer.
-      </p>
-      {active && (
-        <p data-testid="cloud-active" className="text-xs font-bold text-sky-800 bg-sky-50 border border-sky-200 rounded px-2 py-1 mb-2">
-          ✓ Cloud attivo su questo browser
+    <section data-testid="cloud-section" className="space-y-5">
+      <div>
+        <h3 className="section-title mb-1">Cloud: il pilota lavora anche a browser chiuso</h3>
+        <p className="text-[13px] leading-5 text-ink-500">
+          Pratiche e pilota stanno sul server (Vercel): le chiamate partono anche a PC spento e gli stessi dati si vedono da più computer.
         </p>
+      </div>
+
+      {active && (
+        <div data-testid="cloud-active" className="callout callout-success py-2.5">
+          <Cloud {...ic} className="mt-0.5 shrink-0 text-emerald-600" />
+          <p className="font-medium">Cloud attivo su questo browser</p>
+        </div>
       )}
-      <div className="space-y-2">
-        <div>
-          <span className="block text-[11px] font-bold text-slate-500 mb-0.5">Chiave di accesso</span>
+
+      <div>
+        <label htmlFor="cloud-key" className="field-label">Chiave di accesso</label>
+        <div className="flex flex-wrap gap-2">
           <input
+            id="cloud-key"
             type="password"
             autoComplete="off"
             aria-label="Chiave di accesso del cloud"
             value={keyDraft}
             onChange={e => setKeyDraft(e.target.value)}
             placeholder="Il valore di CRON_SECRET impostato su Vercel"
-            className="w-full px-2 py-1.5 rounded border border-slate-300 text-sm font-mono"
+            className="input num min-w-0 flex-1"
           />
           {active && key && key !== cloud.key && (
-            <button onClick={() => onKeySave(key)} className={`${btn} mt-1 text-sky-800 border border-sky-300 bg-white hover:bg-sky-50`}>
+            <button type="button" onClick={() => onKeySave(key)} className="btn btn-secondary shrink-0">
+              <KeyRound {...ic} />
               Usa questa chiave
             </button>
           )}
         </div>
+        <p className="field-hint">La stessa chiave serve anche alle chiamate manuali.</p>
+      </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={handleCheck}
+          disabled={checking}
+          className="btn btn-secondary"
+        >
+          {checking ? <Spinner /> : <Activity {...ic} />}
+          {checking ? 'Verifico...' : 'Prova collegamento'}
+        </button>
+        {!active ? (
           <button
-            onClick={handleCheck}
-            disabled={checking}
-            className={`${btn} text-slate-700 border border-slate-300 bg-white hover:bg-slate-50`}
+            type="button"
+            onClick={handleActivate}
+            disabled={act.step === 'working' || !key}
+            className="btn btn-primary"
           >
-            {checking ? 'Verifico...' : 'Prova collegamento'}
+            <CloudUpload {...ic} />
+            Attiva il cloud su questo browser
           </button>
-          {!active ? (
-            <button
-              onClick={handleActivate}
-              disabled={act.step === 'working' || !key}
-              className={`${btn} text-white bg-sky-600 hover:bg-sky-700`}
-            >
-              Attiva il cloud su questo browser
-            </button>
-          ) : (
-            <button onClick={handleDisconnect} className={`${btn} text-rose-700 border border-rose-200 bg-white hover:bg-rose-50`}>
-              Scollega questo browser
-            </button>
-          )}
+        ) : (
+          <button type="button" onClick={handleDisconnect} className="btn btn-danger">
+            <Unplug {...ic} />
+            Scollega questo browser
+          </button>
+        )}
+      </div>
+
+      {act.step === 'working' && (
+        <p role="status" className="flex items-center gap-2 text-[13px] text-ink-600">
+          <Spinner />
+          {act.message}
+        </p>
+      )}
+      {act.step === 'error' && (
+        <div data-testid="cloud-activation-error" role="alert" className="callout callout-danger">
+          <CircleAlert {...ic} className="mt-0.5 shrink-0 text-rose-600" />
+          <p className="leading-5">{act.message}</p>
         </div>
-
-        {checks && (
-          <ul data-testid="cloud-checks" className="text-xs space-y-1 bg-slate-50 border border-slate-200 rounded p-2">
-            {checks.map(c => (
-              <li key={c.id} data-check={c.id} data-state={c.state} className="flex gap-1.5 items-start">
-                <span className={`font-bold shrink-0 w-3 text-center ${CHECK_ICON[c.state].cls}`}>{CHECK_ICON[c.state].icon}</span>
-                <span>
-                  <b className="text-slate-700">{c.label}</b>
-                  <span className="block text-[11px] text-slate-500">{c.detail}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {webhookUrl && (
-          <div>
-            <span className="block text-[11px] font-bold text-slate-500 mb-0.5">Indirizzo da incollare in Retell come webhook</span>
-            <div className="flex gap-1">
-              <input
-                readOnly
-                value={webhookUrl}
-                onFocus={e => e.target.select()}
-                data-testid="cloud-webhook"
-                className="flex-1 min-w-0 px-2 py-1 rounded border border-slate-300 text-[11px] font-mono bg-slate-50"
-              />
-              <button onClick={handleCopy} className={`${btn} text-slate-700 border border-slate-300 bg-white hover:bg-slate-50`}>
-                {copied ? 'Copiato ✓' : 'Copia'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {act.step === 'working' && <p className="text-xs text-slate-500">{act.message}</p>}
-        {act.step === 'error' && (
-          <p data-testid="cloud-activation-error" className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">{act.message}</p>
-        )}
-        {act.step === 'done' && (
-          <p data-testid="cloud-activation-done" className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">{act.message}</p>
-        )}
-        {act.step === 'choose' && (
-          <div data-testid="cloud-choose" className="text-xs bg-amber-50 border border-amber-300 rounded p-2 space-y-1.5">
-            <p className="text-amber-900">
-              Sul cloud ci sono già <b>{plural(act.serverCount)}</b> e questo browser ne ha <b>{act.localCount}</b>. Quali dati tenere?
-            </p>
-            <button onClick={() => handleUseCloud(act.serverCount)} className="w-full text-left px-2 py-1.5 rounded bg-sky-600 hover:bg-sky-700 text-white font-bold">
-              Usa i dati del cloud ({plural(act.serverCount)}) <span className="font-normal">· consigliato</span>
+      )}
+      {act.step === 'done' && (
+        <div data-testid="cloud-activation-done" role="status" className="callout callout-success">
+          <CircleCheck {...ic} className="mt-0.5 shrink-0 text-emerald-600" />
+          <p className="leading-5">{act.message}</p>
+        </div>
+      )}
+      {act.step === 'choose' && (
+        <div data-testid="cloud-choose" className="rounded-card border border-amber-200 bg-amber-50 p-4">
+          <p className="flex items-start gap-2.5 text-sm leading-5 text-amber-900">
+            <TriangleAlert {...ic} className="mt-0.5 shrink-0 text-amber-600" />
+            <span>
+              Sul cloud ci sono già <b className="font-semibold">{plural(act.serverCount)}</b> e questo browser ne ha <b className="font-semibold">{act.localCount}</b>. Quali dati tenere?
+            </span>
+          </p>
+          <div className="mt-3 grid gap-2">
+            <button type="button" onClick={() => handleUseCloud(act.serverCount)} className="btn btn-primary h-auto justify-start whitespace-normal py-2.5 text-left">
+              <CloudDownload {...ic} className="shrink-0" />
+              <span>Usa i dati del cloud ({plural(act.serverCount)}) <span className="font-normal text-ink-300">· consigliato</span></span>
             </button>
             <button
+              type="button"
               onClick={() => handleReplace(act.serverCount, act.localCount)}
-              className="w-full text-left px-2 py-1.5 rounded border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 font-bold"
+              className="btn btn-danger h-auto justify-start whitespace-normal py-2.5 text-left"
             >
-              Sostituisci il cloud con i dati di questo browser ({plural(act.localCount)})
+              <CloudUpload {...ic} className="shrink-0" />
+              <span>Sostituisci il cloud con i dati di questo browser ({plural(act.localCount)})</span>
             </button>
-            <button onClick={() => setAct({ step: 'idle' })} className="w-full px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-600 font-bold">
+            <button type="button" onClick={() => setAct({ step: 'idle' })} className="btn btn-secondary">
               Annulla
             </button>
           </div>
-        )}
-        <p className="text-[10px] text-slate-400">Attivazione e scollegamento hanno effetto subito (non serve "Salva").</p>
-      </div>
+        </div>
+      )}
+
+      {checks && (
+        <div>
+          <h4 className="mb-2 text-[13px] font-medium text-ink-700">Controlli del collegamento</h4>
+          <ul data-testid="cloud-checks" className="card divide-y divide-line overflow-hidden shadow-none">
+            {checks.map(c => {
+              const st = CHECK_ICON[c.state];
+              const Icon = st.icon;
+              const chip = checkChip(c);
+              return (
+                <li key={c.id} data-check={c.id} data-state={c.state} className="flex items-start gap-3 px-4 py-3">
+                  <Icon size={18} strokeWidth={1.75} aria-hidden="true" className={`mt-px shrink-0 ${st.cls}`} />
+                  <span className="sr-only">{st.symbol}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-ink-900">{c.label}</span>
+                    <span className="mt-0.5 block text-xs leading-4 text-ink-500">{c.detail}</span>
+                  </span>
+                  <span className={`chip ${chip.cls} shrink-0`}>{chip.text}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {webhookUrl && (
+        <div>
+          <label htmlFor="cloud-webhook" className="field-label">Indirizzo da incollare in Retell come webhook</label>
+          <div className="flex gap-2">
+            <input
+              id="cloud-webhook"
+              readOnly
+              value={webhookUrl}
+              onFocus={e => e.target.select()}
+              data-testid="cloud-webhook"
+              className="input num min-w-0 flex-1 bg-slate-50 text-xs"
+            />
+            <button type="button" onClick={handleCopy} className="btn btn-secondary shrink-0">
+              {copied ? <Check {...ic} className="text-emerald-600" /> : <Copy {...ic} />}
+              {copied ? 'Copiato' : 'Copia'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <p className="flex items-center gap-1.5 text-xs text-ink-400">
+        <Info {...ic} size={14} />
+        Attivazione e scollegamento hanno effetto subito (non serve "Salva").
+      </p>
     </section>
   );
 };

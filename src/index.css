@@ -57,7 +57,7 @@
   }
   textarea.input { @apply h-auto py-2 leading-relaxed; }
   .select { @apply input pr-8; }
-  .checkbox { @apply h-4 w-4 rounded border-slate-300 text-ink-900 focus:ring-brand-400/40; }
+  .checkbox { @apply h-4 w-4 rounded border-slate-300 accent-ink-900 cursor-pointer; }
 
   /* ---------- Superfici ---------- */
   .card { @apply bg-surface border border-line rounded-card shadow-card; }

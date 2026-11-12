@@ -121,7 +121,7 @@ const TableRow: React.FC<RowCommon & { layout: TableLayout }> = ({ appt, ws, q, 
         {sameAsAddress ? (
           <span className="block text-[13px] text-ink-400" title="Intestatario non indicato: il titolo è l'indirizzo" data-testid="cliente-vuoto">—</span>
         ) : (
-          <span className={`block truncate text-[13px] font-semibold ${muted ? 'text-ink-600' : 'text-ink-950'} ${appt.status === 'cancelled' ? 'line-through decoration-ink-300' : ''}`} title={appt.title}>
+          <span className={`${appt.contactPerson ? 'block truncate' : 'line-clamp-2 break-words'} text-[13px] font-semibold ${muted ? 'text-ink-600' : 'text-ink-950'} ${appt.status === 'cancelled' ? 'line-through decoration-ink-300' : ''}`} title={appt.title}>
             <Hl text={appt.title} q={q} />
           </span>
         )}
@@ -133,7 +133,7 @@ const TableRow: React.FC<RowCommon & { layout: TableLayout }> = ({ appt, ws, q, 
         )}
       </td>
       <td title={appt.address}>
-        <span className="block truncate text-[13px] text-ink-800"><Hl text={street || '—'} q={q} /></span>
+        <span className={`${place ? 'block truncate' : 'line-clamp-2 break-words'} text-[13px] text-ink-800`}><Hl text={street || '—'} q={q} /></span>
         {place && <span className="block truncate text-xs text-ink-500"><Hl text={place} q={q} /></span>}
       </td>
       <td>

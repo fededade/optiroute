@@ -123,11 +123,12 @@ export const TABLE_COLUMNS: Column[] = [
   { id: 'stato', label: 'Stato', sortKey: 'status', width: { xl: 136, l: 132 } },
   { id: 'cliente', label: 'Cliente', sortKey: 'cliente' },
   { id: 'indirizzo', label: 'Indirizzo', sortKey: 'luogo' },
-  { id: 'codice', label: 'Codice', sortKey: 'codice', width: { xl: 104, l: 88 } },
+  { id: 'codice', label: 'Codice', sortKey: 'codice', width: { xl: 112, l: 88 } },
   { id: 'tecnico', label: 'Tecnico', sortKey: 'tecnico', width: { xl: 136, l: 48 } },
-  { id: 'appuntamento', label: 'Appuntamento', sortKey: 'appuntamento', width: { xl: 138, l: 112 } },
-  { id: 'telefono', label: 'Telefono', width: { xl: 128, l: 128 } },
-  { id: 'chiamata', label: 'Chiamata', width: { xl: 148, l: 108 } },
+  { id: 'appuntamento', label: 'Appuntamento', sortKey: 'appuntamento', width: { xl: 132, l: 112 } },
+  // Il telefono non va mai troncato: "+39 0382 555 0123" deve starci per intero
+  { id: 'telefono', label: 'Telefono', width: { xl: 152, l: 152 } },
+  { id: 'chiamata', label: 'Chiamata', width: { xl: 122, l: 108 } },
   { id: 'azioni', label: 'Azioni', width: { xl: 76, l: 72 } },
 ];
 

@@ -1,5 +1,17 @@
 {
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" }
-  ]
+  ],
+  "functions": {
+    "api/cloud.js": { "maxDuration": 60 },
+    "api/cloud-tick.js": { "maxDuration": 60 }
+  },
+  "schedules": {
+    "pilota-automatico": {
+      "schedule": "*/15 7-21 * * *",
+      "timezone": "Europe/Rome",
+      "path": "/api/cloud-tick",
+      "requestMethod": "POST"
+    }
+  }
 }

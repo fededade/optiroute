@@ -6,6 +6,10 @@ import {
   previewDispatch,
   type DispatchProposal,
 } from '../services/dispatchService';
+import { ArrowLeft, Calculator, CalendarX, Check, CircleAlert, Route, TriangleAlert, UserX } from 'lucide-react';
+import ModalShell from './modal/ModalShell';
+import { cap } from '../layout/format';
+import { Field, Stat, StateView, Steps, Switch, ic } from './modal/parts';
 
 // Smistamento automatico delle pratiche "in attesa": assegnazione per zona di
 // competenza, distribuzione su più giorni con data e orario ipotizzati.
@@ -99,197 +103,234 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
     ? proposal.plans.reduce((acc, p) => acc + p.appointments.length, 0)
     : 0;
 
+  const stepIndex = phase === 'setup' ? 0 : phase === 'computing' ? 1 : 2;
+  const planTechs = proposal ? technicians.filter(t => proposal.plans.some(p => p.technician.id === t.id)) : [];
+  const dayCount = proposal ? new Set(proposal.plans.map(p => p.date)).size : 0;
+  const unscheduledCount = proposal ? proposal.unscheduled.reduce((n, u) => n + u.appointments.length, 0) : 0;
+
+  const footer =
+    phase === 'setup' ? (
+      <>
+        <button type="button" onClick={handleClose} className="btn btn-secondary">
+          Annulla
+        </button>
+        <button type="button" onClick={handleCompute} disabled={pending.length === 0} className="btn btn-primary">
+          <Calculator {...ic} />
+          Calcola proposta
+        </button>
+      </>
+    ) : phase === 'computing' ? (
+      <button type="button" onClick={handleClose} className="btn btn-secondary">
+        Annulla calcolo
+      </button>
+    ) : proposal ? (
+      <>
+        <button type="button" onClick={() => setPhase('setup')} className="btn btn-ghost mr-auto">
+          <ArrowLeft {...ic} />
+          Indietro
+        </button>
+        <button
+          type="button"
+          onClick={handleApply}
+          disabled={proposedCount === 0 && proposal.updates.length === 0}
+          className="btn btn-accent max-sm:flex-1"
+        >
+          <Check {...ic} />
+          Applica: {proposedCount} proposte da confermare
+        </button>
+      </>
+    ) : undefined;
+
   return (
     // Overlay: il click fuori non chiude durante il calcolo (per evitare
-    // chiusure accidentali), ma la ✕ e "Annulla calcolo" restano sempre attivi
-    <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4" onClick={phase !== 'computing' ? handleClose : undefined}>
-      <div
-        className="bg-white rounded-2xl shadow-2xl p-6 max-w-2xl w-full max-h-[90vh] flex flex-col"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-1 shrink-0">
-          <h3 className="text-lg font-bold text-slate-800">🚚 Smista pratiche per zona</h3>
-          <button onClick={handleClose} title="Chiudi" className="text-slate-400 hover:text-slate-600 text-xl leading-none px-1">✕</button>
-        </div>
-
+    // chiusure accidentali), ma la X e "Annulla calcolo" restano sempre attivi
+    <ModalShell
+      icon={Route}
+      title="Smista pratiche per zona"
+      subtitle="Assegna le pratiche in attesa al tecnico di zona, con data e orario proposti."
+      onClose={handleClose}
+      dismissible={phase !== 'computing'}
+      size="lg"
+      toolbar={<Steps steps={['Parametri', 'Calcolo', 'Proposta']} current={stepIndex} />}
+      footer={footer}
+    >
         {phase === 'setup' && (
-          <div className="overflow-y-auto">
-            <p className="text-xs text-slate-500 mb-4">
-              Le {pending.length} pratiche <b>in attesa</b> vengono assegnate al tecnico competente
-              per zona e distribuite sui prossimi giorni con data e orario ipotizzati.
+          <div className="space-y-5">
+            <p className="text-sm leading-6 text-ink-600">
+              Le <span className="num font-medium text-ink-900">{pending.length}</span> pratiche <b className="font-semibold text-ink-900">in attesa</b> vengono
+              assegnate al tecnico competente per zona e distribuite sui prossimi giorni con data e orario ipotizzati.
               Le proposte andranno poi confermate dall'operatore.
             </p>
 
-            {/* Anteprima assegnazioni */}
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4 space-y-1.5">
-              <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">Anteprima assegnazioni</h4>
-              {preview.perTechnician.map(({ technician, count, urgentCount: u }) => (
-                <p key={technician.id} className="text-sm flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: technician.color }}></span>
-                  <b>{technician.name}</b>: {count} pratiche
-                  {u > 0 && <span className="text-red-600 font-bold text-xs">di cui {u} urgenti 🔴</span>}
-                </p>
-              ))}
-              {preview.unassignedCount > 0 && (
-                <p className="text-sm text-amber-700">
-                  ⚠️ <b>{preview.unassignedCount}</b> senza tecnico competente
-                  {preview.missingProvinceCount > 0 && (
-                    <span className="text-xs"> ({preview.missingProvinceCount} senza provincia: la rilevo io durante il calcolo)</span>
-                  )}
-                </p>
-              )}
-              {urgentCount > 0 && (
-                <p className="text-[11px] text-slate-500">
-                  Le pratiche urgenti vengono pianificate per prime, nei primi giorni utili.
-                </p>
-              )}
-            </div>
-
-            {/* Parametri */}
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Pianifica a partire dal</label>
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={e => setStartDate(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                />
+            <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+              {/* Parametri */}
+              <div className="space-y-4">
+                <h3 className="section-title">Parametri</h3>
+                <Field label="Pianifica a partire dal" htmlFor="dispatch-start">
+                  <input
+                    id="dispatch-start"
+                    type="date"
+                    value={startDate}
+                    onChange={e => setStartDate(e.target.value)}
+                    className="input num"
+                  />
+                </Field>
+                <Field label="Orizzonte (giorni)" htmlFor="dispatch-horizon" hint="Quanti giorni coprire, da 1 a 60.">
+                  <input
+                    id="dispatch-horizon"
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={horizonDays}
+                    onChange={e => setHorizonDays(e.target.value)}
+                    className="input num"
+                  />
+                </Field>
+                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-control border border-line px-3.5 py-2.5 hover:bg-slate-50">
+                  <span className="text-sm font-medium text-ink-900">Includi sabato e domenica</span>
+                  <Switch checked={includeWeekends} onChange={e => setIncludeWeekends(e.target.checked)} />
+                </label>
               </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Orizzonte (giorni)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="60"
-                  value={horizonDays}
-                  onChange={e => setHorizonDays(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                />
+
+              {/* Anteprima assegnazioni */}
+              <div className="rounded-card border border-line bg-slate-50/60 p-4">
+                <h3 className="section-title mb-3">Anteprima assegnazioni</h3>
+                {preview.perTechnician.length > 0 ? (
+                  <ul className="space-y-2">
+                    {preview.perTechnician.map(({ technician, count, urgentCount: u }) => (
+                      <li key={technician.id} className="flex items-start gap-2.5 text-sm">
+                        <span className="dot mt-1.5 h-2.5 w-2.5" style={{ backgroundColor: technician.color }} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium text-ink-900">{technician.name}</span>
+                          {u > 0 && <span className="block text-xs font-medium text-rose-700">di cui {u} urgenti</span>}
+                        </span>
+                        <span className="shrink-0 text-ink-600"><span className="num">{count}</span> pratiche</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-ink-500">Nessuna pratica assegnabile a un tecnico.</p>
+                )}
+                {preview.unassignedCount > 0 && (
+                  <div className="callout callout-warn mt-3 py-2.5">
+                    <TriangleAlert {...ic} className="mt-0.5 shrink-0 text-amber-600" />
+                    <p className="leading-5">
+                      <b className="num font-semibold">{preview.unassignedCount}</b> senza tecnico competente
+                      {preview.missingProvinceCount > 0 && (
+                        <span className="text-xs"> ({preview.missingProvinceCount} senza provincia: la rilevo io durante il calcolo)</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+                {urgentCount > 0 && (
+                  <p className="field-hint mt-3">
+                    Le pratiche urgenti vengono pianificate per prime, nei primi giorni utili.
+                  </p>
+                )}
               </div>
             </div>
-            <label className="flex items-center gap-2 text-sm text-slate-600 mb-4 cursor-pointer">
-              <input type="checkbox" checked={includeWeekends} onChange={e => setIncludeWeekends(e.target.checked)} className="rounded" />
-              Includi sabato e domenica
-            </label>
 
-            {error && <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded p-2 mb-3">{error}</p>}
-
-            <div className="flex gap-2">
-              <button
-                onClick={handleClose}
-                className="flex-1 py-2 rounded-lg border border-slate-300 text-sm font-bold text-slate-600 hover:bg-slate-50"
-              >
-                Annulla
-              </button>
-              <button
-                onClick={handleCompute}
-                disabled={pending.length === 0}
-                className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-bold"
-              >
-                Calcola proposta
-              </button>
-            </div>
+            {error && (
+              <div role="alert" className="callout callout-danger">
+                <CircleAlert {...ic} className="mt-0.5 shrink-0 text-rose-600" />
+                <p>{error}</p>
+              </div>
+            )}
           </div>
         )}
 
         {phase === 'computing' && (
-          <div className="text-center py-10">
-            <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mx-auto mb-4"></div>
-            <h3 className="text-lg font-bold text-slate-800 mb-1">Smistamento in corso...</h3>
-            <p className="text-sm text-slate-500">{progress}</p>
-            <button
-              onClick={handleClose}
-              className="mt-6 px-4 py-2 rounded-lg border border-slate-300 text-sm font-bold text-slate-600 hover:bg-slate-50"
-            >
-              Annulla calcolo
-            </button>
-            <p className="text-[11px] text-slate-400 mt-2">
-              Chiudendo, la proposta in corso viene scartata: nessuna pratica viene modificata.
-            </p>
+          <div className="py-8">
+            <StateView kind="loading" title="Smistamento in corso...">
+              <p className="num text-ink-700">{progress}</p>
+              <p className="mt-3 text-xs text-ink-400">
+                Chiudendo, la proposta in corso viene scartata: nessuna pratica viene modificata.
+              </p>
+            </StateView>
           </div>
         )}
 
         {phase === 'result' && proposal && (
-          <>
-            <div className="flex-1 overflow-y-auto space-y-4 my-3">
-              {proposal.plans.length === 0 && (
-                <p className="text-sm text-slate-500 italic">Nessuna proposta generata nell'orizzonte scelto.</p>
-              )}
+          <div className="space-y-5">
+            <div className="grid grid-cols-3 gap-2">
+              <Stat value={proposedCount} label="proposte" />
+              <Stat value={planTechs.length} label={planTechs.length === 1 ? 'tecnico' : 'tecnici'} />
+              <Stat value={dayCount} label={dayCount === 1 ? 'giornata' : 'giornate'} />
+            </div>
 
-              {/* Piani per tecnico/giorno */}
-              {technicians.filter(t => proposal.plans.some(p => p.technician.id === t.id)).map(tech => (
-                <div key={tech.id}>
-                  <h4 className="text-sm font-bold flex items-center gap-2 mb-2" style={{ color: tech.color }}>
-                    <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: tech.color }}></span>
+            {proposal.plans.length === 0 && (
+              <p className="text-sm text-ink-500">Nessuna proposta generata nell'orizzonte scelto.</p>
+            )}
+
+            {/* Piani per tecnico/giorno */}
+            {planTechs.map(tech => {
+              const plans = proposal.plans.filter(p => p.technician.id === tech.id);
+              const n = plans.reduce((acc, p) => acc + p.appointments.length, 0);
+              return (
+                <section key={tech.id}>
+                  <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-ink-900">
+                    <span className="dot h-2.5 w-2.5" style={{ backgroundColor: tech.color }} />
                     {tech.name}
+                    <span className="num text-xs font-normal text-ink-500">{n} {n === 1 ? 'pratica' : 'pratiche'}</span>
                   </h4>
                   <div className="space-y-2">
-                    {proposal.plans.filter(p => p.technician.id === tech.id).map(plan => (
-                      <div key={`${tech.id}-${plan.date}`} className="border border-slate-200 rounded-lg overflow-hidden">
-                        <div className="bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-600 flex justify-between">
-                          <span className="capitalize">{formatDay(plan.date)}</span>
-                          <span className="font-normal text-slate-400">partenza {plan.workStart}</span>
+                    {plans.map(plan => (
+                      <div key={`${tech.id}-${plan.date}`} className="card overflow-hidden shadow-none">
+                        <div className="flex items-center justify-between gap-3 border-b border-line bg-slate-50/70 px-3.5 py-2 text-[13px]">
+                          <span className="font-medium text-ink-800">{cap(formatDay(plan.date))}</span>
+                          <span className="num text-xs text-ink-500">partenza {plan.workStart}</span>
                         </div>
-                        <ul className="divide-y divide-slate-100">
+                        <ul className="divide-y divide-line">
                           {plan.appointments.map(a => (
-                            <li key={a.id} className="px-3 py-1.5 text-xs flex items-center gap-2">
-                              <span className="font-mono text-slate-500 shrink-0">{a.startTime}-{a.endTime}</span>
-                              {a.urgent && <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 rounded shrink-0">URGENTE</span>}
-                              <span className="font-semibold text-slate-700 truncate">{a.title}</span>
-                              <span className="text-slate-400 truncate hidden sm:inline">{a.comune || a.address.split(',')[0]}</span>
+                            <li key={a.id} className="flex items-center gap-3 px-3.5 py-2 text-[13px]">
+                              <span className="num w-[92px] shrink-0 text-ink-600">{a.startTime}-{a.endTime}</span>
+                              <span className="min-w-0 flex-1 truncate font-medium text-ink-900">{a.title}</span>
+                              {a.urgent && <span className="chip chip-solid-danger h-[18px] px-1.5 text-2xs font-semibold">URGENTE</span>}
+                              <span className="hidden max-w-[40%] truncate text-ink-500 sm:inline">{a.comune || a.address.split(',')[0]}</span>
                             </li>
                           ))}
                         </ul>
                       </div>
                     ))}
                   </div>
-                </div>
-              ))}
+                </section>
+              );
+            })}
 
-              {/* Avvisi */}
-              {proposal.unscheduled.length > 0 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
-                  <b>Non pianificate nell'orizzonte:</b>
+            {/* Avvisi: fuori orizzonte e non assegnabili, distinti */}
+            {proposal.unscheduled.length > 0 && (
+              <div className="callout callout-warn">
+                <CalendarX {...ic} className="mt-0.5 shrink-0 text-amber-600" />
+                <div className="min-w-0 leading-5">
+                  <p className="font-semibold">Non pianificate nell'orizzonte: <span className="num">{unscheduledCount}</span></p>
                   {proposal.unscheduled.map(u => (
-                    <p key={u.technician.id} className="mt-1">
-                      {u.technician.name}: {u.appointments.length} pratiche (aumenta l'orizzonte o riduci il carico)
+                    <p key={u.technician.id} className="mt-1 text-[13px]">
+                      {u.technician.name}: {u.appointments.length} {u.appointments.length === 1 ? 'pratica' : 'pratiche'} (aumenta l'orizzonte o riduci il carico)
                     </p>
                   ))}
                 </div>
-              )}
-              {proposal.unassigned.length > 0 && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
-                  <b>Senza tecnico competente ({proposal.unassigned.length}):</b>
-                  <ul className="mt-1 space-y-0.5">
+              </div>
+            )}
+            {proposal.unassigned.length > 0 && (
+              <div className="callout callout-danger">
+                <UserX {...ic} className="mt-0.5 shrink-0 text-rose-600" />
+                <div className="min-w-0 leading-5">
+                  <p className="font-semibold">Senza tecnico competente ({proposal.unassigned.length}):</p>
+                  <ul className="mt-1.5 space-y-1 text-[13px]">
                     {proposal.unassigned.map(a => (
-                      <li key={a.id}>• {a.title} — {a.comune || a.address.split(',')[0]} {a.province ? `(${a.province})` : '(provincia non rilevata)'}</li>
+                      <li key={a.id} className="flex gap-1.5">
+                        <span className="text-rose-400" aria-hidden="true">·</span>
+                        <span>{a.title} — {a.comune || a.address.split(',')[0]} {a.province ? `(${a.province})` : '(provincia non rilevata)'}</span>
+                      </li>
                     ))}
                   </ul>
-                  <p className="mt-1 text-red-500">Assegnale manualmente (Modifica → Tecnico) o amplia le zone di competenza.</p>
+                  <p className="mt-2 text-xs text-rose-800/80">Assegnale manualmente (Modifica → Tecnico) o amplia le zone di competenza.</p>
                 </div>
-              )}
-            </div>
-
-            <div className="flex gap-2 shrink-0 pt-2 border-t border-slate-100">
-              <button
-                onClick={() => setPhase('setup')}
-                className="px-4 py-2 rounded-lg border border-slate-300 text-sm font-bold text-slate-600 hover:bg-slate-50"
-              >
-                ← Indietro
-              </button>
-              <button
-                onClick={handleApply}
-                disabled={proposedCount === 0 && proposal.updates.length === 0}
-                className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-bold"
-              >
-                Applica: {proposedCount} proposte da confermare
-              </button>
-            </div>
-          </>
+              </div>
+            )}
+          </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

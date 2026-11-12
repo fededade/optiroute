@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Appointment } from '../src/types';
 import {
+  alternativesForCall,
   approveForCalling,
   attentionItems,
+  nextDueCall,
+  phoneKey,
   reduceCallLaunchResult,
   reduceCallOutcome,
   reduceCallStarted,
@@ -135,5 +138,87 @@ describe('orari tondi nelle proposte', () => {
     const lunch = round.scheduled.filter(a => a.hasLunchBreakBefore);
     expect(lunch.length).toBe(1);
     expect(min(lunch[0].startTime)).toBeGreaterThanOrEqual(12 * 60 + 45);
+  });
+});
+
+describe('cambi per il giorno stesso', () => {
+  // Oggi (mercoledì 11/11) alle 9:00: un giro per oggi pomeriggio e uno per venerdì
+  const today = '2026-11-11';
+  const now = at(today, '09:00');
+  const world = (): Appointment[] => [
+    stop('oggi1', today, '15:00', '15:20', P.milano),
+    stop('x', today, '16:00', '16:20', P.portaVenezia, { title: 'Cliente X', callStatus: 'called', callId: 'k' }),
+    stop('ven1', D, '10:00', '10:20', P.sesto),
+    appt({ id: 'attesa', coords: P.portaVenezia, technicianId: 'tech-1', phone: '+390211111111' }),
+  ];
+
+  it('di default niente alternative né rimpiazzi per oggi', () => {
+    const ctx = planning(now);
+    const all = world();
+    const alts = alternativesForCall(byId(all, 'ven1'), all, ctx);
+    expect(alts.length).toBeGreaterThan(0);
+    expect(alts.some(a => a.date === today)).toBe(false);
+    // lo slot di oggi alle 16:00 si libera: nessuno viene aggiunto al giro di oggi
+    const out = reduceCallOutcome(all, 'x', outcome('rifiutato'), 'k', ctx);
+    expect(byId(out, 'x').status).toBe('standby');
+    expect(byId(out, 'attesa')).toMatchObject({ status: 'pending' });
+    expect(byId(out, 'attesa').date).toBeUndefined();
+  });
+
+  it('con l\'opzione accesa sono ammessi, rispettando l\'anticipo minimo', () => {
+    const ctx = planning(now, { sameDayChanges: true });
+    const all = world();
+    expect(alternativesForCall(byId(all, 'ven1'), all, ctx).some(a => a.date === today)).toBe(true);
+    const out = reduceCallOutcome(all, 'x', outcome('rifiutato'), 'k', ctx);
+    expect(byId(out, 'attesa')).toMatchObject({ status: 'proposed', date: today, autoCall: 'backfill' });
+    // a meno di 3 ore dallo slot nemmeno con l'opzione accesa
+    const late = planning(at(today, '14:00'), { sameDayChanges: true });
+    const out2 = reduceCallOutcome(all, 'x', outcome('rifiutato'), 'k', late);
+    expect(byId(out2, 'attesa').status).toBe('pending');
+  });
+});
+
+describe('stesso telefono su più pratiche', () => {
+  const SAME = '+39 333 1234567';
+  const world = (): Appointment[] => [
+    stop('a', D, '09:00', '09:20', P.milano, { phone: SAME, autoCall: 'route' }),
+    stop('b', D, '10:00', '10:20', P.portaVenezia, { phone: '333.1234567', autoCall: 'route' }), // stesso numero, scritto diversamente
+    stop('c', D, '11:00', '11:20', P.sesto, { phone: '+390299999999', autoCall: 'route' }),
+  ];
+
+  it('riconosce lo stesso numero scritto in modi diversi', () => {
+    expect(phoneKey('+39 333 1234567')).toBe('3331234567');
+    expect(phoneKey('0039 333-1234567')).toBe('3331234567');
+    expect(phoneKey('333.1234567')).toBe('3331234567');
+    expect(phoneKey('02 1234567')).toBe('021234567');
+    expect(phoneKey(undefined)).toBe('');
+  });
+
+  it('non parte una seconda chiamata allo stesso numero finché la prima non ha un esito', () => {
+    let all = world();
+    const first = nextDueCall(all, ON)!;
+    expect(first.id).toBe('a');
+    all = reduceCallLaunchResult(reduceCallStarted(all, 'a', [], NOW), 'a', { ok: true, callId: 'k1' }, NOW);
+    // "b" ha lo stesso numero: si salta, tocca a "c"
+    expect(nextDueCall(all, ON)?.id).toBe('c');
+    all = reduceCallLaunchResult(reduceCallStarted(all, 'c', [], NOW), 'c', { ok: true, callId: 'k2' }, NOW);
+    expect(nextDueCall(all, ON)).toBeNull();
+    // arriva l'esito di "a": ora "b" può partire
+    all = reduceCallOutcome(all, 'a', outcome('confermato'), 'k1', ON);
+    expect(nextDueCall(all, ON)?.id).toBe('b');
+  });
+
+  it('con lo stesso numero su tutte le pratiche le chiamate partono una alla volta', () => {
+    let all: Appointment[] = [1, 2, 3, 4, 5].map(i =>
+      stop(`t${i}`, D, `${String(8 + i).padStart(2, '0')}:00`, `${String(8 + i).padStart(2, '0')}:20`, P.milano, { phone: SAME, autoCall: 'route' }));
+    const launched: string[] = [];
+    for (let step = 0; step < 5; step++) {
+      const next = nextDueCall(all, ON)!;
+      launched.push(next.id);
+      all = reduceCallLaunchResult(reduceCallStarted(all, next.id, [], NOW), next.id, { ok: true, callId: `k-${next.id}` }, NOW);
+      expect(nextDueCall(all, ON)).toBeNull(); // finché questa è in corso, nessun'altra
+      all = reduceCallOutcome(all, next.id, outcome('confermato'), `k-${next.id}`, ON);
+    }
+    expect(launched).toEqual(['t1', 't2', 't3', 't4', 't5']);
   });
 });

@@ -28,6 +28,7 @@ export interface AlternativeOptions {
   includeWeekends?: boolean; // default false
   minLeadMinutes?: number;  // anticipo minimo rispetto ad adesso (default 180)
   max?: number;             // alternative restituite (default 3)
+  skipToday?: boolean;      // true: mai slot nel giorno stesso della chiamata (default false)
 }
 
 const LABELS: AlternativeLabel[] = ['A', 'B', 'C'];
@@ -77,7 +78,7 @@ export const computeAlternativeSlots = (
 
   const candidates: { date: string; option: SlotOption; score: number }[] = [];
 
-  for (let i = 0; i <= horizonDays; i++) {
+  for (let i = opts.skipToday ? 1 : 0; i <= horizonDays; i++) {
     const date = addDaysStr(today, i);
     if (!includeWeekends && isWeekend(date)) continue;
     if (appt.declinedDates?.includes(date)) continue;

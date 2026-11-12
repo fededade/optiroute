@@ -1,0 +1,20 @@
+{
+  // Type-check del motore lato server (server/) e delle funzioni Vercel in
+  // api/*.ts. I bundle api/*.js sono generati da scripts/build-api.mjs.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["server/**/*.ts", "api/**/*.ts"]
+}

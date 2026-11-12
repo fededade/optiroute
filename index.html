@@ -6,6 +6,10 @@
     <title>OptiRoute</title>
     <!-- Tailwind viene iniettato da Vite via CSS, ma se vuoi il CDN per sicurezza in dev: -->
     <!-- <script src="https://cdn.tailwindcss.com"></script> -->
+    <!-- Caratteri del sistema grafico (con ripiego sui caratteri di sistema) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
     <style>
       .leaflet-container { width: 100%; height: 100%; z-index: 0; }
@@ -26,7 +30,7 @@
 }
 </script>
 </head>
-  <body class="bg-slate-50 text-slate-900 font-sans antialiased">
+  <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

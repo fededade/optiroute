@@ -21,14 +21,25 @@ const deg2rad = (deg: number): number => {
   return deg * (Math.PI / 180);
 };
 
-// Fallback estimation if OSRM fails or is unavailable
+// Stima del tempo di guida dalla distanza in linea d'aria. Si usa quando non si
+// interroga il servizio dei percorsi: smistamento, alternative da proporre al
+// telefono, motore sul server.
+//
+// La velocità media cresce con la distanza: in città si va piano, sui tratti
+// lunghi si prende tangenziale o statale. Prima era fissa a 21 km/h: giusta per
+// 2-3 km in città, ma faceva durare due ore e mezza un trasferimento di 37 km
+// (Milano-Pavia: 133 minuti invece di 50), e i giri proposti restavano pieni
+// di buchi. Sui tratti brevi il risultato è quello di prima.
+const TORTUOSITY = 1.4;         // strada reale rispetto alla linea d'aria
+const URBAN_KMH = 20;           // velocità media sui tratti brevi
+const OPEN_ROAD_KMH = 60;       // velocità media a cui si tende sui tratti lunghi
+const SPEED_RAMP_KM = 30;       // km di strada in cui ci si avvicina a quella velocità
+const BASE_PENALTY_MINUTES = 5; // partenza e parcheggio
+
 export const estimateTravelTimeMinutes = (distanceKm: number): number => {
-  const AVERAGE_SPEED_KPM = 0.35; 
-  const TORTUOSITY = 1.4; 
-  const BASE_PENALTY_MINUTES = 5; 
-  
-  const estimatedDrive = Math.ceil((distanceKm * TORTUOSITY) / AVERAGE_SPEED_KPM);
-  return estimatedDrive + BASE_PENALTY_MINUTES;
+  const roadKm = Math.max(0, distanceKm) * TORTUOSITY;
+  const kmh = URBAN_KMH + (OPEN_ROAD_KMH - URBAN_KMH) * (1 - Math.exp(-roadKm / SPEED_RAMP_KM));
+  return Math.ceil((roadKm / kmh) * 60) + BASE_PENALTY_MINUTES;
 };
 
 export const formatTime = (date: Date): string => {

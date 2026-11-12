@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { Bell, Check, Clock, Hash, House, MapPin, PauseCircle, Phone, Sparkles } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-leaflet';
 import * as L from 'leaflet';
 import type { Appointment, Coordinates, RouteSummary, AppointmentStatus, Technician } from '../types';
 import { getFullRouteGeometry } from '../services/routingService';
+import { displayCode, formatPhone, titleIsAddress } from '../layout/format';
 
 const iconUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
 const iconRetinaUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png';
@@ -35,31 +37,35 @@ const getColorForDate = (dateStr?: string): string => {
     return DATE_COLORS[index];
 };
 
+// Segnaposto della scheda selezionata: anello oro (colore del marchio)
+const SELECTED_RING = 'box-shadow: 0 0 0 3px #fff, 0 0 0 6px #DDAE49, 0 4px 10px rgba(18,20,26,0.35);';
+const BASE_SHADOW = 'box-shadow: 0 1px 3px rgba(18,20,26,0.35);';
+
 // Bordo rosso spesso per le pratiche urgenti, tratteggiato per le proposte
 const markerBorder = (urgent?: boolean, proposed?: boolean): string => {
-  const color = urgent ? '#dc2626' : 'white';
+  const color = urgent ? '#e11d48' : 'white';
   const style = proposed ? 'dashed' : 'solid';
   const width = urgent ? '3px' : '2px';
   return `border: ${width} ${style} ${color};`;
 };
 
-const createScheduledIcon = (number: number, color: string, urgent?: boolean, proposed?: boolean) => {
+const createScheduledIcon = (number: number, color: string, urgent?: boolean, proposed?: boolean, selected?: boolean) => {
   return L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background-color: ${color}; ${proposed ? 'opacity: 0.85;' : ''} width: 28px; height: 28px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; ${markerBorder(urgent, proposed)} box-shadow: 0 2px 4px rgba(0,0,0,0.3); font-size: 14px;">${number || '?'}</div>`,
+    html: `<div style="background-color: ${color}; ${proposed ? 'opacity: 0.88;' : ''} width: 28px; height: 28px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-family: 'JetBrains Mono', ui-monospace, monospace; ${markerBorder(urgent, proposed)} ${selected ? SELECTED_RING : BASE_SHADOW} font-size: 13px;">${number || '?'}</div>`,
     iconSize: [28, 28],
     iconAnchor: [14, 14],
     popupAnchor: [0, -10]
   });
 };
 
-const createPendingIcon = (urgent?: boolean) => {
+const createPendingIcon = (urgent?: boolean, selected?: boolean) => {
   return L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background-color: ${urgent ? '#dc2626' : '#f59e0b'}; width: 24px; height: 24px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+    html: `<div style="background-color: ${urgent ? '#e11d48' : '#f59e0b'}; width: 24px; height: 24px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; ${selected ? SELECTED_RING : BASE_SHADOW}">
       ${urgent
         ? `<span style="font-weight:bold; font-size: 13px;">!</span>`
-        : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4"><path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25ZM12.75 6a.75.75 0 0 0-1.5 0v6c0 .414.336.75.75.75h4.5a.75.75 0 0 0 0-1.5h-3.75V6Z" clip-rule="evenodd" /></svg>`}
+        : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25ZM12.75 6a.75.75 0 0 0-1.5 0v6c0 .414.336.75.75.75h4.5a.75.75 0 0 0 0-1.5h-3.75V6Z" clip-rule="evenodd" /></svg>`}
     </div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
@@ -67,31 +73,31 @@ const createPendingIcon = (urgent?: boolean) => {
   });
 };
 
-const createIssueIcon = () => {
+const createIssueIcon = (selected?: boolean) => {
   return L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background-color: #e11d48; width: 24px; height: 24px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); font-weight: bold; font-size: 14px;">⚠</div>`,
+    html: `<div style="background-color: #e11d48; width: 24px; height: 24px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; ${selected ? SELECTED_RING : BASE_SHADOW}"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v6"/><path d="M12 17h.01"/></svg></div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
     popupAnchor: [0, -10]
   });
 };
 
-const createCancelledIcon = () => {
+const createCancelledIcon = (selected?: boolean) => {
   return L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background-color: #94a3b8; opacity: 0.75; width: 18px; height: 18px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 1px 3px rgba(0,0,0,0.3); font-weight: bold; font-size: 11px;">✕</div>`,
+    html: `<div style="background-color: #94a3b8; opacity: 0.85; width: 18px; height: 18px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; ${selected ? SELECTED_RING : BASE_SHADOW}"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></div>`,
     iconSize: [18, 18],
     iconAnchor: [9, 9],
     popupAnchor: [0, -8]
   });
 };
 
-const createStandbyIcon = () => {
+const createStandbyIcon = (selected?: boolean) => {
   return L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background-color: #94a3b8; width: 20px; height: 20px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M6.75 5.25a.75.75 0 0 1 .75-.75H9a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H7.5a.75.75 0 0 1-.75-.75V5.25Zm7.5 0A.75.75 0 0 1 15 4.5h1.5a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H15a.75.75 0 0 1-.75-.75V5.25Z" clip-rule="evenodd" /></svg>
+    html: `<div style="background-color: #64748b; width: 20px; height: 20px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; ${selected ? SELECTED_RING : BASE_SHADOW}">
+       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path fill-rule="evenodd" d="M6.75 5.25a.75.75 0 0 1 .75-.75H9a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H7.5a.75.75 0 0 1-.75-.75V5.25Zm7.5 0A.75.75 0 0 1 15 4.5h1.5a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H15a.75.75 0 0 1-.75-.75V5.25Z" clip-rule="evenodd" /></svg>
     </div>`,
     iconSize: [20, 20],
     iconAnchor: [10, 10],
@@ -99,11 +105,11 @@ const createStandbyIcon = () => {
   });
 };
 
-const createBaseIcon = (color: string = '#ef4444') => {
+const createBaseIcon = (color: string = '#1B1E26') => {
   return L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background-color: ${color}; width: 32px; height: 32px; border-radius: 8px; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5"><path d="M11.47 3.84a.75.75 0 0 1 1.06 0l8.632 8.632a.75.75 0 0 1-1.06 1.06l-.353-.353v6.321a2.25 2.25 0 0 1-2.25 2.25H13.5a.75.75 0 0 1-.75-.75V15a.75.75 0 0 0-.75-.75h-2.25a.75.75 0 0 0-.75.75v5.25a.75.75 0 0 1-.75.75H4.5A2.25 2.25 0 0 1 2.25 19.5V9.18l-.353.353a.75.75 0 0 1-1.06-1.06l8.632-8.632Z" /></svg>
+    html: `<div style="background-color: ${color}; width: 30px; height: 30px; border-radius: 9px; color: white; display: flex; align-items: center; justify-content: center; border: 2px solid white; ${BASE_SHADOW}">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M11.47 3.84a.75.75 0 0 1 1.06 0l8.632 8.632a.75.75 0 0 1-1.06 1.06l-.353-.353v6.321a2.25 2.25 0 0 1-2.25 2.25H13.5a.75.75 0 0 1-.75-.75V15a.75.75 0 0 0-.75-.75h-2.25a.75.75 0 0 0-.75.75v5.25a.75.75 0 0 1-.75.75H4.5A2.25 2.25 0 0 1 2.25 19.5V9.18l-.353.353a.75.75 0 0 1-1.06-1.06l8.632-8.632Z" /></svg>
     </div>`,
     iconSize: [32, 32],
     iconAnchor: [16, 32],
@@ -120,7 +126,39 @@ interface MapComponentProps {
   onSelectAppointment: (id: string) => void;
   onStatusChange: (id: string, status: AppointmentStatus) => void;
   onRequestCall?: (id: string) => void;
+  selectedId?: string | null;   // scheda selezionata: segnaposto evidenziato
 }
+
+// La mappa si adatta quando il suo riquadro cambia misura (divisore,
+// mappa nascosta/mostrata, barra laterale richiusa)
+const AutoResize: React.FC = () => {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer();
+    if (typeof ResizeObserver === 'undefined') return;
+    // Riquadro nascosto (es. in Impostazioni) e poi rimostrato: si ritrova
+    // la stessa vista di prima, senza lo spostamento di invalidateSize da 0
+    let hiddenView: { center: L.LatLng; zoom: number } | null = null;
+    const ro = new ResizeObserver(() => {
+      const visible = el.clientWidth > 0 && el.clientHeight > 0;
+      if (!visible) {
+        if (!hiddenView) hiddenView = { center: map.getCenter(), zoom: map.getZoom() };
+        return;
+      }
+      if (hiddenView) {
+        const v = hiddenView;
+        hiddenView = null;
+        map.invalidateSize({ pan: false });
+        map.setView(v.center, v.zoom, { animate: false });
+        return;
+      }
+      map.invalidateSize();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [map]);
+  return null;
+};
 
 const ChangeView: React.FC<{ center: Coordinates; zoom: number }> = ({ center, zoom }) => {
   const map = useMap();
@@ -130,19 +168,41 @@ const ChangeView: React.FC<{ center: Coordinates; zoom: number }> = ({ center, z
   return null;
 };
 
+// Riadattamento automatico: solo quando cambia l'INSIEME dei punti (non a
+// ogni nuovo array con gli stessi punti), così non annulla lo spostamento
+// verso la scheda selezionata (niente rimbalzi)
 const FitBounds: React.FC<{ appointments: Appointment[]; baseLocation?: any }> = ({ appointments, baseLocation }) => {
   const map = useMap();
+  const points: [number, number][] = appointments.map(a => [a.coords.lat, a.coords.lng]);
+  if (baseLocation) {
+    points.push([baseLocation.coords.lat, baseLocation.coords.lng]);
+  }
+  const signature = points.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).sort().join(';');
   useEffect(() => {
-    const points: [number, number][] = appointments.map(a => [a.coords.lat, a.coords.lng]);
-    if (baseLocation) {
-      points.push([baseLocation.coords.lat, baseLocation.coords.lng]);
-    }
-
     if (points.length > 1) {
       const bounds = L.latLngBounds(points);
       map.fitBounds(bounds, { padding: [50, 50] });
     }
-  }, [appointments, baseLocation, map]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, map]);
+  return null;
+};
+
+// Scheda o riga selezionata: se il suo segnaposto è fuori dall'area
+// visibile, la mappa si sposta per mostrarlo (stesso zoom, nessun popup).
+// Reagisce solo al cambio di selezione.
+const PanToSelected: React.FC<{ appointments: Appointment[]; selectedId?: string | null }> = ({ appointments, selectedId }) => {
+  const map = useMap();
+  const listRef = React.useRef(appointments);
+  listRef.current = appointments;
+  useEffect(() => {
+    if (!selectedId) return;
+    const appt = listRef.current.find(a => a.id === selectedId);
+    if (!appt) return;
+    const target = L.latLng(appt.coords.lat, appt.coords.lng);
+    const view = map.getBounds().pad(-0.08);
+    if (!view.contains(target)) map.panTo(target, { animate: true });
+  }, [selectedId, map]);
   return null;
 };
 
@@ -161,7 +221,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
   technicians = [],
   onSelectAppointment,
   onStatusChange,
-  onRequestCall
+  onRequestCall,
+  selectedId,
 }) => {
   const [techRoutes, setTechRoutes] = useState<TechRoute[]>([]);
 
@@ -238,21 +299,23 @@ const MapComponent: React.FC<MapComponentProps> = ({
   }, [appointments, baseLocation, technicians]);
 
   const getIcon = (appt: Appointment) => {
+    const selected = appt.id === selectedId;
     if (appt.status === 'confirmed' || appt.status === 'proposed') {
         return createScheduledIcon(
           appt.sequenceOrder || 0,
           colorFor(appt),
           appt.urgent,
-          appt.status === 'proposed'
+          appt.status === 'proposed',
+          selected
         );
     } else if (appt.status === 'standby') {
-        return createStandbyIcon();
+        return createStandbyIcon(selected);
     } else if (appt.status === 'issue') {
-        return createIssueIcon();
+        return createIssueIcon(selected);
     } else if (appt.status === 'cancelled') {
-        return createCancelledIcon();
+        return createCancelledIcon(selected);
     } else {
-        return createPendingIcon(appt.urgent);
+        return createPendingIcon(appt.urgent, selected);
     }
   };
 
@@ -261,12 +324,19 @@ const MapComponent: React.FC<MapComponentProps> = ({
       : s === 'issue' ? 'Problematica' : s === 'cancelled' ? 'Annullata' : 'In attesa';
 
   const issueLabel = (t?: string): string =>
-    t === 'wrong_phone' ? '📵 Numero non corretto'
-      : t === 'works_pending' ? '🚧 Lavori da ultimare'
-      : '📆 Da richiamare';
+    t === 'wrong_phone' ? 'Numero non corretto'
+      : t === 'works_pending' ? 'Lavori da ultimare'
+      : 'Da richiamare';
+
+  const statusChip = (s: AppointmentStatus): string =>
+    s === 'confirmed' ? 'chip-success' : s === 'proposed' ? 'chip-info' : s === 'pending' ? 'chip-warn'
+      : s === 'issue' ? 'chip-danger' : 'chip-neutral';
+
+  const dayOf = (iso?: string): string =>
+    iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, '') : '';
 
   return (
-    <div className="flex flex-col h-full w-full rounded-xl overflow-hidden shadow-lg border border-slate-200 bg-white">
+    <div className="flex flex-col h-full w-full rounded-card overflow-hidden border border-line bg-surface shadow-card">
       <div className="flex-1 relative min-h-0">
         <MapContainer
           center={[center.lat, center.lng]}
@@ -279,7 +349,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           <ChangeView center={center} zoom={13} />
+          <AutoResize />
           <FitBounds appointments={appointments} baseLocation={baseLocation} />
+          <PanToSelected appointments={appointments} selectedId={selectedId} />
 
           {baseLocation && (
             <Marker
@@ -287,9 +359,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
               icon={createBaseIcon()}
             >
               <Popup>
-                <div className="font-sans text-sm">
-                  <strong className="block text-red-600">Base Generale</strong>
-                  <p className="mt-1">{baseLocation.address}</p>
+                <div className="map-popup">
+                  <p className="eyebrow flex items-center gap-1.5"><House size={12} strokeWidth={2} aria-hidden /> Base generale</p>
+                  <p className="mt-1 text-[13px] text-ink-800">{baseLocation.address}</p>
                 </div>
               </Popup>
             </Marker>
@@ -303,10 +375,10 @@ const MapComponent: React.FC<MapComponentProps> = ({
               icon={createBaseIcon(tech.color)}
             >
               <Popup>
-                <div className="font-sans text-sm">
-                  <strong className="block" style={{ color: tech.color }}>Partenza: {tech.name}</strong>
-                  <p className="mt-1">{tech.baseAddress}</p>
-                  <p className="text-xs text-slate-500 mt-1">🕒 {tech.workStart} - {tech.workEnd}</p>
+                <div className="map-popup">
+                  <p className="eyebrow flex items-center gap-1.5"><span className="dot" style={{ backgroundColor: tech.color }} /> Partenza di {tech.name}</p>
+                  <p className="mt-1 text-[13px] text-ink-800">{tech.baseAddress}</p>
+                  <p className="mt-1 text-xs text-ink-500 flex items-center gap-1"><Clock size={12} strokeWidth={1.75} aria-hidden /><span className="num">{tech.workStart}–{tech.workEnd}</span></p>
                 </div>
               </Popup>
             </Marker>
@@ -316,6 +388,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
              const tech = techById(appt.technicianId);
              const isScheduled = appt.status === 'confirmed' || appt.status === 'proposed';
              const markerColor = isScheduled ? colorFor(appt) : '#475569';
+             const code = displayCode(appt);
+             const sameAsAddress = titleIsAddress(appt);
              return (
                 <Marker
                 key={appt.id}
@@ -326,93 +400,66 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 }}
                 >
                 <Popup>
-                    <div className="font-sans text-sm">
-                    <div className="flex items-center justify-between mb-1 gap-2">
-                            <strong className="block" style={{ color: isScheduled ? markerColor : '#475569' }}>
-                                {isScheduled && appt.sequenceOrder ? `${appt.sequenceOrder}. ` : ''}{appt.title}
-                            </strong>
+                  <div className="map-popup">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {isScheduled && appt.startTime ? (
+                        <span className="num text-[13px] font-semibold text-ink-900">{appt.startTime}–{appt.endTime}</span>
+                      ) : (
+                        <span className={`chip ${statusChip(appt.status)}`}>{appt.status === 'issue' ? issueLabel(appt.issueType) : statusLabel(appt.status)}</span>
+                      )}
+                      {isScheduled && appt.date && <span className="text-xs text-ink-500">{dayOf(appt.date)}</span>}
+                      {appt.status === 'proposed' && <span className="chip chip-info">Da confermare</span>}
                     </div>
-                    <div className="flex gap-1 flex-wrap mb-1">
-                      {appt.urgent && (
-                        <span className="text-[10px] font-bold text-white bg-red-600 px-1.5 py-0.5 rounded">URGENTE</span>
-                      )}
-                      {appt.status === 'proposed' && (
-                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">
-                          {statusLabel(appt.status)}: da confermare
-                        </span>
-                      )}
-                      {appt.status === 'issue' && (
-                        <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded">
-                          {issueLabel(appt.issueType)}
-                        </span>
-                      )}
-                      {appt.status === 'cancelled' && (
-                        <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-300 px-1.5 py-0.5 rounded">
-                          ✖ Annullata
-                        </span>
-                      )}
-                      {tech && (
-                        <span className="text-[10px] font-bold text-white px-1.5 py-0.5 rounded" style={{ backgroundColor: tech.color }}>
-                          {tech.name}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1">{appt.address}</p>
+                    <p className="mt-1.5 text-[15px] font-semibold leading-snug text-ink-950">
+                      {isScheduled && appt.sequenceOrder ? <span className="num mr-1" style={{ color: markerColor }}>{appt.sequenceOrder}.</span> : null}{sameAsAddress ? appt.address : appt.title}
+                    </p>
+                    {!sameAsAddress && <p className="mt-0.5 text-[13px] text-ink-500">{appt.address}</p>}
+                    {(appt.urgent || tech || code) && (
+                      <div className="mt-2 flex gap-1.5 flex-wrap">
+                        {appt.urgent && <span className="chip chip-solid-danger">URGENTE</span>}
+                        {tech && <span className="chip chip-neutral"><span className="dot" style={{ backgroundColor: tech.color }} />{tech.name}</span>}
+                        {code && <span className="chip chip-neutral num" data-testid="popup-code" title={appt.periziaCode ? 'Codice pratica' : 'Riferimento (dalle note)'}><Hash size={11} strokeWidth={2} aria-hidden />{code}</span>}
+                      </div>
+                    )}
                     {appt.approximate && (
-                      <p className="mt-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                        ≈ Posizione approssimativa: pin al centro del comune (indirizzo esatto non trovato)
+                      <p className="mt-2 text-xs text-amber-800 flex items-start gap-1.5">
+                        <MapPin size={13} strokeWidth={1.75} className="shrink-0 mt-px" aria-hidden />
+                        Posizione approssimativa: al centro del comune (indirizzo esatto non trovato)
                       </p>
                     )}
-                    {appt.phone && <p className="mt-1 text-xs text-slate-500">📞 {appt.phone}</p>}
+                    {appt.phone && <p className="mt-2 text-[13px] text-ink-700 flex items-center gap-1.5"><Phone size={13} strokeWidth={1.75} className="text-ink-400" aria-hidden /><span className="num">{formatPhone(appt.phone)}</span></p>}
                     {appt.followUpDate && appt.status === 'issue' && (
-                      <p className="mt-1 text-xs font-bold text-amber-700">🔔 Rientra il {appt.followUpDate}</p>
+                      <p className="mt-1 text-xs font-medium text-amber-800 flex items-center gap-1.5"><Bell size={13} strokeWidth={1.75} aria-hidden />Rientra il {dayOf(appt.followUpDate)}</p>
                     )}
                     {appt.callSummary && (
-                      <p className="mt-1 text-xs text-slate-500 italic">🤖 {appt.callSummary}</p>
+                      <p className="mt-2 text-xs text-ink-600 flex items-start gap-1.5 bg-violet-50/70 border border-violet-100 rounded-lg px-2 py-1.5">
+                        <Sparkles size={13} strokeWidth={1.75} className="shrink-0 mt-px text-violet-600" aria-hidden />{appt.callSummary}
+                      </p>
                     )}
 
-                    {isScheduled && appt.startTime && (
-                        <div className="mt-2 text-xs bg-slate-100 p-1 rounded">
-                        🕒 {appt.startTime} - {appt.endTime} <br/>
-                        {appt.date && <span className="font-bold" style={{ color: markerColor }}>{appt.date}</span>}
-                        </div>
-                    )}
-
-                    <div className="mt-3 pt-2 border-t border-slate-200 flex flex-wrap gap-1 justify-center">
+                    <div className="mt-3 pt-2.5 border-t border-line flex flex-wrap gap-1.5">
                         {appt.status !== 'confirmed' && (
-                            <button
-                                onClick={() => onStatusChange(appt.id, 'confirmed')}
-                                className="bg-blue-600 text-white text-[10px] px-2 py-1 rounded hover:bg-blue-700 transition-colors"
-                            >
-                                Conferma
-                            </button>
-                        )}
-                        {appt.status !== 'pending' && (
-                            <button
-                                onClick={() => onStatusChange(appt.id, 'pending')}
-                                className="bg-orange-500 text-white text-[10px] px-2 py-1 rounded hover:bg-orange-600 transition-colors"
-                            >
-                                In Attesa
-                            </button>
-                        )}
-                        {appt.status !== 'standby' && (
-                            <button
-                                onClick={() => onStatusChange(appt.id, 'standby')}
-                                className="bg-slate-500 text-white text-[10px] px-2 py-1 rounded hover:bg-slate-600 transition-colors"
-                            >
-                                Stand-by
+                            <button type="button" onClick={() => onStatusChange(appt.id, 'confirmed')} className="btn btn-sm btn-primary h-7 px-2.5 text-xs">
+                                <Check size={13} strokeWidth={2} aria-hidden /> Conferma
                             </button>
                         )}
                         {appt.phone && onRequestCall && (
-                            <button
-                                onClick={() => onRequestCall(appt.id)}
-                                className="bg-emerald-600 text-white text-[10px] px-2 py-1 rounded hover:bg-emerald-700 transition-colors"
-                            >
-                                📞 Chiama (AI)
+                            <button type="button" onClick={() => onRequestCall(appt.id)} className="btn btn-sm btn-secondary h-7 px-2.5 text-xs">
+                                <Phone size={13} strokeWidth={1.75} aria-hidden /> Chiama
+                            </button>
+                        )}
+                        {appt.status !== 'pending' && (
+                            <button type="button" onClick={() => onStatusChange(appt.id, 'pending')} className="btn btn-sm btn-secondary h-7 px-2.5 text-xs">
+                                <Clock size={13} strokeWidth={1.75} aria-hidden /> In attesa
+                            </button>
+                        )}
+                        {appt.status !== 'standby' && (
+                            <button type="button" onClick={() => onStatusChange(appt.id, 'standby')} className="btn btn-sm btn-ghost h-7 px-2.5 text-xs">
+                                <PauseCircle size={13} strokeWidth={1.75} aria-hidden /> Stand-by
                             </button>
                         )}
                     </div>
-                    </div>
+                  </div>
                 </Popup>
                 </Marker>
             );
@@ -432,20 +479,20 @@ const MapComponent: React.FC<MapComponentProps> = ({
       </div>
 
       {routeSummary && (
-        <div className="bg-white border-t border-slate-200 px-6 py-4 z-10">
-          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Riepilogo Percorso (Confermati)</h3>
-          <div className="grid grid-cols-3 gap-4">
+        <div className="bg-surface border-t border-line px-4 py-3 z-10" data-testid="route-summary">
+          <p className="eyebrow mb-2">Riepilogo del giro confermato</p>
+          <div className="grid grid-cols-3 gap-3">
             <div className="flex flex-col">
-              <span className="text-xs text-slate-500 mb-1">Distanza Totale</span>
-              <span className="text-lg md:text-xl font-bold text-slate-800">{routeSummary.totalDistance} <span className="text-sm font-normal text-slate-400">km</span></span>
+              <span className="text-xs text-ink-500">Distanza</span>
+              <span className="num text-lg font-semibold text-ink-950">{routeSummary.totalDistance} <span className="text-xs font-normal text-ink-400">km</span></span>
             </div>
-            <div className="flex flex-col border-l border-slate-100 pl-4">
-              <span className="text-xs text-slate-500 mb-1">Tempo Guida</span>
-              <span className="text-lg md:text-xl font-bold text-indigo-600">{routeSummary.totalTravelTime} <span className="text-sm font-normal text-slate-400">min</span></span>
+            <div className="flex flex-col border-l border-line pl-3">
+              <span className="text-xs text-ink-500">Guida</span>
+              <span className="num text-lg font-semibold text-ink-950">{routeSummary.totalTravelTime} <span className="text-xs font-normal text-ink-400">min</span></span>
             </div>
-            <div className="flex flex-col border-l border-slate-100 pl-4">
-              <span className="text-xs text-slate-500 mb-1">Fine Giornata</span>
-              <span className="text-lg md:text-xl font-bold text-emerald-600">{routeSummary.finalEndTime}</span>
+            <div className="flex flex-col border-l border-line pl-3">
+              <span className="text-xs text-ink-500">Fine giornata</span>
+              <span className="num text-lg font-semibold text-emerald-700">{routeSummary.finalEndTime}</span>
             </div>
           </div>
         </div>

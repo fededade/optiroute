@@ -1,6 +1,9 @@
 import React, { useRef, useState } from 'react';
 import type { AlternativeSlot, Appointment } from '../types';
 import { startConfirmationCall } from '../services/callService';
+import { Ban, CalendarDays, Check, CircleStop, Clock, HardHat, Phone, PhoneCall, TriangleAlert, X } from 'lucide-react';
+import ModalShell from './modal/ModalShell';
+import { Spinner, Stat, ic } from './modal/parts';
 
 // Chiamate AI di conferma in blocco: l'operatore seleziona le pratiche
 // (tutte quelle con telefono, di default le non ancora chiamate) e le
@@ -113,151 +116,160 @@ const BulkCallModal: React.FC<BulkCallModalProps> = ({
   const failedCount = Object.values(itemStates).filter(s => s.outcome === 'failed').length;
   const skippedCount = Object.values(itemStates).filter(s => s.outcome === 'skipped').length;
 
-  const OutcomeBadge = ({ id }: { id: string }) => {
+  const outcomeBadge = (id: string) => {
     const state = itemStates[id];
     if (!state) return null;
-    if (state.outcome === 'queued') return <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0">In coda</span>;
-    if (state.outcome === 'calling') return <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded animate-pulse shrink-0">📞 In corso...</span>;
-    if (state.outcome === 'ok') return <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded shrink-0">✓ Avviata</span>;
-    if (state.outcome === 'skipped') return <span className="text-[10px] font-bold text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded shrink-0">Annullata</span>;
-    return <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1.5 py-0.5 rounded shrink-0">✗ Fallita</span>;
+    if (state.outcome === 'queued') return <span className="chip chip-neutral shrink-0"><Clock {...ic} size={12} />In coda</span>;
+    if (state.outcome === 'calling') return <span className="chip chip-ai shrink-0"><Spinner size={12} />In corso...</span>;
+    if (state.outcome === 'ok') return <span className="chip chip-success shrink-0"><Check {...ic} size={12} />Avviata</span>;
+    if (state.outcome === 'skipped') return <span className="chip chip-neutral shrink-0 text-ink-500"><Ban {...ic} size={12} />Annullata</span>;
+    return <span className="chip chip-danger shrink-0"><X {...ic} size={12} />Fallita</span>;
   };
 
-  return (
-    <div
-      className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4"
-      onClick={phase !== 'running' ? onClose : undefined}
-    >
-      <div
-        className="bg-white rounded-2xl shadow-2xl p-6 max-w-lg w-full max-h-[85vh] flex flex-col"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 mb-1 shrink-0">
-          <span className="text-2xl">📞</span>
-          <h3 className="text-lg font-bold text-slate-800 flex-1">Chiamate di conferma AI</h3>
-          {phase !== 'running' && (
-            <button onClick={onClose} title="Chiudi" className="text-slate-400 hover:text-slate-600 text-xl leading-none px-1">✕</button>
-          )}
-        </div>
+  const meta = (appt: Appointment, withTech: boolean) => {
+    const tech = withTech && appt.technicianId ? technicianNameById[appt.technicianId] : undefined;
+    return (
+      <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-ink-500">
+        <span className="inline-flex items-center gap-1"><CalendarDays {...ic} size={12} /><span className="num">{formatWhen(appt)}</span></span>
+        <span className="inline-flex items-center gap-1"><Phone {...ic} size={12} /><span className="num">{appt.phone}</span></span>
+        {tech && <span className="inline-flex items-center gap-1"><HardHat {...ic} size={12} />{tech}</span>}
+      </p>
+    );
+  };
 
+  const total = Object.keys(itemStates).length;
+  const finished = okCount + failedCount + skippedCount;
+  const pct = total ? Math.round((finished / total) * 100) : 0;
+
+  const footer = phase === 'preview' ? (
+    <>
+      <span className="mr-auto text-[13px] text-ink-500 max-sm:hidden">
+        <span className="num font-medium text-ink-900">{selectedCount}</span> di <span className="num">{callable.length}</span> selezionate
+      </span>
+      <button type="button" onClick={onClose} className="btn btn-secondary">
+        Annulla
+      </button>
+      <button type="button" onClick={handleStart} disabled={selectedCount === 0} className="btn btn-accent">
+        <Phone {...ic} />
+        Avvia {selectedCount} {selectedCount === 1 ? 'chiamata' : 'chiamate'}
+      </button>
+    </>
+  ) : phase === 'running' ? (
+    <button type="button" onClick={() => { cancelRef.current = true; }} className="btn btn-danger">
+      <CircleStop {...ic} />
+      Interrompi (dopo la chiamata in corso)
+    </button>
+  ) : (
+    <button type="button" onClick={onClose} className="btn btn-primary">
+      Chiudi
+    </button>
+  );
+
+  return (
+    <ModalShell
+      icon={PhoneCall}
+      tone="ai"
+      title="Chiamate di conferma AI"
+      subtitle={phase === 'preview'
+        ? 'Seleziona le pratiche da chiamare.'
+        : phase === 'running' ? 'Chiamate in partenza, una alla volta.' : 'Invio delle chiamate completato.'}
+      onClose={onClose}
+      dismissible={phase !== 'running'}
+      closeDisabled={phase === 'running'}
+      closeHint="Attendi la fine delle chiamate o interrompi"
+      size="md"
+      footer={footer}
+    >
         {phase === 'preview' && (
-          <>
-            <p className="text-sm text-slate-600 mb-3 shrink-0">
-              L'operatore AI chiamerà <b>una alla volta</b> le pratiche selezionate per
+          <div className="space-y-3">
+            <p className="text-sm leading-6 text-ink-600">
+              L'operatore AI chiamerà <b className="font-semibold text-ink-900">una alla volta</b> le pratiche selezionate per
               confermare l'appuntamento proposto (data, orario e indirizzo).
             </p>
-
-            <div className="flex-1 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 mb-3">
+            <div className="card divide-y divide-line overflow-hidden shadow-none">
               {callable.map(appt => {
                 const alreadyCalled = appt.callStatus === 'called';
+                const isSel = selected.has(appt.id);
                 return (
-                  <label key={appt.id} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-slate-50">
+                  <label key={appt.id} className={`flex cursor-pointer items-center gap-3 px-3.5 py-2.5 transition-colors ${isSel ? 'bg-surface' : 'bg-slate-50/60'} hover:bg-slate-50`}>
                     <input
                       type="checkbox"
-                      checked={selected.has(appt.id)}
+                      checked={isSel}
                       onChange={() => toggle(appt.id)}
-                      className="rounded text-emerald-600 focus:ring-emerald-500 shrink-0"
+                      className="checkbox accent-ink-900 shrink-0"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-slate-800 truncate">
-                        {appt.urgent && <span className="text-[10px] font-bold text-white bg-red-600 px-1 rounded mr-1">URGENTE</span>}
-                        {appt.title}
+                      <p className="flex items-center gap-1.5 text-sm font-medium text-ink-900">
+                        {appt.urgent && <span className="chip chip-solid-danger h-[18px] px-1.5 text-2xs font-semibold">URGENTE</span>}
+                        <span className="truncate">{appt.title}</span>
                       </p>
-                      <p className="text-xs text-slate-400 truncate">
-                        {formatWhen(appt)} · 📞 {appt.phone}
-                        {appt.technicianId && technicianNameById[appt.technicianId] ? ` · ${technicianNameById[appt.technicianId]}` : ''}
-                      </p>
+                      {meta(appt, true)}
                     </div>
-                    {alreadyCalled && (
-                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded shrink-0">
-                        già chiamato
-                      </span>
-                    )}
-                    {appt.callStatus === 'failed' && (
-                      <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 px-1.5 py-0.5 rounded shrink-0">
-                        ultima fallita
-                      </span>
-                    )}
+                    {alreadyCalled && <span className="chip chip-success shrink-0">già chiamato</span>}
+                    {appt.callStatus === 'failed' && <span className="chip chip-danger shrink-0">ultima fallita</span>}
                   </label>
                 );
               })}
               {callable.length === 0 && (
-                <p className="text-sm text-slate-400 italic p-3">Nessuna pratica con numero di telefono.</p>
+                <p className="p-4 text-sm text-ink-500">Nessuna pratica con numero di telefono.</p>
               )}
             </div>
 
             {noPhoneCount > 0 && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded p-2 mb-3 shrink-0">
-                ⚠️ {noPhoneCount} {noPhoneCount === 1 ? 'pratica esclusa perché senza numero' : 'pratiche escluse perché senza numero'} di
-                telefono (aggiungilo con il tasto Modifica).
-              </p>
+              <div className="callout callout-warn">
+                <TriangleAlert {...ic} className="mt-0.5 shrink-0 text-amber-600" />
+                <p className="leading-5">
+                  {noPhoneCount} {noPhoneCount === 1 ? 'pratica esclusa perché senza numero' : 'pratiche escluse perché senza numero'} di
+                  telefono (aggiungilo con il tasto Modifica).
+                </p>
+              </div>
             )}
-
-            <div className="flex gap-2 shrink-0">
-              <button
-                onClick={onClose}
-                className="flex-1 py-2 rounded-lg border border-slate-300 text-sm font-bold text-slate-600 hover:bg-slate-50"
-              >
-                Annulla
-              </button>
-              <button
-                onClick={handleStart}
-                disabled={selectedCount === 0}
-                className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-bold"
-              >
-                📞 Avvia {selectedCount} {selectedCount === 1 ? 'chiamata' : 'chiamate'}
-              </button>
-            </div>
-          </>
+          </div>
         )}
 
         {(phase === 'running' || phase === 'done') && (
-          <>
-            <p className="text-sm text-slate-600 mb-3 shrink-0">
-              {phase === 'running'
-                ? 'Chiamate in corso, una alla volta. Non chiudere questa finestra.'
-                : `Completato: ${okCount} avviate${failedCount ? `, ${failedCount} fallite` : ''}${skippedCount ? `, ${skippedCount} annullate` : ''}. ` +
-                  `Gli esiti delle conversazioni compariranno sulle pratiche a fine chiamata, aggiornandone lo stato.`}
-            </p>
+          <div className="space-y-4">
+            {phase === 'running' ? (
+              <div>
+                <div className="mb-2 flex items-baseline justify-between gap-3 text-sm">
+                  <span className="text-ink-700">Chiamate in corso, una alla volta. Non chiudere questa finestra.</span>
+                  <span className="num shrink-0 text-ink-500">{finished}/{total}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={finished} aria-label="Avanzamento delle chiamate">
+                  <div className="h-full rounded-full bg-violet-500 transition-[width] duration-300" style={{ width: `${Math.max(pct, 4)}%` }} />
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-2">
+                  <Stat value={okCount} label="avviate" tone="success" />
+                  <Stat value={failedCount} label="fallite" tone={failedCount ? 'danger' : 'neutral'} />
+                  <Stat value={skippedCount} label="annullate" />
+                </div>
+                <p className="text-sm leading-6 text-ink-600">
+                  {`Completato: ${okCount} avviate${failedCount ? `, ${failedCount} fallite` : ''}${skippedCount ? `, ${skippedCount} annullate` : ''}. ` +
+                    `Gli esiti delle conversazioni compariranno sulle pratiche a fine chiamata, aggiornandone lo stato.`}
+                </p>
+              </>
+            )}
 
-            <div className="flex-1 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 mb-3">
+            <div className="card divide-y divide-line overflow-hidden shadow-none">
               {callable.filter(a => itemStates[a.id]).map(appt => (
-                <div key={appt.id} className="flex items-center gap-2.5 px-3 py-2">
+                <div key={appt.id} className={`flex items-center gap-3 px-3.5 py-2.5 ${itemStates[appt.id]?.outcome === 'calling' ? 'bg-violet-50/50' : ''}`}>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-800 truncate">{appt.title}</p>
-                    <p className="text-xs text-slate-400 truncate">
-                      {formatWhen(appt)} · 📞 {appt.phone}
-                    </p>
+                    <p className="truncate text-sm font-medium text-ink-900">{appt.title}</p>
+                    {meta(appt, false)}
                     {itemStates[appt.id]?.error && (
-                      <p className="text-xs text-red-600 truncate">{itemStates[appt.id].error}</p>
+                      <p className={`mt-0.5 truncate text-xs ${itemStates[appt.id].outcome === 'failed' ? 'text-rose-700' : 'text-ink-500'}`}>{itemStates[appt.id].error}</p>
                     )}
                   </div>
-                  <OutcomeBadge id={appt.id} />
+                  {outcomeBadge(appt.id)}
                 </div>
               ))}
             </div>
-
-            <div className="flex gap-2 shrink-0">
-              {phase === 'running' ? (
-                <button
-                  onClick={() => { cancelRef.current = true; }}
-                  className="flex-1 py-2 rounded-lg border border-red-200 text-sm font-bold text-red-600 hover:bg-red-50"
-                >
-                  Interrompi (dopo la chiamata in corso)
-                </button>
-              ) : (
-                <button
-                  onClick={onClose}
-                  className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold"
-                >
-                  Chiudi
-                </button>
-              )}
-            </div>
-          </>
+          </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 // Retell AI outbound confirmation call.
 // Required env vars (Vercel dashboard):
@@ -9,18 +10,46 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 //   RETELL_COMPANY_NAME -> company name spoken by the agent (default: "Effestudio")
 //   RETELL_AGENT_NAME   -> operator name spoken by the agent (default: "Chiara")
 //   RETELL_MANDANTE     -> chain of principals (default: "Prelios per conto di Banca Intesa")
+//   RETELL_API_BASE     -> base dell'API Retell (default https://api.retellai.com; per i test)
+//   CRON_SECRET         -> se impostata, l'endpoint richiede Authorization: Bearer <CRON_SECRET>
+//
+// NB: questo file è importato (e impacchettato) anche dal motore lato server
+// (server/engine.ts): niente import relativi qui, Vercel non li risolverebbe.
 
-const RETELL_API_URL = 'https://api.retellai.com/v2/create-phone-call';
-
-const RETELL_API_KEY = process.env.RETELL_API_KEY || '';
-const RETELL_FROM_NUMBER = process.env.RETELL_FROM_NUMBER || '';
-const RETELL_AGENT_ID = process.env.RETELL_AGENT_ID || '';
 const COMPANY_NAME = process.env.RETELL_COMPANY_NAME || 'Effetre Properties';
 const AGENT_NAME = process.env.RETELL_AGENT_NAME || 'Misi';
 const MANDANTE = process.env.RETELL_MANDANTE || 'Prelios - Banca Intesa';
 
+// Configurazione Retell, letta al momento della richiesta
+export interface RetellEnv {
+  apiKey: string;
+  fromNumber: string;
+  agentId: string;
+  apiBase: string;
+}
+
+export const retellEnv = (): RetellEnv => ({
+  apiKey: process.env.RETELL_API_KEY || '',
+  fromNumber: process.env.RETELL_FROM_NUMBER || '',
+  agentId: process.env.RETELL_AGENT_ID || '',
+  apiBase: (process.env.RETELL_API_BASE || 'https://api.retellai.com').replace(/\/+$/, ''),
+});
+
+// Protezione opzionale: con CRON_SECRET impostata serve la chiave (confronto
+// a tempo costante sui digest); senza, l'endpoint resta aperto come prima.
+export const isCallApiAuthorized = (headers: VercelRequest['headers'] | undefined): boolean => {
+  const secret = process.env.CRON_SECRET || '';
+  if (!secret) return true;
+  const raw = headers?.authorization;
+  const value = Array.isArray(raw) ? raw[0] || '' : raw || '';
+  const m = /^Bearer\s+(.+)$/i.exec(value.trim());
+  if (!m) return false;
+  const digest = (v: string) => createHash('sha256').update(v, 'utf8').digest();
+  return timingSafeEqual(digest(m[1].trim()), digest(secret));
+};
+
 // Normalize to E.164; numbers without prefix are assumed to be Italian (+39)
-const normalizePhone = (raw: string): string | null => {
+export const normalizePhone = (raw: string): string | null => {
   let phone = raw.replace(/[\s\-().]/g, '');
   if (phone.startsWith('00')) phone = `+${phone.slice(2)}`;
   if (!phone.startsWith('+')) {
@@ -356,35 +385,27 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
   return { callScript, dynamicVariables: stringVariables };
 };
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+const NOT_CONFIGURED =
+  'Chiamate AI non configurate: impostare RETELL_API_KEY e RETELL_FROM_NUMBER nelle variabili d\'ambiente.';
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+export type RetellCallBody = CallScriptInput & { phone?: unknown };
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+export type RetellPayloadResult =
+  | { ok: true; payload: Record<string, unknown>; toNumber: string }
+  | { ok: false; status: number; error: string };
 
-  if (!RETELL_API_KEY || !RETELL_FROM_NUMBER) {
-    return res.status(500).json({
-      error: 'Chiamate AI non configurate: impostare RETELL_API_KEY e RETELL_FROM_NUMBER nelle variabili d\'ambiente.',
-    });
-  }
-
-  const body: CallScriptInput & { phone?: unknown } = req.body || {};
+// Payload completo per create-phone-call a partire dagli stessi campi del
+// body dell'endpoint. Funzione pura: dipende solo da input e configurazione.
+export const buildRetellCallPayload = (body: RetellCallBody, env: RetellEnv = retellEnv()): RetellPayloadResult => {
   const { phone, date, periziaCode, urgent } = body;
 
   if (!phone) {
-    return res.status(400).json({ error: 'Numero di telefono mancante.' });
+    return { ok: false, status: 400, error: 'Numero di telefono mancante.' };
   }
 
   const toNumber = normalizePhone(String(phone));
   if (!toNumber) {
-    return res.status(400).json({ error: `Numero di telefono non valido: ${phone}` });
+    return { ok: false, status: 400, error: `Numero di telefono non valido: ${phone}` };
   }
 
   // Script e variabili dinamiche (alternative comprese: quelle non valide
@@ -393,7 +414,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isUrgent = urgent === true || urgent === 'true';
 
   const payload: Record<string, unknown> = {
-    from_number: RETELL_FROM_NUMBER,
+    from_number: env.fromNumber,
     to_number: toNumber,
     retell_llm_dynamic_variables: dynamicVariables,
     metadata: {
@@ -404,37 +425,93 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     },
   };
 
-  if (RETELL_AGENT_ID) {
-    payload.override_agent_id = RETELL_AGENT_ID;
+  if (env.agentId) {
+    payload.override_agent_id = env.agentId;
   }
+  return { ok: true, payload, toNumber };
+};
 
+export type RetellCallResult =
+  | { ok: true; callId?: string; callStatus?: string; toNumber: string }
+  | { ok: false; status: number; error: string };
+
+// Crea la chiamata su Retell (usata dall'endpoint e dal motore lato server).
+// Non lancia eccezioni. Nei log solo lo stato HTTP: mai numeri o dati del cliente.
+export const createRetellCall = async (
+  body: RetellCallBody,
+  opts: { env?: RetellEnv; timeoutMs?: number } = {}
+): Promise<RetellCallResult> => {
+  const env = opts.env || retellEnv();
+  if (!env.apiKey || !env.fromNumber) {
+    return { ok: false, status: 500, error: NOT_CONFIGURED };
+  }
+  const built = buildRetellCallPayload(body, env);
+  if (!built.ok) return built;
+
+  const controller = opts.timeoutMs ? new AbortController() : undefined;
+  const timer = controller ? setTimeout(() => controller.abort(), opts.timeoutMs) : undefined;
   try {
-    const response = await fetch(RETELL_API_URL, {
+    const response = await fetch(`${env.apiBase}/v2/create-phone-call`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${RETELL_API_KEY}`,
+        'Authorization': `Bearer ${env.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(built.payload),
+      signal: controller?.signal,
     });
 
-    const data = await response.json().catch(() => ({}));
+    const data: any = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      console.error('Retell API error:', response.status, data);
-      return res.status(response.status).json({
+      console.error('Retell API error:', response.status);
+      return {
+        ok: false,
+        status: response.status,
         error: data?.message || data?.error || `Errore Retell (${response.status})`,
-      });
+      };
     }
 
-    return res.status(200).json({
-      callId: data.call_id,
-      callStatus: data.call_status,
-      toNumber,
-    });
+    return { ok: true, callId: data.call_id, callStatus: data.call_status, toNumber: built.toNumber };
   } catch (error) {
-    console.error('Retell call error:', error);
-    return res.status(500).json({ error: 'Impossibile avviare la chiamata. Riprova.' });
+    console.error('Retell call error:', controller?.signal.aborted ? 'timeout' : 'errore di rete');
+    return { ok: false, status: 500, error: 'Impossibile avviare la chiamata. Riprova.' };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
+};
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  if (!isCallApiAuthorized(req.headers)) {
+    return res.status(401).json({ error: 'auth' });
+  }
+
+  const env = retellEnv();
+  if (!env.apiKey || !env.fromNumber) {
+    return res.status(500).json({ error: NOT_CONFIGURED });
+  }
+
+  const body: RetellCallBody = req.body || {};
+  const result = await createRetellCall(body, { env });
+  if (!result.ok) {
+    return res.status(result.status).json({ error: result.error });
+  }
+  return res.status(200).json({
+    callId: result.callId,
+    callStatus: result.callStatus,
+    toNumber: result.toNumber,
+  });
 }
 

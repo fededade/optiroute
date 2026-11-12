@@ -9,6 +9,7 @@ import {
   findFeasibleSlots,
   getDayRoute,
   isInRoute,
+  localDateStr,
   placeAppointment,
   removeFromRoute,
   toMin,
@@ -32,6 +33,9 @@ export interface AutopilotSettings {
   offerAlternatives: boolean;  // true
   backfill: boolean;           // true
   minLeadHours: number;        // 3: non proporre/riempire slot che iniziano entro N ore
+  // false: alternative e rimpiazzi mai per il giorno stesso (il tecnico è già
+  // in giro e potrebbe non saperlo in tempo). true: ammessi, con l'anticipo minimo.
+  sameDayChanges: boolean;
   autoDispatch: boolean;       // true (usato dalla UI)
   dispatchHorizonDays: number; // 14 (usato dalla UI)
   autoApprove: boolean;        // false (usato dalla UI): chiama le nuove proposte senza attendere l'approvazione del giro
@@ -47,6 +51,7 @@ export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
   offerAlternatives: true,
   backfill: true,
   minLeadHours: 3,
+  sameDayChanges: false,
   autoDispatch: true,
   dispatchHorizonDays: 14,
   autoApprove: false,
@@ -204,11 +209,25 @@ const byPriority = (x: Appointment, y: Appointment): number =>
   (x.date || '').localeCompare(y.date || '') ||
   (x.startTime || '').localeCompare(y.startTime || '');
 
+// Numero "nudo" per confrontare due telefoni scritti in modo diverso
+// (+39 333 1234567, 0039 3331234567, 333.1234567 sono lo stesso numero)
+export const phoneKey = (phone: string | undefined): string => {
+  let digits = (phone || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.length > 10 && digits.startsWith('39')) digits = digits.slice(2);
+  return digits;
+};
+
 export const nextDueCall = (all: Appointment[], ctx: PlanningContext, maxInFlight = 4): Appointment | null => {
   if (!ctx.settings.enabled) return null;
   if (!isWithinCallWindow(ctx.now, ctx.settings)) return null;
-  if (all.filter(a => isCallInFlight(a, ctx.now)).length >= maxInFlight) return null;
-  const due = all.filter(a => isDue(a, ctx.now)).sort(byPriority);
+  const inFlight = all.filter(a => isCallInFlight(a, ctx.now));
+  if (inFlight.length >= maxInFlight) return null;
+  // Mai due chiamate insieme allo stesso telefono: lo stesso referente può
+  // comparire su più pratiche (un'agenzia, un proprietario con più immobili).
+  // La seconda parte quando la prima ha un esito.
+  const busy = new Set(inFlight.map(a => phoneKey(a.phone)).filter(Boolean));
+  const due = all.filter(a => isDue(a, ctx.now) && !busy.has(phoneKey(a.phone))).sort(byPriority);
   return due[0] || null;
 };
 
@@ -229,19 +248,22 @@ export const alternativesForCall = (appt: Appointment, all: Appointment[], ctx: 
     now: ctx.now,
     fallback: ctx.fallback,
     minLeadMinutes: ctx.settings.minLeadHours * 60,
+    skipToday: !ctx.settings.sameDayChanges,
   });
 };
 
 export const reduceCallStarted = (
   all: Appointment[],
   id: string,
-  alternatives: AlternativeSlot[]
+  alternatives: AlternativeSlot[],
+  now?: Date // istante di avvio: permette di riconoscere un lancio rimasto a metà
 ): Appointment[] =>
   all.map(a =>
     a.id === id
       ? {
           ...a,
           callStatus: 'calling',
+          callStartedAt: now ? now.toISOString() : undefined,
           // via i riferimenti alla chiamata precedente: il suo esito non deve
           // essere scambiato per quello della chiamata che sta partendo
           callId: undefined,
@@ -508,6 +530,8 @@ export const reduceCallOutcome = (
 // rimpiazzi (il giorno da cui arriva un anticipo viene solo risequenziato).
 const backfillSlot = (all: Appointment[], freed: FreedSlot, leftId: string, ctx: PlanningContext): Appointment[] => {
   if (!freed.technicianId) return all;
+  // Giro di oggi: senza l'opzione dedicata non si aggiungono tappe a un tecnico già in strada
+  if (!ctx.settings.sameDayChanges && freed.date === localDateStr(ctx.now)) return all;
   const tech = techById(ctx.technicians, freed.technicianId);
   const day = dayContextFor(tech, freed.date, ctx.fallback);
   if (!day) return all;

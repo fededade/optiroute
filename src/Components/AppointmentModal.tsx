@@ -4,6 +4,9 @@ import { geocodeAddress } from '../services/geocodingService';
 import { parseAddressInput } from '../services/geminiService';
 import { matchTechnician } from '../services/technicianService';
 import { provinceLabel } from '../utils/provinces';
+import { Building2, CalendarClock, CircleAlert, Contact, FilePen, FilePlus2, Flag, Siren, StickyNote, TriangleAlert, UserRound } from 'lucide-react';
+import ModalShell from './modal/ModalShell';
+import { Field, Section, Spinner, Switch, ic } from './modal/parts';
 
 interface AppointmentModalProps {
   initial?: Appointment | null; // null/undefined = new appointment
@@ -20,10 +23,10 @@ const CATEGORY_NONE = 'none';
 const CATEGORY_CANCELLED = 'cancelled';
 const CATEGORY_OPTIONS: { value: string; label: string }[] = [
   { value: CATEGORY_NONE, label: 'Nessuna (pratica normale)' },
-  { value: 'wrong_phone', label: '📵 Numero non corretto (da richiedere)' },
-  { value: 'callback', label: '📆 Da richiamare' },
-  { value: 'works_pending', label: '🚧 Lavori da ultimare' },
-  { value: CATEGORY_CANCELLED, label: '✖ Pratica annullata' },
+  { value: 'wrong_phone', label: 'Numero non corretto (da richiedere)' },
+  { value: 'callback', label: 'Da richiamare' },
+  { value: 'works_pending', label: 'Lavori da ultimare' },
+  { value: CATEGORY_CANCELLED, label: 'Pratica annullata' },
 ];
 
 const followUpLabel = (category: string): string => {
@@ -160,85 +163,105 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
     }
   };
 
+  const fid = (k: string) => `appt-${k}`;
+  const categoryTone = category === CATEGORY_CANCELLED ? 'chip-neutral' : 'chip-danger';
+  const categoryChip = CATEGORY_OPTIONS.find(o => o.value === category)?.label;
+
   return (
-    <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-slate-800">
-            {isEdit ? 'Modifica Appuntamento' : 'Nuovo Appuntamento'}
-          </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none px-1">✕</button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cliente / Intestatario</label>
-            <input
-              type="text"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              placeholder="Es. Mario Rossi"
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-              autoFocus
-            />
+    <ModalShell
+      icon={isEdit ? FilePen : FilePlus2}
+      title={isEdit ? 'Modifica Appuntamento' : 'Nuovo Appuntamento'}
+      subtitle={isEdit
+        ? 'Aggiorna i dati della pratica, la pianificazione e lo stato.'
+        : 'Inserisci la pratica: l\'indirizzo viene verificato sulla mappa.'}
+      onClose={onClose}
+      size="lg"
+      footer={
+        <>
+          <button type="button" onClick={onClose} className="btn btn-secondary">
+            Annulla
+          </button>
+          <button type="submit" form="appointment-form" disabled={isSaving} className="btn btn-primary min-w-[140px]">
+            {isSaving && <Spinner />}
+            {isSaving ? 'Verifica indirizzo...' : (isEdit ? 'Salva Modifiche' : 'Aggiungi')}
+          </button>
+        </>
+      }
+    >
+      <form id="appointment-form" onSubmit={handleSubmit}>
+        <Section title="Cliente e contatti" icon={UserRound}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Cliente / Intestatario" htmlFor={fid('title')}>
+              <input
+                id={fid('title')}
+                type="text"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Es. Mario Rossi"
+                className="input"
+                autoFocus
+              />
+            </Field>
+            <Field label="Telefono" htmlFor={fid('phone')} hint="Per la chiamata AI di conferma.">
+              <input
+                id={fid('phone')}
+                type="tel"
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                placeholder="Es. +39 333 1234567"
+                className="input num"
+              />
+            </Field>
           </div>
+          {initial?.contactPerson && (
+            <div className="mt-4 flex items-start gap-2.5 rounded-control border border-line bg-slate-50/70 px-3 py-2.5 text-sm">
+              <Contact {...ic} className="mt-0.5 shrink-0 text-ink-400" />
+              <div className="min-w-0">
+                <span className="text-ink-500">Referente da contattare: </span>
+                <span className="font-medium text-ink-900">{initial.contactPerson}</span>
+                {initial.referredBy && <span className="block text-xs text-ink-500">indicato da {initial.referredBy}</span>}
+              </div>
+            </div>
+          )}
+        </Section>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
-              Telefono <span className="font-normal normal-case text-slate-400">(per la chiamata AI di conferma)</span>
-            </label>
+        <Section title="Immobile" icon={Building2}>
+          <Field
+            label="Indirizzo *"
+            htmlFor={fid('address')}
+            hint={initial?.province
+              ? <>Provincia rilevata: <span className="font-medium text-ink-700">{provinceLabel(initial.province)}</span></>
+              : 'Via, civico e comune: più è preciso, meglio è.'}
+          >
             <input
-              type="tel"
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
-              placeholder="Es. +39 333 1234567"
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Indirizzo *</label>
-            <input
+              id={fid('address')}
               type="text"
               value={address}
               onChange={e => setAddress(e.target.value)}
               placeholder="Via, civico, comune"
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+              className="input"
               required
             />
-            {initial?.province && (
-              <p className="text-[11px] text-slate-400 mt-1">Provincia rilevata: {provinceLabel(initial.province)}</p>
-            )}
-            {initial?.approximate && (
-              <p className="text-[11px] text-amber-600 mt-1">
-                ≈ Posizione approssimativa (centro del comune): l'indirizzo esatto non è stato trovato
+          </Field>
+          {initial?.approximate && (
+            <div className="callout callout-warn mt-3">
+              <TriangleAlert {...ic} className="mt-0.5 shrink-0 text-amber-600" />
+              <p className="leading-5">
+                Posizione approssimativa (centro del comune): l'indirizzo esatto non è stato trovato
                 sulle mappe. Modificalo (es. controlla via e civico) per riposizionare il pin.
               </p>
-            )}
-          </div>
-
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Durata (min)</label>
-              <input
-                type="number"
-                min="5"
-                max="480"
-                step="5"
-                value={duration}
-                onChange={e => setDuration(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
             </div>
-            <div className="flex-1">
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tecnico</label>
+          )}
+        </Section>
+
+        <Section title="Pianificazione" icon={CalendarClock}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Tecnico" htmlFor={fid('tech')} hint="Auto: il tecnico competente per zona.">
               <select
+                id={fid('tech')}
                 value={technicianChoice}
                 onChange={e => setTechnicianChoice(e.target.value)}
-                className="w-full px-2 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                className="select"
               >
                 <option value={AUTO_TECH}>Auto (per zona)</option>
                 {technicians.filter(t => t.active).map(t => (
@@ -246,88 +269,93 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
                 ))}
                 <option value={NO_TECH}>Nessuno</option>
               </select>
-            </div>
+            </Field>
+            <Field label="Durata (min)" htmlFor={fid('duration')} hint="Durata prevista del sopralluogo.">
+              <input
+                id={fid('duration')}
+                type="number"
+                min="5"
+                max="480"
+                step="5"
+                value={duration}
+                onChange={e => setDuration(e.target.value)}
+                className="input num"
+              />
+            </Field>
           </div>
-
-          <label className={`flex items-center gap-2 rounded-lg border p-2.5 cursor-pointer transition-colors ${urgent ? 'bg-red-50 border-red-300' : 'bg-slate-50 border-slate-200'}`}>
-            <input
-              type="checkbox"
-              checked={urgent}
-              onChange={e => setUrgent(e.target.checked)}
-              className="rounded text-red-600 focus:ring-red-500"
-            />
-            <span className={`text-sm font-bold ${urgent ? 'text-red-700' : 'text-slate-600'}`}>
-              🔴 Urgente
+          <label
+            className={`mt-4 flex cursor-pointer items-center gap-3 rounded-control border px-3.5 py-3 transition-colors ${
+              urgent ? 'border-rose-200 bg-rose-50' : 'border-line bg-surface hover:bg-slate-50'
+            }`}
+          >
+            <Siren size={18} strokeWidth={1.75} aria-hidden="true" className={urgent ? 'shrink-0 text-rose-600' : 'shrink-0 text-ink-400'} />
+            <span className="min-w-0 flex-1">
+              <span className={`block text-sm font-medium ${urgent ? 'text-rose-800' : 'text-ink-900'}`}>Urgente</span>
+              <span className="block text-xs leading-4 text-ink-500">
+                priorità nello smistamento; l'operatore AI lo dichiara in chiamata
+              </span>
             </span>
-            <span className="text-[11px] text-slate-400 leading-tight">
-              priorità nello smistamento; l'operatore AI lo dichiara in chiamata
-            </span>
+            <Switch checked={urgent} onChange={e => setUrgent(e.target.checked)} className="checked:!bg-rose-600" />
           </label>
+        </Section>
 
-          <div className={`rounded-lg border p-2.5 space-y-2 ${category === CATEGORY_NONE ? 'bg-slate-50 border-slate-200' : category === CATEGORY_CANCELLED ? 'bg-slate-100 border-slate-300' : 'bg-rose-50 border-rose-200'}`}>
-            <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Categoria / Problematica</label>
+        <Section
+          title="Stato"
+          icon={Flag}
+          aside={category !== CATEGORY_NONE && categoryChip ? <span className={`chip ${categoryTone}`}>{categoryChip}</span> : undefined}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Categoria / Problematica" htmlFor={fid('category')}>
               <select
+                id={fid('category')}
                 value={category}
                 onChange={e => setCategory(e.target.value)}
-                className="w-full px-2 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                className="select"
               >
                 {CATEGORY_OPTIONS.map(o => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
-            </div>
+            </Field>
             {category !== CATEGORY_CANCELLED && (
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{followUpLabel(category)}</label>
+              <Field label={followUpLabel(category)} htmlFor={fid('followup')}>
                 <input
+                  id={fid('followup')}
                   type="date"
                   value={followUpDate}
                   onChange={e => setFollowUpDate(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                  className="input num"
                 />
-                <p className="text-[11px] text-slate-400 mt-1 leading-tight">
-                  Dal giorno prima comparirà l'alert "slot da riservare"; lo smistamento automatico
-                  non propone mai date precedenti.
-                </p>
-              </div>
+              </Field>
             )}
           </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Note</label>
-            <textarea
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              placeholder="Note utili (comunicate anche all'operatore AI durante la chiamata)"
-              rows={2}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
-            />
-          </div>
-
-          {error && (
-            <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded p-2">{error}</p>
+          {category !== CATEGORY_CANCELLED && (
+            <p className="field-hint mt-2 leading-4">
+              Dal giorno prima comparirà l'alert "slot da riservare"; lo smistamento automatico
+              non propone mai date precedenti.
+            </p>
           )}
+        </Section>
 
-          <div className="flex gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2 rounded-lg border border-slate-300 text-sm font-bold text-slate-600 hover:bg-slate-50"
-            >
-              Annulla
-            </button>
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-bold"
-            >
-              {isSaving ? 'Verifica indirizzo...' : (isEdit ? 'Salva Modifiche' : 'Aggiungi')}
-            </button>
+        <Section title="Note" icon={StickyNote}>
+          <textarea
+            aria-label="Note"
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Note utili (comunicate anche all'operatore AI durante la chiamata)"
+            rows={3}
+            className="input resize-none"
+          />
+        </Section>
+
+        {error && (
+          <div role="alert" className="callout callout-danger mt-5">
+            <CircleAlert {...ic} className="mt-0.5 shrink-0 text-rose-600" />
+            <p>{error}</p>
           </div>
-        </form>
-      </div>
-    </div>
+        )}
+      </form>
+    </ModalShell>
   );
 };
 

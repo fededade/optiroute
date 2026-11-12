@@ -79,7 +79,7 @@ const SideNav: React.FC<SideNavProps> = ({ section, counts, collapsed, mobile, m
   const nav = (
     <nav
       aria-label="Sezioni"
-      className={`h-full bg-ink-900 text-white flex flex-col shrink-0 transition-[width] duration-200 ${mobile ? 'w-[264px] shadow-pop' : narrow ? 'w-[68px]' : 'w-[232px]'}`}
+      className={`h-full bg-ink-900 text-white flex flex-col shrink-0 transition-[width] duration-200 ${mobile ? `w-[264px] ${mobileOpen ? 'shadow-pop' : ''}` : narrow ? 'w-[68px]' : 'w-[232px]'}`}
     >
       <div className={`h-[60px] flex items-center gap-2.5 shrink-0 ${narrow ? 'justify-center px-2' : 'px-4'}`}>
         <img src="/Logo.png" alt="" className="h-8 w-8 rounded-lg object-cover ring-1 ring-white/10 shrink-0" />

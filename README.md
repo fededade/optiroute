@@ -12,6 +12,14 @@ npm run dev
 Build di produzione: `npm run build` (deploy pensato per Vercel, incluse le funzioni in `api/`).
 Test: `npm test` (servizi di pianificazione, pilota automatico, script e esiti delle chiamate).
 
+Prove nel browser: `npm run test:e2e` guida l'app vera con Playwright (cartella `e2e/`): pilota
+automatico, client del cloud, prova "a browser chiuso" sui bundle veri delle funzioni, due
+schede insieme e il giro di tutte le finestre a 1440 e 390 px. Mappe, geocodifica, Retell e
+bridge sono simulati: non esce nessuna richiesta verso servizi veri e non parte nessuna
+telefonata. Serve Playwright con Chromium (nelle sessioni cloud di Claude Code c'è già; in
+locale `npm i -D playwright` e `npx playwright install chromium`). Dettagli in testa a
+`e2e/run-all.sh`.
+
 ## Pilota automatico: dal portale alla chiamata
 
 Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con un buco.

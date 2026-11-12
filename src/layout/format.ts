@@ -132,3 +132,64 @@ export const formatPhone = (raw?: string): string => {
 
 export const kmLabel =(km?: number): string =>
   km === undefined || km === null ? '' : `${km.toLocaleString('it-IT', { maximumFractionDigits: 1 })} km`;
+
+// --- Riferimento della pratica e titolo (solo visualizzazione) ---
+// Le pratiche importate da Google My Maps non hanno periziaCode: l'import
+// mette il riferimento come prima riga delle note ("Rif: ISP 845.326").
+// Qui lo si mostra come codice; i dati salvati non cambiano.
+
+const RIF_LINE = /^\s*rif\s*:\s*(.*?)\s*$/i;
+
+// Riga "Rif: …" se è la prima riga non vuota delle note
+const notesRef = (notes?: string): { code: string; rest: string } | null => {
+  if (!notes) return null;
+  const lines = notes.split(/\r?\n/);
+  const i = lines.findIndex(l => l.trim() !== '');
+  if (i < 0) return null;
+  const m = RIF_LINE.exec(lines[i]);
+  if (!m || !m[1]) return null;
+  return { code: m[1], rest: lines.slice(i + 1).join('\n').trim() };
+};
+
+type CodeSource = Pick<Appointment, 'periziaCode' | 'notes'>;
+
+// Codice da mostrare: periziaCode; altrimenti il "Rif:" in testa alle note
+export const displayCode = (a: CodeSource): string =>
+  a.periziaCode?.trim() || notesRef(a.notes)?.code || '';
+
+// Note da mostrare: senza la riga "Rif:" quando è usata come codice
+export const displayNotes = (a: CodeSource): string => {
+  if (a.periziaCode?.trim()) return a.notes || '';
+  const ref = notesRef(a.notes);
+  return ref ? ref.rest : (a.notes || '');
+};
+
+// Confronto "di sostanza": senza maiuscole, accenti, spazi e punteggiatura
+const squash = (s?: string): string => norm(s || '').replace(/[\s,.;:'"\-–—/()]+/g, '');
+
+// Titolo uguale all'indirizzo (l'import lo usa quando manca l'intestatario):
+// uguali, oppure l'indirizzo comincia col titolo
+export const titleIsAddress = (a: Pick<Appointment, 'title' | 'address' | 'shortAddress'>): boolean => {
+  const t = squash(a.title);
+  if (t.length < 4) return false;
+  return [a.address, a.shortAddress].some(x => {
+    const s = squash(x);
+    return !!s && (s === t || s.startsWith(t));
+  });
+};
+
+// Il testo b è già contenuto nel testo a (per non ripetere il comune)
+export const containsText = (a?: string, b?: string): boolean => {
+  const sb = squash(b);
+  return !!sb && squash(a).includes(sb);
+};
+
+// "Sara Colombo" → "Sara C." (per le colonne strette)
+export const shortName = (name: string): string => {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length < 2) return name.trim();
+  return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}.`;
+};
+
+// Italiano: "ad" davanti a vocale ("Torna ad Agenda"), altrimenti "a"
+export const aOrAd = (word: string): string => (/^[aeiouàèéìòù]/i.test(word.trim()) ? 'ad' : 'a');

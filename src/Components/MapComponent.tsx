@@ -4,7 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-
 import * as L from 'leaflet';
 import type { Appointment, Coordinates, RouteSummary, AppointmentStatus, Technician } from '../types';
 import { getFullRouteGeometry } from '../services/routingService';
-import { formatPhone } from '../layout/format';
+import { displayCode, formatPhone, titleIsAddress } from '../layout/format';
 
 const iconUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
 const iconRetinaUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png';
@@ -388,6 +388,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
              const tech = techById(appt.technicianId);
              const isScheduled = appt.status === 'confirmed' || appt.status === 'proposed';
              const markerColor = isScheduled ? colorFor(appt) : '#475569';
+             const code = displayCode(appt);
+             const sameAsAddress = titleIsAddress(appt);
              return (
                 <Marker
                 key={appt.id}
@@ -409,14 +411,14 @@ const MapComponent: React.FC<MapComponentProps> = ({
                       {appt.status === 'proposed' && <span className="chip chip-info">Da confermare</span>}
                     </div>
                     <p className="mt-1.5 text-[15px] font-semibold leading-snug text-ink-950">
-                      {isScheduled && appt.sequenceOrder ? <span className="num mr-1" style={{ color: markerColor }}>{appt.sequenceOrder}.</span> : null}{appt.title}
+                      {isScheduled && appt.sequenceOrder ? <span className="num mr-1" style={{ color: markerColor }}>{appt.sequenceOrder}.</span> : null}{sameAsAddress ? appt.address : appt.title}
                     </p>
-                    <p className="mt-0.5 text-[13px] text-ink-500">{appt.address}</p>
-                    {(appt.urgent || tech || appt.periziaCode) && (
+                    {!sameAsAddress && <p className="mt-0.5 text-[13px] text-ink-500">{appt.address}</p>}
+                    {(appt.urgent || tech || code) && (
                       <div className="mt-2 flex gap-1.5 flex-wrap">
                         {appt.urgent && <span className="chip chip-solid-danger">URGENTE</span>}
                         {tech && <span className="chip chip-neutral"><span className="dot" style={{ backgroundColor: tech.color }} />{tech.name}</span>}
-                        {appt.periziaCode && <span className="chip chip-neutral num"><Hash size={11} strokeWidth={2} aria-hidden />{appt.periziaCode}</span>}
+                        {code && <span className="chip chip-neutral num" data-testid="popup-code" title={appt.periziaCode ? 'Codice pratica' : 'Riferimento (dalle note)'}><Hash size={11} strokeWidth={2} aria-hidden />{code}</span>}
                       </div>
                     )}
                     {appt.approximate && (

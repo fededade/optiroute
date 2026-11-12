@@ -63,6 +63,10 @@ const ALL = 'all';
 const TopBar: React.FC<TopBarProps> = (p) => {
   const tech = p.selectedTechId !== ALL ? p.technicians.find(t => t.id === p.selectedTechId) : undefined;
   const label = (text: string) => (p.compact ? null : <span>{text}</span>);
+  // Importa / Pianifica / Esporta: sul telefono icona con etichetta (bottoni
+  // uguali su una riga tutta per loro), su schermi medi sola icona
+  const toolClass = p.mobile ? 'topbar-tool' : p.compact ? 'icon-btn h-9 w-9 border border-line bg-surface' : 'btn btn-secondary btn-sm';
+  const toolLabel = (text: string) => (p.mobile ? <span className="truncate">{text}</span> : label(text));
   const chevron = p.compact || p.tight ? null : <ChevronDown size={15} strokeWidth={1.75} className="text-ink-400 -mr-1" aria-hidden />;
 
   // "/" e Ctrl/Cmd+K portano nella ricerca (non mentre si scrive o con una finestra aperta)
@@ -85,7 +89,7 @@ const TopBar: React.FC<TopBarProps> = (p) => {
   const showKbd = !p.search && !p.mobile && !p.compact;
 
   const searchBox = (
-    <label className="relative flex-1 min-w-[160px] max-w-[340px]">
+    <label className={`relative flex-1 ${p.mobile ? "min-w-0" : "min-w-[160px] max-w-[340px]"}`}>
       <span className="sr-only">Cerca</span>
       <Search size={16} strokeWidth={1.75} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400 pointer-events-none" aria-hidden />
       <input
@@ -151,14 +155,14 @@ const TopBar: React.FC<TopBarProps> = (p) => {
     </button>
   );
 
-  const actions = (
-    <div className="flex items-center gap-1.5 shrink-0">
+  const toolMenus = (
+    <>
       <Menu
         testId="menu-importa"
         title="Importa pratiche"
         ariaLabel="Importa"
-        buttonClassName={p.compact ? 'icon-btn h-9 w-9 border border-line bg-surface' : 'btn btn-secondary btn-sm'}
-        button={<><Upload size={16} strokeWidth={1.75} aria-hidden />{label('Importa')}{chevron}</>}
+        buttonClassName={toolClass}
+        button={<><Upload size={16} strokeWidth={1.75} aria-hidden />{toolLabel('Importa')}{chevron}</>}
       >
         <MenuLabel>Importa pratiche</MenuLabel>
         <MenuItem icon={FileSpreadsheet} onSelect={p.onImportExcel} hint="Elenco pratiche MISI o colonne Indirizzo/Comune">Excel…</MenuItem>
@@ -175,8 +179,8 @@ const TopBar: React.FC<TopBarProps> = (p) => {
         title="Pianifica i giri"
         ariaLabel="Pianifica"
         minWidth={290}
-        buttonClassName={p.compact ? 'icon-btn h-9 w-9 border border-line bg-surface' : 'btn btn-secondary btn-sm'}
-        button={<><Truck size={16} strokeWidth={1.75} aria-hidden />{label('Pianifica')}{chevron}</>}
+        buttonClassName={toolClass}
+        button={<><Truck size={16} strokeWidth={1.75} aria-hidden />{toolLabel('Pianifica')}{chevron}</>}
       >
         <MenuLabel>Pianifica</MenuLabel>
         <MenuItem
@@ -197,8 +201,8 @@ const TopBar: React.FC<TopBarProps> = (p) => {
         title="Esporta e sincronizza"
         ariaLabel="Esporta"
         minWidth={300}
-        buttonClassName={p.compact ? 'icon-btn h-9 w-9 border border-line bg-surface' : 'btn btn-secondary btn-sm'}
-        button={<><Download size={16} strokeWidth={1.75} aria-hidden />{label('Esporta')}{chevron}</>}
+        buttonClassName={toolClass}
+        button={<><Download size={16} strokeWidth={1.75} aria-hidden />{toolLabel('Esporta')}{chevron}</>}
       >
         <MenuLabel>Esporta</MenuLabel>
         <MenuItem icon={FileSpreadsheet} onSelect={p.onExport} hint={p.exportHint || 'Le pratiche della vista corrente'}>Esporta Excel</MenuItem>
@@ -214,10 +218,20 @@ const TopBar: React.FC<TopBarProps> = (p) => {
           {p.isSyncing ? 'Sincronizzazione…' : 'Sincronizza col gestionale'}
         </MenuItem>
       </Menu>
-      <button type="button" onClick={p.onNewPratica} className={p.compact ? 'btn btn-primary btn-sm px-2.5' : 'btn btn-primary btn-sm'} title="Nuova pratica completa (cliente, telefono, urgenza)" aria-label="Nuova pratica">
-        <Plus size={16} strokeWidth={2} aria-hidden />{p.compact ? null : <span>Nuova pratica</span>}
-      </button>
-      {!p.mobile && mapButton}
+    </>
+  );
+
+  const newButton = (
+    <button type="button" onClick={p.onNewPratica} className={p.compact ? 'btn btn-primary btn-sm px-2.5' : 'btn btn-primary btn-sm'} title="Nuova pratica completa (cliente, telefono, urgenza)" aria-label="Nuova pratica">
+      <Plus size={16} strokeWidth={2} aria-hidden />{p.compact ? null : <span>Nuova pratica</span>}
+    </button>
+  );
+
+  const actions = (
+    <div className="flex items-center gap-1.5 shrink-0">
+      {toolMenus}
+      {newButton}
+      {mapButton}
     </div>
   );
 
@@ -265,12 +279,17 @@ const TopBar: React.FC<TopBarProps> = (p) => {
         </div>
         {!p.mobile && searchBox}
         {!p.mobile && techMenu}
-        <div className="md:ml-auto">{actions}</div>
+        {p.mobile ? <div className="shrink-0">{newButton}</div> : <div className="md:ml-auto">{actions}</div>}
         {p.mobile && (
           <div className="flex items-center gap-2 w-full">
             {searchBox}
             {techMenu}
             {mapButton}
+          </div>
+        )}
+        {p.mobile && (
+          <div className="grid grid-cols-3 gap-1.5 w-full" data-testid="topbar-tools">
+            {toolMenus}
           </div>
         )}
       </div>

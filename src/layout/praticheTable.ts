@@ -1,5 +1,5 @@
 import type { Appointment, AppointmentStatus } from '../types';
-import { dayLabel, placeLabel, shortStreet } from './format';
+import { dayLabel, displayCode, placeLabel, shortStreet, titleIsAddress } from './format';
 
 // "Tutte le pratiche": funzioni pure della tabella (filtro per stato,
 // ordinamento, colonne, testo dell'appuntamento, evidenziazione della
@@ -72,6 +72,9 @@ export const compareDefault = (a: Appointment, b: Appointment): number => {
   return cmpText(a.title || '', b.title || '');
 };
 
+// Testo della colonna Cliente ('' = trattino)
+export const clienteText = (a: Appointment): string => (titleIsAddress(a) ? '' : a.title || '');
+
 export const sortPratiche = (
   list: Appointment[],
   sort: SortState,
@@ -85,10 +88,11 @@ export const sortPratiche = (
         const r = flowRank(a.status) - flowRank(b.status);
         return r !== 0 ? sign * r : compareDefault(a, b);
       }
-      case 'cliente': return sign * cmpText(a.title || '', b.title || '');
+      // il titolo uguale all'indirizzo si mostra come — : va in fondo come le vuote
+      case 'cliente': return cmpMaybe(clienteText(a), clienteText(b), dir);
       case 'luogo':
         return cmpMaybe(placeLabel(a), placeLabel(b), dir) || cmpMaybe(shortStreet(a), shortStreet(b), dir);
-      case 'codice': return cmpMaybe(a.periziaCode || '', b.periziaCode || '', dir);
+      case 'codice': return cmpMaybe(displayCode(a), displayCode(b), dir);
       case 'tecnico': return cmpMaybe(techName(a.technicianId), techName(b.technicianId), dir);
       case 'appuntamento': return cmpMaybe(appointmentSortKey(a), appointmentSortKey(b), dir);
     }
@@ -120,7 +124,7 @@ export const TABLE_COLUMNS: Column[] = [
   { id: 'cliente', label: 'Cliente', sortKey: 'cliente' },
   { id: 'indirizzo', label: 'Indirizzo', sortKey: 'luogo' },
   { id: 'codice', label: 'Codice', sortKey: 'codice', width: { xl: 104, l: 88 } },
-  { id: 'tecnico', label: 'Tecnico', sortKey: 'tecnico', width: { xl: 116, l: 48 } },
+  { id: 'tecnico', label: 'Tecnico', sortKey: 'tecnico', width: { xl: 136, l: 48 } },
   { id: 'appuntamento', label: 'Appuntamento', sortKey: 'appuntamento', width: { xl: 138, l: 112 } },
   { id: 'telefono', label: 'Telefono', width: { xl: 128, l: 128 } },
   { id: 'chiamata', label: 'Chiamata', width: { xl: 148, l: 108 } },

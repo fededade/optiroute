@@ -244,6 +244,30 @@
   .ov-tiles { display: grid; gap: 12px; }
   .tile-wide { @apply card card-hover flex flex-col items-stretch text-left p-4 min-w-0; }
 
+  /* finestre: sottotitolo su una riga; sul telefono va a capo (al massimo due righe) */
+  .modal-subtitle { @apply truncate; }
+  @media (max-width: 639.98px) {
+    .modal-subtitle { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  }
+
+  /* pillole di stato: una riga che scorre quando il pannello è stretto */
+  .pill-scroller {
+    @apply flex flex-nowrap items-center gap-1.5 overflow-x-auto overscroll-x-contain;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 4px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-block: 3px; margin-block: -3px; /* spazio per l'anello di fuoco */
+  }
+  .pill-scroller::-webkit-scrollbar { display: none; }
+  .pill-scroller > .pill { scroll-snap-align: start; flex-shrink: 0; }
+  .pill-scroller-more { -webkit-mask-image: linear-gradient(to right, black calc(100% - 36px), transparent); mask-image: linear-gradient(to right, black calc(100% - 36px), transparent); }
+  .pill-scroller-back.pill-scroller-more { -webkit-mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 36px), transparent); mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 36px), transparent); }
+  .pill-scroller-back:not(.pill-scroller-more) { -webkit-mask-image: linear-gradient(to right, transparent, black 24px); mask-image: linear-gradient(to right, transparent, black 24px); }
+
+  /* barra in alto sul telefono: comandi con icona ed etichetta */
+  .topbar-tool { @apply btn btn-secondary btn-sm w-full justify-center gap-1.5 px-2 text-[13px]; }
+
   /* impostazioni: due colonne quando c'è spazio */
   .settings-grid { display: grid; gap: 20px; align-items: start; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); }
 }

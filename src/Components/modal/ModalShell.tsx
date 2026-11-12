@@ -87,7 +87,7 @@ const ModalShell: React.FC<ModalShellProps> = ({
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="modal-title leading-6 truncate">{title}</h2>
             {subtitle && (
-              <p id={subtitleId} className="text-[13px] leading-5 text-ink-500 truncate">{subtitle}</p>
+              <p id={subtitleId} className="modal-subtitle text-[13px] leading-5 text-ink-500">{subtitle}</p>
             )}
           </div>
           <button

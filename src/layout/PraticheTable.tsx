@@ -4,7 +4,7 @@ import type { Appointment } from '../types';
 import { CallStatusInline } from '../Components/AutopilotBadges';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Menu';
 import type { Workspace } from './types';
-import { formatPhone, placeLabel, shortStreet } from './format';
+import { containsText, displayCode, formatPhone, placeLabel, shortName, shortStreet, titleIsAddress } from './format';
 import { STATUS_META, actionsFor, statusLabel } from './praticaActions';
 import {
   SORT_LABELS, TABLE_COLUMNS, appointmentText, highlightParts, nextSort, phoneMissing, tableLayoutFor,
@@ -26,6 +26,10 @@ export const Hl: React.FC<{ text?: string; q: string }> = ({ text, q }) => {
     </>
   );
 };
+
+// Colonna Tecnico: nome intero se ci sta, altrimenti "Nome C." (nome intero nel title)
+const TECH_FULL_MAX = 14;
+const techLabel = (name: string) => (name.length <= TECH_FULL_MAX ? name : shortName(name));
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]?.toUpperCase()).join('');
 
@@ -99,6 +103,8 @@ const TableRow: React.FC<RowCommon & { layout: TableLayout }> = ({ appt, ws, q, 
   const when = appointmentText(appt);
   const street = shortStreet(appt);
   const place = placeLabel(appt);
+  const code = displayCode(appt);
+  const sameAsAddress = titleIsAddress(appt);
   const muted = appt.status === 'cancelled' || appt.status === 'standby';
   return (
     <tr
@@ -112,9 +118,13 @@ const TableRow: React.FC<RowCommon & { layout: TableLayout }> = ({ appt, ws, q, 
     >
       <td><StatusCell appt={appt} /></td>
       <td>
-        <span className={`block truncate text-[13px] font-semibold ${muted ? 'text-ink-600' : 'text-ink-950'} ${appt.status === 'cancelled' ? 'line-through decoration-ink-300' : ''}`} title={appt.title}>
-          <Hl text={appt.title} q={q} />
-        </span>
+        {sameAsAddress ? (
+          <span className="block text-[13px] text-ink-400" title="Intestatario non indicato: il titolo è l'indirizzo" data-testid="cliente-vuoto">—</span>
+        ) : (
+          <span className={`block truncate text-[13px] font-semibold ${muted ? 'text-ink-600' : 'text-ink-950'} ${appt.status === 'cancelled' ? 'line-through decoration-ink-300' : ''}`} title={appt.title}>
+            <Hl text={appt.title} q={q} />
+          </span>
+        )}
         {appt.contactPerson && (
           <span className="flex items-center gap-1 text-xs text-ink-500 min-w-0" title={appt.referredBy ? `Indicato da ${appt.referredBy}` : 'Referente da contattare'}>
             <UserRound size={11} strokeWidth={2} className="shrink-0" aria-hidden />
@@ -127,8 +137,8 @@ const TableRow: React.FC<RowCommon & { layout: TableLayout }> = ({ appt, ws, q, 
         {place && <span className="block truncate text-xs text-ink-500"><Hl text={place} q={q} /></span>}
       </td>
       <td>
-        <span className="block truncate num text-xs text-ink-800" title={appt.periziaCode ? 'Codice pratica' : undefined}>
-          {appt.periziaCode ? <Hl text={appt.periziaCode} q={q} /> : <span className="text-ink-400">—</span>}
+        <span className="block truncate num text-xs text-ink-800" title={code ? (appt.periziaCode ? `Codice pratica: ${code}` : `Riferimento (dalle note): ${code}`) : undefined} data-testid="row-code">
+          {code ? <Hl text={code} q={q} /> : <span className="text-ink-400">—</span>}
         </span>
         {appt.project && <span className="block truncate text-xs text-ink-500" title={`Committente / progetto: ${appt.project}`}><Hl text={appt.project} q={q} /></span>}
       </td>
@@ -136,7 +146,7 @@ const TableRow: React.FC<RowCommon & { layout: TableLayout }> = ({ appt, ws, q, 
         {tech ? (
           <span className="flex items-center gap-1.5 min-w-0 text-[13px] text-ink-800" title={`Tecnico: ${tech.name}`}>
             <span className="dot" style={{ backgroundColor: tech.color }} />
-            {layout === 'xl' ? <span className="truncate">{tech.name}</span> : <span className="num text-xs font-semibold">{initials(tech.name)}</span>}
+            {layout === 'xl' ? <span className="truncate" data-testid="row-tech">{techLabel(tech.name)}</span> : <span className="num text-xs font-semibold">{initials(tech.name)}</span>}
           </span>
         ) : appt.status === 'pending' ? (
           <span className="text-xs font-medium text-amber-800" title="Da assegnare">{layout === 'xl' ? 'Da assegnare' : '—'}</span>
@@ -177,8 +187,12 @@ const CompactRow: React.FC<RowCommon & { narrow: boolean }> = ({ appt, ws, q, na
   const tech = ws.techById(appt.technicianId);
   const selected = ws.selectedAppointmentId === appt.id;
   const when = appointmentText(appt);
-  const street = shortStreet(appt);
-  const place = placeLabel(appt);
+  // titolo uguale all'indirizzo: niente doppione nella seconda riga
+  const sameAsAddress = titleIsAddress(appt);
+  const street = sameAsAddress ? '' : shortStreet(appt);
+  const rawPlace = placeLabel(appt);
+  const place = sameAsAddress && containsText(appt.title, appt.comune || rawPlace) ? '' : rawPlace;
+  const code = displayCode(appt);
   const muted = appt.status === 'cancelled' || appt.status === 'standby';
   const sep = <span className="text-ink-300" aria-hidden>·</span>;
   return (
@@ -210,7 +224,7 @@ const CompactRow: React.FC<RowCommon & { narrow: boolean }> = ({ appt, ws, q, na
           {place && <span className="shrink-0 font-medium text-ink-600"><Hl text={place} q={q} /></span>}
           {place && street && sep}
           {street && <span className="truncate min-w-[3rem]" title={appt.address}><Hl text={street} q={q} /></span>}
-          {appt.periziaCode && <>{sep}<span className="num shrink-0"><Hl text={appt.periziaCode} q={q} /></span></>}
+          {code && <>{(place || street || (narrow && when.kind !== 'none')) && sep}<span className="num shrink-0" data-testid="row-code" title={appt.periziaCode ? 'Codice pratica' : 'Riferimento (dalle note)'}><Hl text={code} q={q} /></span></>}
           {tech && <>{sep}<span className="inline-flex items-center gap-1 shrink-0" title={`Tecnico: ${tech.name}`}><span className="dot" style={{ backgroundColor: tech.color }} />{tech.name.split(' ')[0]}</span></>}
           {phoneMissing(appt) && <>{sep}<span className="inline-flex items-center gap-1 shrink-0 font-medium text-amber-800" title="Senza telefono il pilota non può chiamare"><PhoneOff size={12} strokeWidth={2} aria-hidden />manca tel.</span></>}
           <CallStatusInline appt={appt} maxAttempts={ws.maxAttempts} awaitingOutcome={ws.awaitingOutcome(appt)} className="ml-auto pl-2 shrink min-w-0" emptyDash={false} />

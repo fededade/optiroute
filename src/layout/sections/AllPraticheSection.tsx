@@ -1,10 +1,10 @@
-import React, { useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowLeft, FileSpreadsheet, ListFilter, Search, SearchX } from 'lucide-react';
 import type { Appointment } from '../../types';
 import PraticheTable from '../PraticheTable';
 import { EmptyState } from '../../ui/EmptyState';
 import type { Workspace } from '../types';
-import { plural } from '../format';
+import { aOrAd, plural } from '../format';
 import { STATUS_FILTERS, type SortState, type StatusFilter } from '../praticheTable';
 
 // "Tutte le pratiche" e risultati della ricerca globale: la stessa tabella,
@@ -49,8 +49,46 @@ const AllPraticheSection: React.FC<AllPraticheProps> = (p) => {
     requestAnimationFrame(() => groupRef.current?.querySelector<HTMLButtonElement>(`[data-filter="${next.id}"]`)?.focus());
   };
 
+  // Pillole su una riga: sfumatura sul bordo quando c'è altro da scorrere,
+  // e la pillola scelta sempre in vista (solo presentazione)
+  const [edges, setEdges] = useState({ back: false, more: false });
+  const updateEdges = useCallback(() => {
+    const el = groupRef.current;
+    if (!el) return;
+    const back = el.scrollLeft > 2;
+    const more = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setEdges(prev => (prev.back === back && prev.more === more ? prev : { back, more }));
+  }, []);
+  const hasPills = p.counts.all > 0;
+  useEffect(() => {
+    const el = groupRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(updateEdges);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [updateEdges, hasPills]);
+  useLayoutEffect(() => {
+    const el = groupRef.current;
+    const pill = el?.querySelector<HTMLElement>(`[data-filter="${p.status}"]`);
+    if (!el || !pill) return;
+    const left = pill.getBoundingClientRect().left - el.getBoundingClientRect().left + el.scrollLeft;
+    const right = left + pill.offsetWidth;
+    if (left < el.scrollLeft) el.scrollLeft = Math.max(0, left - 8);
+    else if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth + 36;
+    updateEdges();
+  }, [p.status, hasPills, updateEdges]);
+
   const pills = (
-    <div ref={groupRef} role="radiogroup" aria-label="Filtra per stato" className="flex flex-wrap items-center gap-1.5" onKeyDown={onPillKey} data-testid="status-pills">
+    <div
+      ref={groupRef}
+      role="radiogroup"
+      aria-label="Filtra per stato"
+      className={`pill-scroller min-w-0 flex-1 ${edges.more ? 'pill-scroller-more' : ''} ${edges.back ? 'pill-scroller-back' : ''}`}
+      onKeyDown={onPillKey}
+      onScroll={updateEdges}
+      data-testid="status-pills"
+      data-scrollable={edges.more || edges.back ? 'true' : 'false'}
+    >
       {STATUS_FILTERS.map(f => {
         const active = p.status === f.id;
         const n = p.counts[f.id];
@@ -82,7 +120,7 @@ const AllPraticheSection: React.FC<AllPraticheProps> = (p) => {
         <span className="font-semibold text-ink-900">{plural(p.counts.all, 'pratica trovata', 'pratiche trovate')}</span> per «{p.query.trim()}» in tutte le sezioni, in ogni stato e data.
       </span>
       <button type="button" className="btn btn-ghost btn-sm" onClick={p.onClearSearch} data-testid="search-back">
-        <ArrowLeft size={14} strokeWidth={1.75} aria-hidden /> {p.backLabel ? `Torna a ${p.backLabel}` : 'Svuota la ricerca'}
+        <ArrowLeft size={14} strokeWidth={1.75} aria-hidden /> {p.backLabel ? `Torna ${aOrAd(p.backLabel)} ${p.backLabel}` : 'Svuota la ricerca'}
       </button>
     </div>
   );
@@ -126,9 +164,9 @@ const AllPraticheSection: React.FC<AllPraticheProps> = (p) => {
     <div className="space-y-4" data-testid={p.mode === 'search' ? 'search-results' : undefined}>
       {searchBanner}
       {(p.counts.all > 0) && (
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
           {pills}
-          <p className="ml-auto text-xs text-ink-500" data-testid="pratiche-count" aria-live="polite">
+          <p className="ml-auto shrink-0 text-xs text-ink-500" data-testid="pratiche-count" aria-live="polite">
             {p.status === 'all' ? plural(p.rows.length, 'riga', 'righe') : `${plural(p.rows.length, 'riga', 'righe')} di ${p.counts.all}`}
           </p>
         </div>

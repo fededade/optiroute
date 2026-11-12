@@ -6,7 +6,7 @@ import type { Appointment } from '../types';
 import { CallStatus } from '../Components/AutopilotBadges';
 import { Menu, MenuItem } from '../ui/Menu';
 import type { Workspace } from './types';
-import { dayLabel, formatPhone, placeLabel, shortStreet } from './format';
+import { containsText, dayLabel, displayCode, displayNotes, formatPhone, placeLabel, shortStreet, titleIsAddress } from './format';
 import { ISSUE_LABEL, STATUS_META, actionsFor } from './praticaActions';
 import { phoneMissing } from './praticheTable';
 
@@ -33,11 +33,16 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
   const tech = ws.techById(appt.technicianId);
   const { primary, more } = actionsFor(appt, ws);
   const selected = ws.selectedAppointmentId === appt.id;
-  const street = shortStreet(appt);
-  const place = placeLabel(appt);
+  // titolo uguale all'indirizzo: l'indirizzo si mostra una volta sola (come titolo)
+  const sameAsAddress = titleIsAddress(appt);
+  const street = sameAsAddress ? '' : shortStreet(appt);
+  const rawPlace = placeLabel(appt);
+  const place = sameAsAddress && containsText(appt.title, appt.comune || rawPlace) ? '' : rawPlace;
+  const code = displayCode(appt);
+  const notes = displayNotes(appt);
   const o = appt.callOutcome;
   const summary = o?.summary || appt.callSummary;
-  const longNotes = !!appt.notes && (appt.notes.length > 110 || appt.notes.includes('\n'));
+  const longNotes = !!notes && (notes.length > 110 || notes.includes('\n'));
   const scheduled = (appt.status === 'confirmed' || appt.status === 'proposed') && !!appt.startTime;
   const muted = appt.status === 'cancelled' || appt.status === 'standby';
 
@@ -95,7 +100,7 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
           )}
 
           {/* (2) cliente */}
-          <h4 className={`text-[15px] font-semibold leading-snug tracking-tight break-words ${muted ? 'text-ink-600' : 'text-ink-950'} ${appt.status === 'cancelled' ? 'line-through decoration-ink-300' : ''}`}>
+          <h4 title={sameAsAddress ? appt.address : undefined} className={`text-[15px] font-semibold leading-snug tracking-tight break-words ${muted ? 'text-ink-600' : 'text-ink-950'} ${appt.status === 'cancelled' ? 'line-through decoration-ink-300' : ''}`}>
             {appt.title}
           </h4>
         </div>
@@ -147,9 +152,9 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
             ) : !tech && appt.status === 'pending' ? (
               <span className="chip chip-warn">Da assegnare</span>
             ) : null}
-            {appt.periziaCode && (
-              <span className="chip chip-neutral num" title={appt.project ? `Progetto: ${appt.project}` : 'Codice pratica'}>
-                <Hash size={12} strokeWidth={2} aria-hidden />{appt.periziaCode}
+            {code && (
+              <span className="chip chip-neutral num max-w-full" title={appt.periziaCode ? (appt.project ? `Progetto: ${appt.project}` : 'Codice pratica') : 'Riferimento della pratica (dalle note)'} data-testid="pratica-code">
+                <Hash size={12} strokeWidth={2} aria-hidden /><span className="truncate">{code}</span>
               </span>
             )}
             {appt.project && (
@@ -192,9 +197,9 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
               <span className="num" title={appt.phone}>{formatPhone(appt.phone)}</span>
             </p>
           )}
-          {appt.notes && (
+          {notes && (
             <div className="mt-1.5 text-[13px] text-ink-500 leading-relaxed">
-              <p className={`whitespace-pre-line ${notesOpen ? '' : 'line-clamp-2'}`}>{appt.notes}</p>
+              <p className={`whitespace-pre-line ${notesOpen ? '' : 'line-clamp-2'}`} data-testid="pratica-notes">{notes}</p>
               {longNotes && (
                 <button type="button" className="text-xs font-medium text-ink-700 hover:text-ink-950 underline-offset-2 hover:underline" onClick={() => setNotesOpen(v => !v)}>
                   {notesOpen ? 'mostra meno' : 'mostra tutto'}

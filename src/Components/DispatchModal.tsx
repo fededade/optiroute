@@ -8,6 +8,7 @@ import {
 } from '../services/dispatchService';
 import { ArrowLeft, Calculator, CalendarX, Check, CircleAlert, Route, TriangleAlert, UserX } from 'lucide-react';
 import ModalShell from './modal/ModalShell';
+import { cap } from '../layout/format';
 import { Field, Stat, StateView, Steps, Switch, ic } from './modal/parts';
 
 // Smistamento automatico delle pratiche "in attesa": assegnazione per zona di
@@ -276,7 +277,7 @@ const DispatchModal: React.FC<DispatchModalProps> = ({ pending, technicians, fal
                     {plans.map(plan => (
                       <div key={`${tech.id}-${plan.date}`} className="card overflow-hidden shadow-none">
                         <div className="flex items-center justify-between gap-3 border-b border-line bg-slate-50/70 px-3.5 py-2 text-[13px]">
-                          <span className="font-medium capitalize text-ink-800">{formatDay(plan.date)}</span>
+                          <span className="font-medium text-ink-800">{cap(formatDay(plan.date))}</span>
                           <span className="num text-xs text-ink-500">partenza {plan.workStart}</span>
                         </div>
                         <ul className="divide-y divide-line">

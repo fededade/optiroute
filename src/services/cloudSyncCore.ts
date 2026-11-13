@@ -17,6 +17,7 @@ import {
   cloudStatus,
   cloudTick,
   type CloudClientOptions,
+  type CloudCredential,
   type CloudFailure,
   type CloudResult,
   type FetchLike,
@@ -106,6 +107,9 @@ export interface CloudSyncState {
 
 export interface CloudSyncOptions {
   key: string;
+  // Dentro il gestionale: biglietto di sessione letto a ogni richiesta e
+  // rinnovato da solo (il motore NON riparte al rinnovo)
+  credential?: CloudCredential;
   deviceId: string;
   host: CloudSyncHost;
   fetch?: FetchLike;
@@ -166,7 +170,7 @@ export class CloudSyncEngine {
   constructor(opts: CloudSyncOptions) {
     this.opts = opts;
     this.clock = opts.clock || realClock;
-    this.client = { key: opts.key, fetch: opts.fetch };
+    this.client = { key: opts.key, credential: opts.credential, fetch: opts.fetch };
     this.base = opts.host.getAppointments();
     this.state = {
       phase: 'starting', lastSyncAt: null, pending: false, retryAt: null, error: null,
@@ -519,6 +523,23 @@ export const startActivation = async (
   const init = await cloudInit(client, { device: local.deviceId, appointments: local.appointments, config: local.config });
   if (!init.ok) return { kind: 'error', error: init.error };
   return { kind: 'done', plan, serverCount: local.appointments.length };
+};
+
+// Dentro il gestionale il cloud si accende da solo, senza domande:
+//  - cloud vuoto: lo si inizializza con i dati di questo browser (init);
+//  - altrimenti valgono i dati del cloud: il motore parte come in un
+//    browser che aveva già il cloud attivo (il primo scaricamento completo
+//    sostituisce l'elenco locale con quello del server).
+export const prepareEmbeddedCloud = async (
+  client: CloudClientOptions,
+  local: { deviceId: string; appointments: Appointment[]; config: CloudConfig }
+): Promise<{ ok: true; plan: 'upload' | 'adopt' } | { ok: false; error: CloudFailure }> => {
+  const status = await cloudStatus(client);
+  if (!status.ok) return { ok: false, error: status.error };
+  if (status.data.appointmentCount > 0) return { ok: true, plan: 'adopt' };
+  const init = await cloudInit(client, { device: local.deviceId, appointments: local.appointments, config: local.config });
+  if (!init.ok) return { ok: false, error: init.error };
+  return { ok: true, plan: 'upload' };
 };
 
 // Scelta distruttiva (dopo conferma esplicita): il cloud prende i dati di

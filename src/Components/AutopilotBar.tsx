@@ -126,6 +126,7 @@ const BRIDGE_CHIP_STYLE: Record<string, string> = {
   disabled: 'chip-neutral',
   unconfigured: 'chip-neutral border-dashed',
   offline: 'chip-warn',
+  inactive: 'chip-warn',
   login: 'chip-warn',
   token: 'chip-danger',
   invalid: 'chip-danger',

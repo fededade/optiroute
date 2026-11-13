@@ -1,5 +1,6 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { safeLocalStorage } from '../services/safeStorage';
 
 // Stato di sola interfaccia, con le preferenze ricordate nel browser:
 // barra laterale ridotta, mappa nascosta, larghezza del pannello di lavoro.
@@ -17,7 +18,7 @@ const DEFAULTS: UiPrefs = { navCollapsed: false, mapHidden: false, panelPct: 46 
 
 const load = (): UiPrefs => {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = safeLocalStorage.getItem(KEY);
     if (!raw) return DEFAULTS;
     const v = JSON.parse(raw);
     return {
@@ -43,7 +44,7 @@ export const useViewportWidth = (): number => {
 export const useUiPrefs = () => {
   const [prefs, setPrefs] = useState<UiPrefs>(load);
   useEffect(() => {
-    try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch { /* spazio pieno o privato: pazienza */ }
+    try { safeLocalStorage.setItem(KEY, JSON.stringify(prefs)); } catch { /* spazio pieno o privato: pazienza */ }
   }, [prefs]);
   const update = useCallback((patch: Partial<UiPrefs>) => setPrefs(p => ({ ...p, ...patch })), []);
   return [prefs, update] as const;

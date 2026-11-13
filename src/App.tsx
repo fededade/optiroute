@@ -33,6 +33,9 @@ import { useBridgeInbox, type BridgeImportOutcome } from './hooks/useBridgeInbox
 import { useCloudSync } from './hooks/useCloudSync';
 import { loadCloudSettings, saveCloudSettings, type CloudSettings } from './services/cloudSettings';
 import type { CloudConfig } from './services/cloudProtocol';
+import { prepareEmbeddedCloud } from './services/cloudSyncCore';
+import { fetchBridgeSnapshotViaParent } from './services/bridgeService';
+import type { GestionaleContext } from './Components/GestionaleGate';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
 import BulkCallModal from './Components/BulkCallModal';
@@ -84,7 +87,10 @@ const formatDayLabel = (iso?: string): string => {
   });
 };
 
-function App() {
+// `gestionale`: presente solo quando OptiRoute è aperta dentro la pagina del
+// gestionale (con l'accesso già verificato, vedi Components/GestionaleGate)
+function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
+  const embedded = !!gestionale;
   const [addressInput, setAddressInput] = useState('');
   const [baseInput, setBaseInput] = useState('');
 
@@ -148,7 +154,9 @@ function App() {
   // Pilota in cloud: con il cloud attivo il motore gira sul server e questo
   // browser è una finestra sui suoi dati (vedi useCloudSync)
   const [cloud, setCloud] = useState<CloudSettings>(() => loadCloudSettings());
-  const cloudActive = cloud.enabled && !!cloud.key;
+  // Dentro il gestionale il cloud è sempre acceso (accesso dal gestionale):
+  // chiave e attivazione salvate in questo browser non si usano né si toccano
+  const cloudActive = embedded || (cloud.enabled && !!cloud.key);
   const updateCloud = useCallback((next: CloudSettings) => {
     saveCloudSettings(next);
     setCloud(next);
@@ -513,9 +521,31 @@ function App() {
     return { technicians, autopilot: autopilotNext, fallback };
   }, []);
 
+  // Dentro il gestionale, prima di avviare la sincronizzazione: se il cloud è
+  // vuoto lo si inizializza con i dati di questo browser, altrimenti vincono
+  // i dati del cloud (come in un browser che aveva già il cloud attivo)
+  const [embeddedCloudReady, setEmbeddedCloudReady] = useState(false);
+  useEffect(() => {
+    if (!gestionale || !isAutomationTab || embeddedCloudReady) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = async () => {
+      const r = await prepareEmbeddedCloud(
+        { key: '', credential: gestionale.session.credential },
+        { deviceId: cloud.deviceId, appointments: appointmentsRef.current, config: getCloudConfig() }
+      );
+      if (cancelled) return;
+      if (r.ok) setEmbeddedCloudReady(true);
+      else timer = setTimeout(() => { void attempt(); }, 5000);
+    };
+    void attempt();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [gestionale, isAutomationTab, embeddedCloudReady, cloud.deviceId, getCloudConfig]);
+
   const cloudSync = useCloudSync({
-    active: cloudActive && isAutomationTab,
-    cloudKey: cloud.key,
+    active: cloudActive && isAutomationTab && (!embedded || embeddedCloudReady),
+    cloudKey: embedded ? '' : cloud.key,
+    credential: gestionale?.session.credential,
     deviceId: cloud.deviceId,
     appointments: allAppointments,
     configDeps: [technicians, autopilot, startTime, endTimeLimit, baseLocation],
@@ -693,6 +723,12 @@ function App() {
     }
   }, [setAllAppointments]);
 
+  // Dentro il gestionale le pratiche del bridge arrivano tramite la sua pagina
+  const bridgeViaParent = useMemo(
+    () => (gestionale ? () => fetchBridgeSnapshotViaParent((m, p, o) => gestionale.host.request(m, p, o)) : undefined),
+    [gestionale]
+  );
+
   const bridgeInbox = useBridgeInbox({
     settings: bridgeSettings,
     isLeader: browserAutomationsHere,
@@ -700,7 +736,38 @@ function App() {
     importBridge: importFromBridge,
     isImportBusy: isImportOrDispatchBusy,
     followerMessage: cloudActive && isAutomationTab ? 'Bridge: gestito da un altro dispositivo collegato al cloud' : undefined,
+    source: bridgeViaParent,
   });
+
+  // Il gestionale avvisa che il bridge ha novità: si scarica subito
+  const browserAutomationsHereRef = useRef(browserAutomationsHere);
+  browserAutomationsHereRef.current = browserAutomationsHere;
+  const bridgeSyncNow = bridgeInbox.syncNow;
+  useEffect(() => {
+    if (!gestionale) return;
+    return gestionale.host.on('bridge.updated', () => {
+      if (browserAutomationsHereRef.current) void bridgeSyncNow();
+    });
+  }, [gestionale, bridgeSyncNow]);
+
+  // Elenco delle pratiche cambiato: circa 3 secondi dopo si avvisa il
+  // gestionale ("changed"), che rilegge i sopralluoghi confermati. Se le
+  // modifiche non sono ancora arrivate al server si aspetta un poco.
+  const cloudPendingRef = useRef(false);
+  cloudPendingRef.current = cloudSync.state?.pending === true;
+  const firstListRef = useRef(true);
+  useEffect(() => {
+    if (!gestionale) return;
+    if (firstListRef.current) { firstListRef.current = false; return; }
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const fire = () => {
+      if (cloudPendingRef.current && tries < 10) { tries += 1; timer = setTimeout(fire, 1000); return; }
+      gestionale.host.request('changed', {}).catch(() => { /* solo un suggerimento */ });
+    };
+    timer = setTimeout(fire, 3000);
+    return () => clearTimeout(timer);
+  }, [allAppointments, gestionale]);
 
   // --- Cloud: attivazione, chiave, scollegamento (dalle impostazioni) ---
   const getLocalCloudData = () => ({ appointments: appointmentsRef.current, config: getCloudConfig() });
@@ -1705,7 +1772,7 @@ function App() {
             onStartTime={setStartTime}
             onEndTime={setEndTimeLimit}
             autopilotOn={autopilot.enabled}
-            bridgeOn={bridgeSettings.enabled}
+            bridgeOn={embedded || bridgeSettings.enabled}
             cloudOn={cloudActive}
             onOpenAutopilotSettings={() => setShowAutopilotSettings(true)}
             technicians={technicians}
@@ -1822,6 +1889,7 @@ function App() {
           onCloudActivate={handleCloudActivate}
           onCloudDisconnect={handleCloudDisconnect}
           onCloudKeySave={handleCloudKeySave}
+          gestionale={gestionale ? { user: gestionale.user, credential: gestionale.session.credential } : null}
         />
       )}
 
@@ -1863,6 +1931,7 @@ function App() {
         onOpenTechnicians={() => { setMobileNavOpen(false); openTechModal(); }}
         onToggleCollapsed={toggleNav}
         onCloseMobile={() => setMobileNavOpen(false)}
+        gestionaleUser={gestionale ? gestionale.user : null}
       />
 
       <div className="flex-1 min-w-0 flex flex-col">

@@ -201,7 +201,28 @@ export type CloudErrorCode =
   | 'store_not_configured'  // 503: sul server manca il database
   | 'bad_request'           // 400
   | 'conflict'              // 409: troppe modifiche concorrenti, riprovare
-  | 'server';               // 500
+  | 'server'                // 500
+  // Collegamento con il gestionale (op=session, op=sopralluoghi)
+  | 'forbidden'                  // 403: non amministratore / non personale
+  | 'gestionale_not_configured'  // 503: mancano le variabili GESTIONALE_*
+  | 'gestionale_unreachable';    // 502: Google o il gestionale non rispondono
+
+// GET ?op=ping: risposta (senza chiave)
+export interface CloudPingResponse {
+  protocol: number;
+  secretConfigured: boolean;
+  storeConfigured: boolean;
+  // `parentAllowed`: la pagina indicata con &parent= è del gestionale
+  // (l'elenco delle pagine ammesse non viene mai restituito)
+  gestionale?: { enabled: boolean; parentAllowed: boolean };
+}
+
+// POST ?op=session: biglietto di sessione per chi usa OptiRoute dal gestionale
+export interface CloudSessionResponse {
+  token: string;
+  expiresAt: string;
+  user: { name: string; role: string };
+}
 
 export interface CloudError {
   error: CloudErrorCode;

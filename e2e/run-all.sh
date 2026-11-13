@@ -13,14 +13,17 @@
 #   VITE_PORT    server Vite dell'app           (default 5271)
 #   VITE_PORT_2  secondo server Vite            (default 5272; oggi nessuna prova lo usa)
 #   CLOUD_PORT   server cloud di sviluppo       (default 8791; solo per cloud-real.js)
+#   GESTIONALE_CLOUD_PORT   server cloud con il gestionale finto (default 8792; solo gestionale.js)
+#   GESTIONALE_PARENT_PORT  pagina del gestionale finto (default 5281; +1 per la pagina NON autorizzata)
 # Prove da lanciare: ONLY="autopilot tabs" bash e2e/run-all.sh   (default: tutte)
 #
-# Le cinque serie:
+# Le sei serie:
 #   autopilot     pilota automatico: approvazione, chiamate, esiti, alternative, rimpiazzi, bridge
 #   cloud-client  client del cloud: attivazione, modifiche locali, esiti dal server, errori
 #   cloud-real    a browser chiuso, sui bundle veri delle funzioni (archivio in memoria, Retell finto)
 #   tabs          due schede dello stesso browser: una sola fa da pilota
 #   finestre      giro di tutte le finestre a 1440 e a 390 px, con schermate
+#   gestionale    OptiRoute dentro la pagina del gestionale (iframe, accesso, bridge, conferme)
 #
 # Avvia SOLO i server che servono, ognuno nel suo gruppo di processi, e alla
 # fine spegne solo quelli (per PID/gruppo, mai pkill con schemi). Se una porta è
@@ -40,7 +43,10 @@ VITE_PORT="${VITE_PORT:-5271}"
 VITE_PORT_2="${VITE_PORT_2:-5272}"
 CLOUD_PORT="${CLOUD_PORT:-8791}"
 CLOUD_KEY="chiave-e2e-0123456789abcdefghij"
-ONLY="${ONLY:-autopilot cloud-client cloud-real tabs finestre}"
+GESTIONALE_CLOUD_PORT="${GESTIONALE_CLOUD_PORT:-8792}"
+GESTIONALE_PARENT_PORT="${GESTIONALE_PARENT_PORT:-5281}"
+GESTIONALE_KEY="chiave-e2e-gestionale-0123456789"
+ONLY="${ONLY:-autopilot cloud-client cloud-real tabs finestre gestionale}"
 LOGS="$HERE/logs"
 mkdir -p "$LOGS" "$HERE/shots"
 
@@ -71,9 +77,9 @@ wait_http() { # url, secondi
   return 1
 }
 
-for p in "$VITE_PORT" "$CLOUD_PORT"; do
+for p in "$VITE_PORT" "$CLOUD_PORT" "$GESTIONALE_CLOUD_PORT" "$GESTIONALE_PARENT_PORT" "$(( GESTIONALE_PARENT_PORT + 1 ))"; do
   if port_busy "$p"; then
-    echo "La porta $p è già occupata: scegli altre porte (VITE_PORT / CLOUD_PORT) nelle fasce 5271-5279 / 8791-8799." >&2
+    echo "La porta $p è già occupata: scegli altre porte (VITE_PORT / CLOUD_PORT / GESTIONALE_CLOUD_PORT / GESTIONALE_PARENT_PORT) nelle fasce 5271-5289 / 8791-8799." >&2
     exit 3
   fi
 done
@@ -100,6 +106,14 @@ start_cloud() {
   wait_http "http://127.0.0.1:$CLOUD_PORT/api/cloud?op=ping" 30
 }
 
+start_gestionale_cloud() {
+  echo "Avvio il server cloud di sviluppo con il gestionale FINTO su 127.0.0.1:$GESTIONALE_CLOUD_PORT (pagina del gestionale: 127.0.0.1:$GESTIONALE_PARENT_PORT)"
+  (cd "$REPO" && unset VERCEL_ENV RETELL_API_KEY GESTIONALE_ORIGINS GESTIONALE_FIREBASE_PROJECTS && PORT="$GESTIONALE_CLOUD_PORT" CRON_SECRET="$GESTIONALE_KEY" FAKE_RETELL=1 \
+    exec setsid node scripts/dev-cloud-server.mjs --gestionale-test --gestionale-origin "http://127.0.0.1:$GESTIONALE_PARENT_PORT") > "$LOGS/gestionale-cloud-server.log" 2>&1 &
+  STARTED_PIDS+=("$!")
+  wait_http "http://127.0.0.1:$GESTIONALE_CLOUD_PORT/api/cloud?op=ping" 30
+}
+
 declare -A ESITO PASS FAIL CODE DUR
 ORDER=()
 run_one() { # nome file [args...]
@@ -108,6 +122,7 @@ run_one() { # nome file [args...]
   echo "--- $name"
   local t0=$SECONDS
   (cd "$HERE" && VITE_PORT="$VITE_PORT" VITE_PORT_2="$VITE_PORT_2" CLOUD_PORT="$CLOUD_PORT" \
+     GESTIONALE_CLOUD_PORT="$GESTIONALE_CLOUD_PORT" GESTIONALE_PARENT_PORT="$GESTIONALE_PARENT_PORT" \
      timeout 900 node "$file" "$@") > "$LOGS/$name.log" 2>&1
   local rc=$?
   DUR[$name]=$(( SECONDS - t0 ))
@@ -134,6 +149,10 @@ for t in $ONLY; do
         echo "server cloud non partito (vedi $LOGS/cloud-server.log)" >&2; fi ;;
     tabs)         run_one tabs tabs.js ;;
     finestre)     run_one finestre finestre.js all ;;
+    gestionale)
+      if start_gestionale_cloud; then run_one gestionale gestionale.js
+      else ORDER+=(gestionale); ESITO[gestionale]="FALLITO"; PASS[gestionale]=0; FAIL[gestionale]=1; CODE[gestionale]=99; DUR[gestionale]=0
+        echo "server cloud (gestionale) non partito (vedi $LOGS/gestionale-cloud-server.log)" >&2; fi ;;
     *) echo "prova sconosciuta: $t" >&2 ;;
   esac
 done

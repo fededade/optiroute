@@ -45,6 +45,31 @@
 //   curl -s localhost:8787/api/cloud?op=ping
 //   curl -s -H 'Authorization: Bearer dev-secret' 'localhost:8787/api/cloud?op=status'
 //   curl -s -X POST -H 'Authorization: Bearer dev-secret' localhost:8787/api/cloud-tick
+//
+// Prove con il gestionale (facoltative; la funzione resta quella del bundle,
+// cambiano solo le dipendenze che le si passano: nessun interruttore di prova
+// nel codice che va su Vercel):
+//
+//   --gestionale-test --gestionale-origin <origine della pagina del gestionale>
+//       Gestionale FINTO in questo processo: all'avvio si genera una chiave RSA;
+//       le chiavi pubbliche "di Google" e le schede del personale "di Firestore"
+//       le fornisce un finto interno (nessuna rete). Progetto: progetto-di-prova.
+//       In più:
+//         POST /__test/token { "email", "role", "name", "verified"?, "project"?, "expiresInSeconds"? }
+//           -> { "idToken": "<biglietto firmato>" }. "role": null = la persona non ha
+//           una scheda nel personale. "verified": false = email non verificata.
+//
+//   --gestionale-emulatori <indirizzo dell'emulatore di Firestore, es. http://127.0.0.1:8080>
+//   --gestionale-progetto <id del progetto negli emulatori>
+//   --gestionale-origin <origine della pagina del gestionale>
+//       Per una prova insieme agli emulatori di Firebase: accetta i biglietti
+//       NON FIRMATI dell'emulatore di Authentication (se ne controllano solo
+//       progetto, scadenza ed email verificata) e legge la scheda del personale
+//       dall'emulatore di Firestore con lo stesso biglietto.
+//
+// In questi due modi le intestazioni CORS di /api/cloud le decide la funzione
+// (solo per l'origine indicata), come su Vercel.
+import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -58,6 +83,34 @@ if (process.env.VERCEL_ENV) {
 }
 process.env.OPTIROUTE_STORE = 'memory';
 if (!process.env.CRON_SECRET) process.env.CRON_SECRET = 'dev-secret';
+
+// --- Opzioni da riga di comando (gestionale) ---
+const argValue = name => {
+  const i = process.argv.indexOf(name);
+  return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : '';
+};
+const GEST_TEST = process.argv.includes('--gestionale-test');
+const GEST_EMULATORS = argValue('--gestionale-emulatori');
+const GEST_ORIGIN = argValue('--gestionale-origin');
+const GEST_TEST_PROJECT = 'progetto-di-prova';
+const GEST_PROJECT = GEST_TEST ? GEST_TEST_PROJECT : argValue('--gestionale-progetto');
+const GEST_MODE = GEST_TEST ? 'test' : GEST_EMULATORS ? 'emulatori' : '';
+if (GEST_TEST && GEST_EMULATORS) {
+  console.error('dev-cloud-server: usa --gestionale-test OPPURE --gestionale-emulatori, non entrambi.');
+  process.exit(1);
+}
+if (GEST_MODE && !GEST_ORIGIN) {
+  console.error('dev-cloud-server: manca --gestionale-origin <origine della pagina del gestionale>.');
+  process.exit(1);
+}
+if (GEST_MODE === 'emulatori' && !GEST_PROJECT) {
+  console.error('dev-cloud-server: manca --gestionale-progetto <id del progetto negli emulatori>.');
+  process.exit(1);
+}
+if (GEST_MODE) {
+  process.env.GESTIONALE_ORIGINS = GEST_ORIGIN;
+  process.env.GESTIONALE_FIREBASE_PROJECTS = GEST_PROJECT;
+}
 
 const FAKE_RETELL = process.env.FAKE_RETELL === '1';
 if (FAKE_RETELL) {
@@ -209,23 +262,104 @@ const queryOf = url => {
   return q;
 };
 
+// --- Gestionale finto (--gestionale-test) ---
+// Chiave RSA generata all'avvio; "Google" (chiavi pubbliche) e "Firestore"
+// (schede del personale) rispondono da qui, senza rete. Come le regole del
+// gestionale, si legge solo la PROPRIA scheda.
+const fakeGestionale = (() => {
+  if (GEST_MODE !== 'test') return null;
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const kid = `chiave-locale-${Date.now().toString(36)}`;
+  const jwk = { ...publicKey.export({ format: 'jwk' }), kid, alg: 'RS256', use: 'sig' };
+  const staff = new Map(); // email minuscola -> { ruolo, nome }
+  const FIRESTORE = 'http://firestore.finto.invalid';
+  const b64 = v => Buffer.from(JSON.stringify(v)).toString('base64url');
+  const reply = (status, body, headers = {}) => ({
+    status, ok: status >= 200 && status < 300,
+    headers: { get: name => headers[String(name).toLowerCase()] ?? null },
+    json: async () => body,
+  });
+  const fetchFake = async (url, init) => {
+    if (url.includes('/service_accounts/v1/jwk/')) {
+      return reply(200, { keys: [jwk] }, { 'cache-control': 'public, max-age=3600' });
+    }
+    const m = /\/documents\/personale\/([^/?]+)$/.exec(url);
+    if (url.startsWith(FIRESTORE) && m) {
+      const email = decodeURIComponent(m[1]);
+      const token = String(init?.headers?.Authorization || '').replace(/^Bearer\s+/i, '');
+      let payload = {};
+      try { payload = JSON.parse(Buffer.from(token.split('.')[1] || '', 'base64url').toString('utf8')); } catch { /* biglietto illeggibile */ }
+      if (String(payload.email || '').toLowerCase() !== email) return reply(403, { error: { code: 403 } });
+      const rec = staff.get(email);
+      if (!rec) return reply(404, { error: { code: 404 } });
+      return reply(200, { fields: { ruolo: { stringValue: rec.ruolo }, nome: { stringValue: rec.nome } } });
+    }
+    throw new Error('rete non ammessa nel gestionale finto');
+  };
+  const issue = ({ email, role, name, verified, project, expiresInSeconds }) => {
+    const lower = String(email || '').trim().toLowerCase();
+    if (!lower) throw new Error('email mancante');
+    if (role === null) staff.delete(lower);
+    else staff.set(lower, { ruolo: String(role || 'Amministratore'), nome: String(name || lower) });
+    const now = Math.floor(Date.now() / 1000);
+    const aud = String(project || GEST_TEST_PROJECT);
+    const claims = {
+      iss: `https://securetoken.google.com/${aud}`, aud, auth_time: now, user_id: `uid-${lower}`, sub: `uid-${lower}`,
+      iat: now, exp: now + (Number.isFinite(Number(expiresInSeconds)) ? Number(expiresInSeconds) : 3600),
+      email: String(email).trim(), email_verified: verified !== false,
+    };
+    const input = `${b64({ alg: 'RS256', kid, typ: 'JWT' })}.${b64(claims)}`;
+    return `${input}.${cryptoSign('RSA-SHA256', Buffer.from(input), privateKey).toString('base64url')}`;
+  };
+  return { deps: { fetch: fetchFake, firestoreBaseUrl: FIRESTORE }, issue };
+})();
+
 const bundleUrl = file => pathToFileURL(path.join(ROOT, file)).href;
-const { default: cloud } = await import(bundleUrl('api/cloud.js'));
+const cloudModule = await import(bundleUrl('api/cloud.js'));
 const { default: cloudTick } = await import(bundleUrl('api/cloud-tick.js'));
 
+// Biglietti NON firmati dell'emulatore di Authentication: si leggono e si
+// controllano progetto, scadenza ed email verificata (la scheda del
+// personale la decide comunque l'emulatore di Firestore con le sue regole)
+const emulatorDeps = () => ({
+  firestoreBaseUrl: GEST_EMULATORS,
+  verifyToken: async (token, projects, nowMs) =>
+    cloudModule.checkFirebaseClaims(cloudModule.decodeJwt(token).payload, projects, Math.floor(nowMs / 1000), { strict: false }),
+});
+
+const cloud = GEST_MODE === 'test'
+  ? cloudModule.createCloudHandler({ gestionale: fakeGestionale.deps })
+  : GEST_MODE === 'emulatori'
+    ? cloudModule.createCloudHandler({ gestionale: emulatorDeps() })
+    : cloudModule.default;
+
 const server = http.createServer(async (req, res) => {
-  // CORS aperto: SOLO per questo strumento locale
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    res.statusCode = 204;
-    return res.end();
+  const url0 = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
+  // Con il gestionale, CORS e preflight di /api/* li gestisce la funzione
+  const functionCors = !!GEST_MODE && url0.pathname.startsWith('/api/');
+  if (!functionCors) {
+    // CORS aperto: SOLO per questo strumento locale
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204;
+      return res.end();
+    }
   }
   try {
-    const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
+    const url = url0;
     const raw = await readBody(req);
     const body = parseJsonBody(raw, req.headers['content-type']);
+
+    if (req.method === 'POST' && url.pathname === '/__test/token') {
+      if (!fakeGestionale) return sendJson(res, 404, { error: 'avvia con --gestionale-test' });
+      try {
+        return sendJson(res, 200, { idToken: fakeGestionale.issue(body || {}) });
+      } catch (err) {
+        return sendJson(res, 400, { error: err?.message || 'richiesta non valida' });
+      }
+    }
 
     if (url.pathname.startsWith('/__retell/')) {
       if (!FAKE_RETELL) return sendJson(res, 404, { message: 'FAKE_RETELL non attivo' });
@@ -249,4 +383,6 @@ server.listen(PORT, () => {
   console.log(`  chiave (CRON_SECRET): ${process.env.CRON_SECRET}`);
   console.log(`  Retell: ${FAKE_RETELL ? 'FINTO (in-process)' : (process.env.RETELL_API_KEY ? 'VERO: le telefonate partono davvero!' : 'non configurato')}`);
   console.log(`  fuso del motore: ${process.env.TZ}`);
+  if (GEST_MODE === 'test') console.log(`  gestionale: FINTO (progetto ${GEST_TEST_PROJECT}, pagina ${GEST_ORIGIN}); biglietti da POST /__test/token`);
+  if (GEST_MODE === 'emulatori') console.log(`  gestionale: EMULATORI (progetto ${GEST_PROJECT}, Firestore ${GEST_EMULATORS}, pagina ${GEST_ORIGIN})`);
 });

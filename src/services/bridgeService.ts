@@ -50,8 +50,9 @@ export interface BridgeSnapshot {
   pratiche: BridgePratica[];
 }
 
-// offline = bridge non raggiungibile (rete), token = 401, invalid = risposta inattesa
-export type BridgeErrorKind = 'offline' | 'token' | 'invalid';
+// offline = bridge non raggiungibile (rete), token = 401, invalid = risposta inattesa,
+// inactive = (dentro il gestionale) bridge avviato ma non ancora attivato
+export type BridgeErrorKind = 'offline' | 'token' | 'invalid' | 'inactive';
 
 export type BridgeFetchResult =
   | { ok: true; snapshot: BridgeSnapshot }
@@ -162,6 +163,31 @@ export const fetchBridgeSnapshot = async (
     return { ok: false, error: 'invalid', message: 'Risposta inattesa: non sembra il bridge di OptiRoute' };
   }
   return { ok: true, snapshot };
+};
+
+// Dentro il gestionale le pratiche del bridge arrivano TRAMITE la pagina del
+// gestionale (che parla con il bridge sul PC): richiesta "bridge.snapshot".
+export const fetchBridgeSnapshotViaParent = async (
+  request: (method: string, params: Record<string, unknown>, opts: { timeoutMs?: number }) => Promise<Record<string, unknown>>,
+  timeoutMs = 20000
+): Promise<BridgeFetchResult> => {
+  let r: Record<string, unknown>;
+  try {
+    r = await request('bridge.snapshot', {}, { timeoutMs });
+  } catch {
+    return { ok: false, error: 'offline', message: 'Il gestionale non ha risposto' };
+  }
+  const message = typeof r.message === 'string' && r.message ? r.message : '';
+  if (r.status === 'ok') {
+    const snapshot = parseBridgeSnapshot(r.snapshot);
+    return snapshot
+      ? { ok: true, snapshot }
+      : { ok: false, error: 'invalid', message: 'Risposta inattesa: non sembra il bridge di OptiRoute' };
+  }
+  if (r.status === 'offline') return { ok: false, error: 'offline', message: message || 'Bridge non avviato' };
+  if (r.status === 'inactive') return { ok: false, error: 'inactive', message: message || 'Bridge non attivato' };
+  if (r.status === 'token') return { ok: false, error: 'token', message: message || 'Token del bridge errato' };
+  return { ok: false, error: 'invalid', message: message || 'Risposta inattesa dal gestionale' };
 };
 
 // Verifica che all'indirizzo risponda il bridge (senza token)

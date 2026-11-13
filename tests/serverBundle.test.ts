@@ -98,7 +98,7 @@ describe('bundle in funzione (archivio in memoria, Retell finto)', () => {
     const cloudTick = (await import('../api/cloud-tick.js')).default;
 
     const ping = await invoke(cloud, { query: { op: 'ping' } });
-    expect(ping.body).toEqual({ protocol: 1, secretConfigured: true, storeConfigured: true });
+    expect(ping.body).toEqual({ protocol: 1, secretConfigured: true, storeConfigured: true, gestionale: { enabled: false, parentAllowed: false } });
 
     const D = '2026-11-13';
     const init = await invoke(cloud, {

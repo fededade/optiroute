@@ -55,11 +55,11 @@ describe('ping', () => {
     const t = make();
     const res = await t.call('ping', { headers: {} });
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ protocol: 1, secretConfigured: true, storeConfigured: true });
+    expect(res.body).toEqual({ protocol: 1, secretConfigured: true, storeConfigured: true, gestionale: { enabled: false, parentAllowed: false } });
     expect(res.headers['cache-control']).toBe('no-store');
 
     const bare = make({ env: {}, store: null });
-    expect((await bare.call('ping', { headers: {} })).body).toEqual({ protocol: 1, secretConfigured: false, storeConfigured: false });
+    expect((await bare.call('ping', { headers: {} })).body).toEqual({ protocol: 1, secretConfigured: false, storeConfigured: false, gestionale: { enabled: false, parentAllowed: false } });
   });
 });
 

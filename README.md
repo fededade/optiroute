@@ -267,9 +267,64 @@ finestra di chiamata ("Registra esito della telefonata").
   fatto sotto supervisione. **Cerved** non è ancora collegato: il bridge ha la struttura
   per aggiungerlo e uno strumento (`capture_portal.py`) per rilevarne le pagine in forma
   anonimizzata. Vedi `prelios-bridge/README.md`.
-- **Invio al gestionale: tolto** (novembre 2026). OptiRoute non invia più i sopralluoghi
-  confermati al gestionale, che non li importava. Per riattivarlo andrà rifatto con un
-  invio dal server; il codice precedente è nella cronologia git.
+- **Sopralluoghi confermati al gestionale**: non è più OptiRoute a scriverli nel
+  gestionale (il vecchio invio è stato tolto a novembre 2026); è il gestionale che li legge
+  dal server di OptiRoute. Vedi la sezione "Dentro il gestionale".
+
+## Dentro il gestionale
+
+OptiRoute può essere aperta dentro una pagina del gestionale (come riquadro della
+pagina). Chi entra nel gestionale non deve fare altro: niente chiave da digitare.
+
+**Cosa cambia per l'operatore**
+
+- OptiRoute si apre solo per gli **amministratori** del gestionale (Super Amministratore e
+  Amministratore). Un tecnico vede l'avviso "Area riservata agli amministratori".
+- Il **cloud è sempre acceso**: i dati stanno sul server di OptiRoute. Se il server è
+  ancora vuoto, il primo browser carica le sue pratiche; altrimenti valgono quelle del server.
+- Il **bridge dei portali** si avvia e si attiva dalla barra del gestionale: le pratiche
+  arrivano da sole tramite la pagina del gestionale. Indirizzo e token del bridge nelle
+  impostazioni di OptiRoute non servono (restano visibili ma spenti).
+- Nelle impostazioni (scheda Cloud) al posto della chiave c'è la riga "Accesso dal
+  gestionale come …"; in fondo alla navigazione a sinistra si vede chi è collegato.
+- Se OptiRoute viene messa dentro una pagina che **non** è del gestionale, si vede solo
+  l'avviso "OptiRoute non può essere aperta dentro questa pagina", con il collegamento per
+  aprirla nella sua scheda.
+- Aperta da sola (nella sua scheda, come sempre) OptiRoute funziona esattamente come prima,
+  con la chiave del cloud.
+
+**Attivazione (su Vercel, una volta sola)**: in *Settings → Environment Variables* aggiungi
+
+| Variabile | Cosa contiene | Esempio |
+|---|---|---|
+| `GESTIONALE_ORIGINS` | indirizzo (solo `https://dominio`) della pagina del gestionale; più indirizzi separati da virgola | `https://gestionale.example` |
+| `GESTIONALE_FIREBASE_PROJECTS` | progetto Firebase del gestionale; più progetti separati da virgola | `progetto-di-prova` |
+
+Serve anche `CRON_SECRET` (la chiave del cloud, vedi sopra), poi un nuovo deploy. Senza
+queste variabili il collegamento resta spento. La chiave `CRON_SECRET` continua a valere
+per l'uso di OptiRoute da sola e per lo scheduler.
+
+**Come funziona l'accesso**: il gestionale passa a OptiRoute il "biglietto" della persona
+collegata (Firebase); il server di OptiRoute ne controlla la firma con le chiavi pubbliche
+di Google, legge la scheda della persona nel personale del gestionale con lo stesso
+biglietto e, se è amministratore, rilascia un biglietto di sessione valido 60 minuti, che
+si rinnova da solo e non viene mai salvato nel browser. Nessun indirizzo del gestionale,
+progetto o chiave è scritto nel codice.
+
+**Come il gestionale riceve i sopralluoghi confermati**: legge
+`GET /api/cloud?op=sopralluoghi` (con il biglietto di una qualunque persona del
+personale) e riceve data, orario, tecnico, cliente, contatti ed esito della chiamata di ogni
+sopralluogo confermato dal cliente (o confermato dall'operatore se la pratica non ha
+telefono), più l'elenco delle pratiche non ancora confermate. OptiRoute avvisa la pagina del
+gestionale qualche secondo dopo ogni modifica, così l'elenco si aggiorna subito. Il server
+risponde alle chiamate da altri siti solo per le pagine indicate in `GESTIONALE_ORIGINS`.
+
+**Per chi sviluppa**: contratto dei messaggi fra le pagine in
+`src/services/gestionaleHost.ts`, accesso in `server/gestionale.ts` e `server/auth.ts`,
+regola dei confermati in `src/services/gestionaleExport.ts`. Prove senza rete:
+`node scripts/dev-cloud-server.mjs --gestionale-test --gestionale-origin <pagina>`
+(gestionale finto) e la serie `gestionale` di `npm run test:e2e`; per provare con gli
+emulatori di Firebase: `--gestionale-emulatori <indirizzo Firestore> --gestionale-progetto <id>`.
 
 ## Altre variabili d'ambiente
 

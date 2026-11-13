@@ -76,6 +76,71 @@ var applyAppointmentChanges = (all, changes) => {
   return list;
 };
 
+// src/services/gestionaleExport.ts
+var isConfirmedByClient = (a) => {
+  if (a.status !== "confirmed" || !a.date || !a.startTime) return false;
+  if (a.callOutcome?.result === "confermato") return true;
+  if (!a.phone?.trim()) return true;
+  return false;
+};
+var s = (v) => typeof v === "string" ? v.trim() : "";
+var n = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
+var toSopralluogo = (a, technicianName) => {
+  const byCall = a.callOutcome?.result === "confermato";
+  const o = a.callOutcome;
+  return {
+    id: a.id,
+    codice: s(a.periziaCode),
+    data: s(a.date),
+    oraInizio: s(a.startTime),
+    oraFine: s(a.endTime),
+    ordine: n(a.sequenceOrder),
+    tecnico: technicianName,
+    cliente: s(a.title),
+    telefono: s(a.phone),
+    referente: s(a.contactPerson),
+    indirizzo: s(a.shortAddress) || s(a.address),
+    indirizzoCompleto: s(a.address),
+    comune: s(a.comune),
+    provincia: s(a.province),
+    lat: n(a.coords?.lat),
+    lng: n(a.coords?.lng),
+    approssimato: a.approximate === true,
+    progetto: s(a.project),
+    note: s(a.notes),
+    urgente: a.urgent === true,
+    conferma: byCall ? "chiamata" : "operatore",
+    chiamata: o ? {
+      esito: s(o.result),
+      riepilogo: s(o.summary) || s(a.callSummary),
+      noteCliente: s(o.clientNotes),
+      ricevutoIl: s(o.receivedAt)
+    } : null
+  };
+};
+var compare = (x, y) => x.data.localeCompare(y.data) || x.oraInizio.localeCompare(y.oraInizio) || x.ordine - y.ordine || x.id.localeCompare(y.id);
+var buildSopralluoghiExport = (appointments, technicians) => {
+  const names = new Map(technicians.map((t) => [t.id, s(t.name)]));
+  const confirmed = [];
+  const others = /* @__PURE__ */ new Set();
+  const otherIds = [];
+  for (const a of appointments) {
+    if (!a || typeof a.id !== "string") continue;
+    if (isConfirmedByClient(a)) {
+      confirmed.push(toSopralluogo(a, a.technicianId && names.get(a.technicianId) || ""));
+    } else {
+      otherIds.push(a.id);
+      const code = s(a.periziaCode);
+      if (code) others.add(code);
+    }
+  }
+  confirmed.sort(compare);
+  const confirmedCodes = new Set(confirmed.map((c) => c.codice).filter(Boolean));
+  const notConfirmed = [...others].filter((c) => !confirmedCodes.has(c)).sort();
+  const notConfirmedIds = [...new Set(otherIds)].sort();
+  return { confirmed, notConfirmed, notConfirmedIds };
+};
+
 // api/retell-call.ts
 var COMPANY_NAME = process.env.RETELL_COMPANY_NAME || "Effetre Properties";
 var AGENT_NAME = process.env.RETELL_AGENT_NAME || "Misi";
@@ -149,7 +214,7 @@ var REGIONI_IT = [
   "veneto"
 ];
 var cleanDisplayName = (full) => {
-  const parts = full.split(",").map((s) => s.trim()).filter(Boolean);
+  const parts = full.split(",").map((s2) => s2.trim()).filter(Boolean);
   const kept = parts.filter((p) => {
     const pl = p.toLowerCase();
     if (/^\d{4,5}$/.test(p)) return false;
@@ -207,7 +272,7 @@ var buildAlternativesSection = (alternatives) => {
     `## SLOT ALTERNATIVI — usali SOLO se il cliente non può o non vuole il giorno e l'orario proposti:`,
     `Sono disponibilità REALI, già verificate sull'agenda del tecnico: sono le UNICHE che puoi offrire o fissare.`,
     `- Offrile UNA ALLA VOLTA, in quest'ordine, aspettando la risposta prima di passare alla successiva:`,
-    ...spoken.map((s, i) => `  ${i + 1}) ${s}`),
+    ...spoken.map((s2, i) => `  ${i + 1}) ${s2}`),
     `- Di' al cliente SOLO giorno e ora (es. "Potrebbe andarle bene ${spoken[0]}?"): NON leggere MAI lettere, numeri o etichette delle alternative.`,
     `- Se ne ACCETTA una → confermala esplicitamente ripetendo giorno e ora: "Perfetto, allora le confermo il sopralluogo per <giorno> alle <ora>." Spiega al cliente che è un appuntamento FISSATO: da quel momento l'appuntamento valido è quello (non più quello proposto all'inizio). Ringrazia e saluta.`,
     `- Se chiede un giorno o un orario DIVERSO da questi → non confermarlo e non dire che "dovrebbe essere possibile": proponi le alternative rimaste.`,
@@ -415,6 +480,8 @@ var createRetellCall = async (body, opts = {}) => {
 
 // server/auth.ts
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+var SESSION_PREFIX = "ors1";
+var SESSION_TTL_MS = 60 * 60 * 1e3;
 var safeEqual = (a, b) => {
   const da = createHash("sha256").update(a, "utf8").digest();
   const db = createHash("sha256").update(b, "utf8").digest();
@@ -429,12 +496,248 @@ var bearerToken = (headers) => {
   const m = /^Bearer\s+(.+)$/i.exec(headerValue(headers, "authorization").trim());
   return m ? m[1].trim() : "";
 };
-var isAuthorized = (headers, secret) => {
+var sessionMac = (secret, exp) => {
+  const key = createHmac("sha256", secret).update("optiroute-sessione-v1").digest();
+  return createHmac("sha256", key).update(`${SESSION_PREFIX}.${exp}`).digest("base64url");
+};
+var mintSessionToken = (secret, nowMs) => {
+  if (!secret) throw new Error("CRON_SECRET mancante");
+  const exp = Math.floor((nowMs + SESSION_TTL_MS) / 1e3);
+  return { token: `${SESSION_PREFIX}.${exp}.${sessionMac(secret, exp)}`, expiresAt: new Date(exp * 1e3).toISOString() };
+};
+var SESSION_RE = /^ors1\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/;
+var isValidSessionToken = (token, secret, nowMs) => {
+  if (typeof token !== "string" || !secret) return false;
+  const m = SESSION_RE.exec(token);
+  if (!m) return false;
+  const exp = parseInt(m[1], 10);
+  if (exp * 1e3 <= nowMs || exp * 1e3 > nowMs + SESSION_TTL_MS + 6e4) return false;
+  return safeEqual(m[2], sessionMac(secret, exp));
+};
+var isAuthorized = (headers, secret, nowMs = Date.now()) => {
   const token = bearerToken(headers);
-  return !!secret && !!token && safeEqual(token, secret);
+  if (!secret || !token) return false;
+  return safeEqual(token, secret) || isValidSessionToken(token, secret, nowMs);
 };
 var webhookToken = (secret) => createHmac("sha256", secret).update("optiroute-webhook").digest("hex").slice(0, 32);
 var isValidWebhookToken = (token, secret) => typeof token === "string" && !!secret && !!token && safeEqual(token, webhookToken(secret));
+
+// server/gestionale.ts
+import { createHash as createHash2, createPublicKey, verify as cryptoVerify } from "node:crypto";
+var FIREBASE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+var FIRESTORE_BASE_URL = "https://firestore.googleapis.com";
+var ADMIN_ROLES = ["Super Amministratore", "Amministratore"];
+var STAFF_CACHE_TTL_MS = 5 * 60 * 1e3;
+var STAFF_CACHE_MAX = 500;
+var CLOCK_SKEW_S = 5 * 60;
+var GESTIONALE_TIMEOUT_MS = 1e4;
+var splitList = (raw) => (raw || "").split(",").map((s2) => s2.trim()).filter(Boolean);
+var normalizeOrigin = (raw) => {
+  if (typeof raw !== "string" || !raw.trim()) return "";
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== "https:" && u.protocol !== "http:") return "";
+    return u.origin;
+  } catch {
+    return "";
+  }
+};
+var PROJECT_RE = /^[a-z0-9][a-z0-9-]{2,62}$/;
+var gestionaleSettings = (env) => {
+  const projects = [...new Set(splitList(env.GESTIONALE_FIREBASE_PROJECTS).filter((p) => PROJECT_RE.test(p)))];
+  const origins = [...new Set(splitList(env.GESTIONALE_ORIGINS).map(normalizeOrigin).filter(Boolean))];
+  return { projects, origins, enabled: projects.length > 0 && origins.length > 0 && !!env.CRON_SECRET };
+};
+var isAllowedOrigin = (settings, origin) => {
+  const o = normalizeOrigin(origin);
+  return !!o && settings.origins.includes(o);
+};
+var GestionaleAuthError = class extends Error {
+  constructor(reason) {
+    super(`gestionale: ${reason}`);
+    this.reason = reason;
+    this.name = "GestionaleAuthError";
+  }
+  reason;
+};
+var GestionaleUnreachableError = class extends Error {
+  constructor(reason) {
+    super(`gestionale: ${reason}`);
+    this.reason = reason;
+    this.name = "GestionaleUnreachableError";
+  }
+  reason;
+};
+var defaultFetch = (url, init) => fetch(url, init);
+var withTimeout = async (run, ms) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await run(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+var B64URL_RE = /^[A-Za-z0-9_-]*$/;
+var parseJsonPart = (part) => {
+  if (!part || !B64URL_RE.test(part)) throw new GestionaleAuthError("formato");
+  let value;
+  try {
+    value = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+  } catch {
+    throw new GestionaleAuthError("formato");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new GestionaleAuthError("formato");
+  return value;
+};
+var decodeJwt = (token) => {
+  if (typeof token !== "string" || token.length > 8192) throw new GestionaleAuthError("formato");
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new GestionaleAuthError("formato");
+  if (!B64URL_RE.test(parts[2])) throw new GestionaleAuthError("formato");
+  return {
+    header: parseJsonPart(parts[0]),
+    payload: parseJsonPart(parts[1]),
+    signingInput: `${parts[0]}.${parts[1]}`,
+    signature: Buffer.from(parts[2], "base64url")
+  };
+};
+var checkFirebaseClaims = (payload, projects, nowSec, opts = {}) => {
+  const strict = opts.strict !== false;
+  const aud = payload.aud;
+  if (typeof aud !== "string" || !projects.includes(aud)) throw new GestionaleAuthError("progetto");
+  const iss = typeof payload.iss === "string" ? payload.iss : "";
+  if (strict && iss !== `https://securetoken.google.com/${aud}`) throw new GestionaleAuthError("emittente");
+  const exp = payload.exp;
+  if (typeof exp !== "number" || !Number.isFinite(exp) || exp <= nowSec) throw new GestionaleAuthError("scaduto");
+  const iat = typeof payload.iat === "number" ? payload.iat : NaN;
+  if (strict && (!Number.isFinite(iat) || iat > nowSec + CLOCK_SKEW_S)) throw new GestionaleAuthError("emesso nel futuro");
+  const sub = payload.sub;
+  if (strict && (typeof sub !== "string" || !sub || sub.length > 128)) throw new GestionaleAuthError("utente");
+  if (payload.email_verified !== true) throw new GestionaleAuthError("email non verificata");
+  const email = payload.email;
+  if (typeof email !== "string" || !email.trim()) throw new GestionaleAuthError("email");
+  return { sub: typeof sub === "string" ? sub : "", email: email.trim(), aud, iss, exp, iat: Number.isFinite(iat) ? iat : 0 };
+};
+var verifyFirebaseToken = (token, keys, projects, nowSec) => {
+  const jwt = decodeJwt(token);
+  if (jwt.header.alg !== "RS256") throw new GestionaleAuthError("algoritmo");
+  const kid = jwt.header.kid;
+  const key = typeof kid === "string" ? keys.get(kid) : void 0;
+  if (!key) throw new GestionaleAuthError("chiave sconosciuta");
+  let ok = false;
+  try {
+    ok = cryptoVerify("RSA-SHA256", Buffer.from(jwt.signingInput, "utf8"), key, jwt.signature);
+  } catch {
+    ok = false;
+  }
+  if (!ok) throw new GestionaleAuthError("firma");
+  return checkFirebaseClaims(jwt.payload, projects, nowSec);
+};
+var maxAgeMs = (cacheControl) => {
+  const m = /max-age=(\d+)/i.exec(cacheControl || "");
+  const seconds = m ? parseInt(m[1], 10) : 3600;
+  return Math.min(24 * 3600, Math.max(60, seconds)) * 1e3;
+};
+var createJwksVerifier = (opts = {}) => {
+  const doFetch = opts.fetch || defaultFetch;
+  const url = opts.url || FIREBASE_JWKS_URL;
+  let cache = null;
+  let inFlight = null;
+  const download = (nowMs) => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      let res;
+      let body;
+      try {
+        res = await withTimeout((signal) => doFetch(url, { method: "GET", signal }), opts.timeoutMs ?? GESTIONALE_TIMEOUT_MS);
+        body = await res.json();
+      } catch {
+        throw new GestionaleUnreachableError("chiavi non raggiungibili");
+      }
+      if (!res.ok || !body || typeof body !== "object" || !Array.isArray(body.keys)) {
+        throw new GestionaleUnreachableError("chiavi: risposta inattesa");
+      }
+      const keys = /* @__PURE__ */ new Map();
+      for (const jwk of body.keys) {
+        if (!jwk || typeof jwk.kid !== "string" || jwk.kty !== "RSA") continue;
+        try {
+          keys.set(jwk.kid, createPublicKey({ key: { kty: "RSA", n: jwk.n, e: jwk.e }, format: "jwk" }));
+        } catch {
+        }
+      }
+      cache = { keys, until: nowMs + maxAgeMs(res.headers.get("cache-control")), fetchedAt: nowMs };
+      return keys;
+    })();
+    return inFlight.finally(() => {
+      inFlight = null;
+    });
+  };
+  return async (token, projects, nowMs) => {
+    const jwt = decodeJwt(token);
+    if (jwt.header.alg !== "RS256") throw new GestionaleAuthError("algoritmo");
+    let keys = cache && cache.until > nowMs ? cache.keys : await download(nowMs);
+    const kid = jwt.header.kid;
+    if (typeof kid === "string" && !keys.has(kid) && cache && nowMs - cache.fetchedAt >= 6e4) {
+      keys = await download(nowMs);
+    }
+    return verifyFirebaseToken(token, keys, projects, Math.floor(nowMs / 1e3));
+  };
+};
+var firestoreString = (fields, name) => {
+  const f = fields && typeof fields === "object" ? fields[name] : void 0;
+  const v = f && typeof f === "object" ? f.stringValue : void 0;
+  return typeof v === "string" ? v.trim() : "";
+};
+var staffDocumentUrl = (baseUrl, project, email) => `${baseUrl.replace(/\/+$/, "")}/v1/projects/${project}/databases/(default)/documents/personale/${encodeURIComponent(email.toLowerCase())}`;
+var lookupStaff = async (opts, project, email, token) => {
+  const doFetch = opts.fetch || defaultFetch;
+  const url = staffDocumentUrl(opts.baseUrl || FIRESTORE_BASE_URL, project, email);
+  let res;
+  try {
+    res = await withTimeout(
+      (signal) => doFetch(url, { method: "GET", headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal }),
+      opts.timeoutMs ?? GESTIONALE_TIMEOUT_MS
+    );
+  } catch {
+    throw new GestionaleUnreachableError("archivio del personale non raggiungibile");
+  }
+  if (res.status === 401) throw new GestionaleAuthError("rifiutato dal gestionale");
+  if (res.status === 403 || res.status === 404) return null;
+  if (res.status !== 200) throw new GestionaleUnreachableError(`archivio del personale: HTTP ${res.status}`);
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    throw new GestionaleUnreachableError("archivio del personale: risposta non leggibile");
+  }
+  const fields = body && typeof body === "object" ? body.fields : void 0;
+  return { role: firestoreString(fields, "ruolo"), name: firestoreString(fields, "nome") };
+};
+var isAdminRole = (role) => ADMIN_ROLES.includes(role);
+var tokenDigest = (token) => createHash2("sha256").update(token, "utf8").digest("hex");
+var createGestionaleService = (deps = {}) => {
+  const verify = deps.verifyToken || createJwksVerifier({ fetch: deps.fetch });
+  const staffCache = /* @__PURE__ */ new Map();
+  const identify = async (token, projects, nowMs) => {
+    const digest = tokenDigest(token);
+    const hit = staffCache.get(digest);
+    if (hit && hit.until > nowMs) return hit.identity;
+    if (hit) staffCache.delete(digest);
+    const claims = await verify(token, projects, nowMs);
+    const staff = await lookupStaff({ fetch: deps.fetch, baseUrl: deps.firestoreBaseUrl }, claims.aud, claims.email, token);
+    if (!staff) return null;
+    const identity = { name: staff.name, role: staff.role, admin: isAdminRole(staff.role) };
+    while (staffCache.size >= STAFF_CACHE_MAX) {
+      const oldest = staffCache.keys().next().value;
+      if (oldest === void 0) break;
+      staffCache.delete(oldest);
+    }
+    staffCache.set(digest, { identity, until: Math.min(nowMs + STAFF_CACHE_TTL_MS, claims.exp * 1e3) });
+    return identity;
+  };
+  return { identify, cacheSize: () => staffCache.size };
+};
 
 // server/store.ts
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -558,11 +861,11 @@ var MemoryRedis = class {
   }
   incr(key) {
     const cur = this.getString(key);
-    const n = (cur === null ? 0 : parseInt(cur, 10)) + 1;
-    if (!Number.isFinite(n)) throw new StoreError("redis", "ERR value is not an integer");
+    const n2 = (cur === null ? 0 : parseInt(cur, 10)) + 1;
+    if (!Number.isFinite(n2)) throw new StoreError("redis", "ERR value is not an integer");
     const e = this.entry(key);
-    this.data.set(key, { value: String(n), expiresAt: e?.expiresAt });
-    return n;
+    this.data.set(key, { value: String(n2), expiresAt: e?.expiresAt });
+    return n2;
   }
   // Esegue i comandi in modo sincrono: ogni comando (e ogni script) è
   // atomico come in Redis.
@@ -585,9 +888,9 @@ var MemoryRedis = class {
         return this.set(args[1], args[2], opts);
       }
       case "DEL": {
-        let n = 0;
-        for (const k of args.slice(1)) if (this.entry(k) && this.data.delete(k)) n++;
-        return n;
+        let n2 = 0;
+        for (const k of args.slice(1)) if (this.entry(k) && this.data.delete(k)) n2++;
+        return n2;
       }
       case "INCR":
         return this.incr(args[1]);
@@ -681,8 +984,8 @@ var decodeAppointments = (raw) => {
   }
 };
 var toInt = (v) => {
-  const n = typeof v === "number" ? v : parseInt(String(v ?? "0"), 10);
-  return Number.isFinite(n) ? n : 0;
+  const n2 = typeof v === "number" ? v : parseInt(String(v ?? "0"), 10);
+  return Number.isFinite(n2) ? n2 : 0;
 };
 var parseJson = (raw) => {
   if (typeof raw !== "string" || !raw) return null;
@@ -969,8 +1272,8 @@ var PROVINCE_NAME_BY_CODE = {
   VI: "Vicenza",
   VT: "Viterbo"
 };
-var stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-var cleanName = (s) => stripAccents(s).toUpperCase().replace(/[^A-Z]/g, "");
+var stripAccents = (s2) => s2.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+var cleanName = (s2) => stripAccents(s2).toUpperCase().replace(/[^A-Z]/g, "");
 var CODE_BY_CLEAN_NAME = Object.fromEntries(
   Object.entries(PROVINCE_NAME_BY_CODE).map(([code, name]) => [cleanName(name), code])
 );
@@ -980,6 +1283,56 @@ CODE_BY_CLEAN_NAME[cleanName("Reggio di Calabria")] = "RC";
 CODE_BY_CLEAN_NAME[cleanName("Massa e Carrara")] = "MS";
 CODE_BY_CLEAN_NAME[cleanName("Aoste")] = "AO";
 CODE_BY_CLEAN_NAME[cleanName("Bolzano - Bozen")] = "BZ";
+
+// src/services/safeStorage.ts
+var memoryStorage = () => {
+  const map = /* @__PURE__ */ new Map();
+  return {
+    getItem: (key) => map.has(key) ? map.get(key) : null,
+    setItem: (key, value) => {
+      map.set(key, String(value));
+    },
+    removeItem: (key) => {
+      map.delete(key);
+    }
+  };
+};
+var createSafeStorage = (getNative) => {
+  let resolved = null;
+  const fallback = memoryStorage();
+  const resolve = () => {
+    if (resolved) return resolved;
+    try {
+      const native = getNative();
+      if (!native) {
+        resolved = { mode: "absent", store: fallback };
+      } else {
+        native.getItem("optiroute_prova_memoria");
+        resolved = { mode: "native", store: native };
+      }
+    } catch {
+      resolved = { mode: "memory", store: fallback };
+    }
+    return resolved;
+  };
+  return {
+    mode: () => resolve().mode,
+    getItem: (key) => {
+      const r = resolve();
+      if (r.mode !== "native") return r.store.getItem(key);
+      try {
+        return r.store.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    setItem: (key, value) => resolve().store.setItem(key, value),
+    removeItem: (key) => resolve().store.removeItem(key)
+  };
+};
+var safeLocalStorage = createSafeStorage(
+  () => typeof localStorage === "undefined" ? void 0 : localStorage
+);
 
 // src/services/technicianService.ts
 var dateInRange = (date, from, to) => {
@@ -993,7 +1346,7 @@ var workWindowOn = (tech, date) => {
   let start = tech.workStart || "08:30";
   let end = tech.workEnd || "18:00";
   const toMin2 = (t) => {
-    const [h, m] = t.split(":").map((n) => parseInt(n, 10));
+    const [h, m] = t.split(":").map((n2) => parseInt(n2, 10));
     return (h || 0) * 60 + (m || 0);
   };
   const toStr = (min) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
@@ -1021,7 +1374,7 @@ var DEFAULT_DURATION_MIN = 20;
 var LUNCH_MINUTES = 45;
 var LUNCH_THRESHOLD_MIN = 12 * 60;
 var toMin = (hhmm) => {
-  const [h, m] = (hhmm || "").split(":").map((n) => parseInt(n, 10));
+  const [h, m] = (hhmm || "").split(":").map((n2) => parseInt(n2, 10));
   return (h || 0) * 60 + (m || 0);
 };
 var toHHMM = (min) => {
@@ -1034,13 +1387,13 @@ var localDateStr = (d) => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
-var addDaysStr = (date, n) => {
+var addDaysStr = (date, n2) => {
   const d = /* @__PURE__ */ new Date(`${date}T00:00:00`);
-  d.setDate(d.getDate() + n);
+  d.setDate(d.getDate() + n2);
   return localDateStr(d);
 };
 var dateAtMinutes = (date, minutes) => {
-  const [y, m, d] = date.split("-").map((n) => parseInt(n, 10));
+  const [y, m, d] = date.split("-").map((n2) => parseInt(n2, 10));
   return new Date(y, (m || 1) - 1, d || 1, 0, minutes, 0, 0);
 };
 var durationOf = (a) => a.durationMinutes && a.durationMinutes > 0 ? a.durationMinutes : DEFAULT_DURATION_MIN;
@@ -1075,7 +1428,7 @@ var dayContextFor = (technician, date, fallback) => {
   };
 };
 var findFeasibleSlots = (route, ctx, coords, durationMin, opts = {}) => {
-  const hasLunch = route.some((s) => s.lunchBefore);
+  const hasLunch = route.some((s2) => s2.lunchBefore);
   const options = [];
   let busyUntil = -Infinity;
   for (let p = 0; p <= route.length; p++) {
@@ -1126,10 +1479,10 @@ var applyPatches = (all, patches) => {
     return changes ? { ...a, ...changes } : a;
   });
 };
-var sequenceStops = (stops, base) => stops.map((s, i) => {
+var sequenceStops = (stops, base) => stops.map((s2, i) => {
   const from = i > 0 ? stops[i - 1].coords : base;
   if (!from) return { sequenceOrder: i + 1, travelTimeFromPrev: 0, distanceFromPrev: 0 };
-  const distance = legKm(from, s.coords);
+  const distance = legKm(from, s2.coords);
   return { sequenceOrder: i + 1, travelTimeFromPrev: estimateTravelTimeMinutes(distance), distanceFromPrev: distance };
 });
 var resequenceDay = (all, technicianId, date, ctx) => {
@@ -1137,10 +1490,10 @@ var resequenceDay = (all, technicianId, date, ctx) => {
   if (route.length === 0) return all;
   const seq = sequenceStops(route, ctx?.base ?? null);
   const patches = [];
-  route.forEach((s, i) => {
+  route.forEach((s2, i) => {
     const v = seq[i];
-    if (s.appt.sequenceOrder !== v.sequenceOrder || s.appt.travelTimeFromPrev !== v.travelTimeFromPrev || s.appt.distanceFromPrev !== v.distanceFromPrev) {
-      patches.push({ id: s.id, changes: v });
+    if (s2.appt.sequenceOrder !== v.sequenceOrder || s2.appt.travelTimeFromPrev !== v.travelTimeFromPrev || s2.appt.distanceFromPrev !== v.distanceFromPrev) {
+      patches.push({ id: s2.id, changes: v });
     }
   });
   return applyPatches(all, patches);
@@ -1193,7 +1546,7 @@ var removeFromRoute = (all, id, changes, ctx) => {
 };
 
 // src/services/callService.ts
-var pad = (n) => String(n).padStart(2, "0");
+var pad = (n2) => String(n2).padStart(2, "0");
 var parseFollowUpDate = (raw) => {
   if (!raw) return void 0;
   const iso = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
@@ -1308,7 +1661,7 @@ var resolveAlternative = (appt, label, all, technicians, fallback, now) => {
   const route = getDayRoute(all, appt.technicianId, offered.date, appt.id);
   const duration = durationOf(appt);
   const searches = [{}, { notBefore: offeredStart }, { notBefore: offeredStart - LUNCH_MINUTES }];
-  const options = searches.flatMap((s) => findFeasibleSlots(route, ctx, appt.coords, duration, s)).filter((o) => Math.abs(o.start - offeredStart) <= RESOLVE_TOLERANCE);
+  const options = searches.flatMap((s2) => findFeasibleSlots(route, ctx, appt.coords, duration, s2)).filter((o) => Math.abs(o.start - offeredStart) <= RESOLVE_TOLERANCE);
   if (options.length === 0) return null;
   const option = options.sort(
     (x, y) => Math.abs(x.start - offeredStart) - Math.abs(y.start - offeredStart) || x.detourKm - y.detourKm
@@ -1403,23 +1756,23 @@ var baseFor = (ctx, technicianId, date) => {
   const day = dayContextFor(tech, date, ctx.fallback);
   return { base: day ? day.base : tech?.baseCoords || ctx.fallback.base };
 };
-var dayAllowed = (d, s) => {
+var dayAllowed = (d, s2) => {
   const day = d.getDay();
   if (day === 0) return false;
-  if (day === 6) return s.callSaturday;
+  if (day === 6) return s2.callSaturday;
   return true;
 };
-var isWithinCallWindow = (now, s) => {
-  if (!dayAllowed(now, s)) return false;
+var isWithinCallWindow = (now, s2) => {
+  if (!dayAllowed(now, s2)) return false;
   const min = now.getHours() * 60 + now.getMinutes();
-  return min >= toMin(s.callWindowStart) && min < toMin(s.callWindowEnd);
+  return min >= toMin(s2.callWindowStart) && min < toMin(s2.callWindowEnd);
 };
-var nextCallWindowStart = (now, s) => {
-  if (isWithinCallWindow(now, s)) return new Date(now.getTime());
-  const startMin = toMin(s.callWindowStart);
+var nextCallWindowStart = (now, s2) => {
+  if (isWithinCallWindow(now, s2)) return new Date(now.getTime());
+  const startMin = toMin(s2.callWindowStart);
   for (let i = 0; i <= 8; i++) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, 0, startMin, 0, 0);
-    if (d.getTime() > now.getTime() && dayAllowed(d, s)) return d;
+    if (d.getTime() > now.getTime() && dayAllowed(d, s2)) return d;
   }
   return new Date(now.getTime());
 };
@@ -1486,8 +1839,8 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
   const a = all.find((x) => x.id === id);
   if (!a || a.callOutcome) return all;
   if (expectedCallId && a.callId !== expectedCallId) return all;
-  const s = ctx.settings;
-  const pilot = s.enabled;
+  const s2 = ctx.settings;
+  const pilot = s2.enabled;
   const eraNelGiro = isInRoute(a);
   const freed = eraNelGiro ? {
     technicianId: a.technicianId,
@@ -1617,10 +1970,10 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
           list = replaceById(list, { ...base, callAttempts: attempts });
           break;
         }
-        const retryAt = nextCallWindowStart(new Date(ctx.now.getTime() + s.retryMinutes * 6e4), s);
+        const retryAt = nextCallWindowStart(new Date(ctx.now.getTime() + s2.retryMinutes * 6e4), s2);
         const slotStart = slotStartOf(a);
-        const deadline = slotStart.getTime() - s.minLeadHours * 36e5;
-        if (attempts < s.maxAttempts && retryAt.getTime() < deadline) {
+        const deadline = slotStart.getTime() - s2.minLeadHours * 36e5;
+        if (attempts < s2.maxAttempts && retryAt.getTime() < deadline) {
           list = replaceById(list, {
             ...base,
             callAttempts: attempts,
@@ -1643,8 +1996,8 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
         break;
     }
   }
-  if (pilot && s.backfill && liberato && freed) {
-    const leadOk = dateAtMinutes(freed.date, freed.start).getTime() - ctx.now.getTime() >= s.minLeadHours * 36e5;
+  if (pilot && s2.backfill && liberato && freed) {
+    const leadOk = dateAtMinutes(freed.date, freed.start).getTime() - ctx.now.getTime() >= s2.minLeadHours * 36e5;
     if (leadOk) list = backfillSlot(list, freed, id, ctx);
   }
   return list;
@@ -1760,7 +2113,7 @@ var planningFrom = (config, now) => ({
   settings: { ...DEFAULT_AUTOPILOT_SETTINGS, ...config.autopilot || {} },
   now
 });
-var pad2 = (n) => String(n).padStart(2, "0");
+var pad2 = (n2) => String(n2).padStart(2, "0");
 var localDay = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 var keepIfSame = (before, after) => after.length === before.length && after.every((a, i) => a === before[i]) ? before : after;
 var recoverInterruptedLaunches = (all, now) => keepIfSame(
@@ -2205,7 +2558,8 @@ var defaultDeps = (overrides = {}) => {
     clock: overrides.clock || Date.now,
     retell: overrides.retell || httpRetellClient,
     sleep: overrides.sleep,
-    timezone: overrides.timezone || timezoneStatus
+    timezone: overrides.timezone || timezoneStatus,
+    gestionale: overrides.gestionale
   };
 };
 var engineDeps = (d, store) => ({
@@ -2321,9 +2675,25 @@ var requireStore = (d) => {
 };
 var authenticate = (req, d) => {
   const secret = requireSecret(d);
-  if (!isAuthorized(req.headers, secret)) throw new HttpError(401, "auth");
+  if (!isAuthorized(req.headers, secret, d.clock())) throw new HttpError(401, "auth");
   return requireStore(d);
 };
+var identifyStaff = async (token, d, service) => {
+  const settings = gestionaleSettings(d.env);
+  if (!settings.enabled) throw new HttpError(503, "gestionale_not_configured");
+  if (!token) throw new HttpError(401, "auth");
+  try {
+    return await service.identify(token, settings.projects, d.clock());
+  } catch (err) {
+    if (err instanceof GestionaleAuthError) throw new HttpError(401, "auth");
+    if (err instanceof GestionaleUnreachableError) {
+      console.error("cloud: gestionale non raggiungibile");
+      throw new HttpError(502, "gestionale_unreachable");
+    }
+    throw err;
+  }
+};
+var romeToday = (at) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
 var OPS = {
   ping: "GET",
   status: "GET",
@@ -2331,18 +2701,48 @@ var OPS = {
   push: "POST",
   init: "POST",
   tick: "POST",
-  webhook: "POST"
+  webhook: "POST",
+  session: "POST",
+  sopralluoghi: "GET"
 };
 var intParam = (raw) => /^\d+$/.test(raw) ? parseInt(raw, 10) : -1;
 var runAndSummarize = async (d, store, source) => runTick(engineDeps(d, store), source);
-var handleOp = async (op, req, res, d) => {
+var handleOp = async (op, req, res, d, service) => {
   switch (op) {
     case "ping": {
+      const settings = gestionaleSettings(d.env);
+      const parent = queryValue(req, "parent");
       send(res, 200, {
         protocol: CLOUD_PROTOCOL_VERSION,
         secretConfigured: !!d.env.CRON_SECRET,
-        storeConfigured: !!d.store
+        storeConfigured: !!d.store,
+        gestionale: {
+          enabled: settings.enabled,
+          parentAllowed: settings.enabled && !!parent && isAllowedOrigin(settings, parent)
+        }
       });
+      return;
+    }
+    case "session": {
+      const identity = await identifyStaff(bearerToken(req.headers), d, service);
+      if (!identity || !identity.admin) throw new HttpError(403, "forbidden");
+      const session = mintSessionToken(d.env.CRON_SECRET, d.clock());
+      send(res, 200, { token: session.token, expiresAt: session.expiresAt, user: { name: identity.name, role: identity.role } });
+      return;
+    }
+    case "sopralluoghi": {
+      const secret = requireSecret(d);
+      if (!isAuthorized(req.headers, secret, d.clock())) {
+        const token = bearerToken(req.headers);
+        if (!token || token.split(".").length !== 3) throw new HttpError(401, "auth");
+        const identity = await identifyStaff(token, d, service);
+        if (!identity) throw new HttpError(403, "forbidden");
+      }
+      const store = requireStore(d);
+      const [{ appointments }, { config }] = await Promise.all([store.readAppointments(), store.readConfig()]);
+      const now = d.now();
+      const list = buildSopralluoghiExport(appointments || [], config?.technicians || []);
+      send(res, 200, { v: 1, generatedAt: now.toISOString(), today: romeToday(now), ...list });
       return;
     }
     case "status": {
@@ -2449,20 +2849,44 @@ var handleOp = async (op, req, res, d) => {
     }
   }
 };
-var createCloudHandler = (overrides = {}) => async function cloudHandler(req, res) {
-  const op = queryValue(req, "op");
-  try {
-    const method = OPS[op];
-    if (!method) throw new HttpError(400, "bad_request");
-    if ((req.method || "GET").toUpperCase() !== method) throw new HttpError(405, "bad_request", "Metodo non ammesso");
-    await handleOp(op, req, res, defaultDeps(overrides));
-  } catch (err) {
-    fail(res, err, op || "?");
+var applyCors = (req, res, env) => {
+  const origin = headerValue(req.headers, "origin");
+  const allowed = !!origin && isAllowedOrigin(gestionaleSettings(env), origin);
+  if (allowed) {
+    res.setHeader("Access-Control-Allow-Origin", normalizeOrigin(origin));
+    res.setHeader("Vary", "Origin");
   }
+  if ((req.method || "GET").toUpperCase() !== "OPTIONS") return false;
+  if (allowed) {
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader("Access-Control-Max-Age", "600");
+  }
+  res.status(204).end();
+  return true;
+};
+var createCloudHandler = (overrides = {}) => {
+  const service = createGestionaleService(overrides.gestionale);
+  return async function cloudHandler(req, res) {
+    const op = queryValue(req, "op");
+    try {
+      const d = defaultDeps(overrides);
+      if (applyCors(req, res, d.env)) return;
+      const method = OPS[op];
+      if (!method) throw new HttpError(400, "bad_request");
+      if ((req.method || "GET").toUpperCase() !== method) throw new HttpError(405, "bad_request", "Metodo non ammesso");
+      await handleOp(op, req, res, d, service);
+    } catch (err) {
+      fail(res, err, op || "?");
+    }
+  };
 };
 
 // server/cloud-entry.ts
 var cloud_entry_default = createCloudHandler();
 export {
+  checkFirebaseClaims,
+  createCloudHandler,
+  decodeJwt,
   cloud_entry_default as default
 };

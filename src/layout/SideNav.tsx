@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Archive, BellRing, CalendarDays, Hourglass, LayoutDashboard, ListChecks, PanelLeftClose, PanelLeftOpen, Route, Settings,
-  TriangleAlert, Users, X, type LucideIcon,
+  TriangleAlert, UserRound, Users, X, type LucideIcon,
 } from 'lucide-react';
 import type { SectionId } from './types';
 
@@ -38,9 +38,11 @@ interface SideNavProps {
   onOpenTechnicians: () => void;
   onToggleCollapsed: () => void;
   onCloseMobile: () => void;
+  // Dentro il gestionale: chi è collegato (nome e ruolo)
+  gestionaleUser?: { name: string; role: string } | null;
 }
 
-const SideNav: React.FC<SideNavProps> = ({ section, counts, collapsed, mobile, mobileOpen, onNavigate, onOpenTechnicians, onToggleCollapsed, onCloseMobile }) => {
+const SideNav: React.FC<SideNavProps> = ({ section, counts, collapsed, mobile, mobileOpen, onNavigate, onOpenTechnicians, onToggleCollapsed, onCloseMobile, gestionaleUser }) => {
   const narrow = collapsed && !mobile;
 
   const item = (id: SectionId | null, label: string, Icon: LucideIcon, onClick: () => void, count?: number, alert?: boolean) => {
@@ -101,6 +103,23 @@ const SideNav: React.FC<SideNavProps> = ({ section, counts, collapsed, mobile, m
       </div>
 
       <div className={`py-3 space-y-0.5 border-t border-white/10 ${narrow ? 'px-2.5' : 'px-3'}`}>
+        {gestionaleUser && (
+          <div
+            data-testid="gestionale-user"
+            title={`Accesso dal gestionale: ${gestionaleUser.name}${gestionaleUser.role ? ` (${gestionaleUser.role})` : ''}`}
+            className={`flex items-center gap-2.5 pb-2 text-ink-400 ${narrow ? 'justify-center' : 'px-3'}`}
+          >
+            <UserRound size={16} strokeWidth={1.75} className="shrink-0" aria-hidden />
+            {narrow ? (
+              <span className="sr-only">Accesso dal gestionale: {gestionaleUser.name}</span>
+            ) : (
+              <span className="min-w-0 leading-tight">
+                <span className="block truncate text-xs text-ink-300">{gestionaleUser.name || 'Utente del gestionale'}</span>
+                <span className="block truncate text-2xs">{gestionaleUser.role ? `${gestionaleUser.role} · dal gestionale` : 'dal gestionale'}</span>
+              </span>
+            )}
+          </div>
+        )}
         {item(null, 'Tecnici', Users, onOpenTechnicians)}
         {item('impostazioni', 'Impostazioni', Settings, () => onNavigate('impostazioni'))}
         {!mobile && (

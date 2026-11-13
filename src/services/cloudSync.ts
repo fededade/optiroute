@@ -33,6 +33,19 @@ export interface CloudPing {
   protocol: number;
   secretConfigured: boolean;
   storeConfigured: boolean;
+  gestionale?: { enabled: boolean; parentAllowed: boolean };
+}
+
+// Credenziale letta AL MOMENTO di ogni richiesta (dentro il gestionale: il
+// biglietto di sessione, che si rinnova da solo). Con un 401 si chiede un
+// rinnovo e si riprova una volta:
+//  - 'ok': rinnovata, si riprova
+//  - 'unavailable': rinnovo non riuscito per la rete (si riproverà più tardi)
+//  - 'denied': accesso negato
+export type CredentialRefresh = 'ok' | 'unavailable' | 'denied';
+export interface CloudCredential {
+  get: () => string;
+  refresh?: () => Promise<CredentialRefresh>;
 }
 
 export interface CloudTickResult {
@@ -45,6 +58,7 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
 export interface CloudClientOptions {
   key: string;
+  credential?: CloudCredential; // se presente vale questa (letta a ogni richiesta), non `key`
   fetch?: FetchLike;     // iniettabile (test)
   timeoutMs?: number;    // default 15 s
   baseUrl?: string;      // default: stessa origine
@@ -82,13 +96,32 @@ const doRequest = async <T>(
   body?: unknown,
   extra: { keepalive?: boolean; auth?: boolean } = {}
 ): Promise<CloudResult<T>> => {
+  const result = await doRequestOnce<T>(opts, method, op, params, body, extra);
+  const cred = opts.credential;
+  if (result.ok || result.error.kind !== 'auth' || extra.auth === false || !cred?.refresh) return result;
+  // 401 con una credenziale rinnovabile: un rinnovo (condiviso) e un solo nuovo tentativo
+  const refreshed = await cred.refresh();
+  if (refreshed === 'ok') return doRequestOnce<T>(opts, method, op, params, body, extra);
+  if (refreshed === 'unavailable') return failure({ kind: 'offline', message: 'Accesso dal gestionale da rinnovare: riprovo fra poco.' });
+  return result;
+};
+
+const doRequestOnce = async <T>(
+  opts: CloudClientOptions,
+  method: 'GET' | 'POST',
+  op: string,
+  params: Record<string, string | number>,
+  body: unknown,
+  extra: { keepalive?: boolean; auth?: boolean }
+): Promise<CloudResult<T>> => {
   const fetchImpl: FetchLike | undefined = opts.fetch || (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : undefined);
   if (!fetchImpl) return failure({ kind: 'offline', message: 'Rete non disponibile.' });
 
   const qs = new URLSearchParams({ op, ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) });
   const url = `${opts.baseUrl || ''}${CLOUD_API_PATH}?${qs.toString()}`;
   const headers: Record<string, string> = { Accept: 'application/json' };
-  if (extra.auth !== false && opts.key) headers.Authorization = `Bearer ${opts.key}`;
+  const key = opts.credential ? opts.credential.get() : opts.key;
+  if (extra.auth !== false && key) headers.Authorization = `Bearer ${key}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
@@ -125,8 +158,9 @@ const doRequest = async <T>(
 };
 
 // Senza chiave: il server è raggiungibile e configurato?
-export const cloudPing = (opts: Omit<CloudClientOptions, 'key'> & { key?: string }): Promise<CloudResult<CloudPing>> =>
-  doRequest<CloudPing>({ ...opts, key: '' }, 'GET', 'ping', {}, undefined, { auth: false });
+// `parent`: origine della pagina che incornicia l'app (è del gestionale?)
+export const cloudPing = (opts: Omit<CloudClientOptions, 'key'> & { key?: string; parent?: string }): Promise<CloudResult<CloudPing>> =>
+  doRequest<CloudPing>({ ...opts, key: '', credential: undefined }, 'GET', 'ping', opts.parent ? { parent: opts.parent } : {}, undefined, { auth: false });
 
 export const cloudStatus = (opts: CloudClientOptions): Promise<CloudResult<CloudStatus>> =>
   doRequest<CloudStatus>(opts, 'GET', 'status');

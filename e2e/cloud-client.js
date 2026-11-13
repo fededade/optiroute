@@ -370,11 +370,15 @@ const stored = (page, key) => page.evaluate(k => JSON.parse(localStorage.getItem
     // ================= extra: scollegamento di B =================
     const bPushes = () => cloud.log.filter(r => r.who === 'B' && r.op === 'push').length;
     const bPushesBefore = bPushes();
-    const bReqBefore = cloud.log.filter(r => r.who === 'B').length;
     await openSettings(B.page);
     await openCloudTab(B.page);
     await B.page.getByRole('button', { name: 'Scollega questo browser' }).click();
     await B.page.waitForSelector('[data-testid="cloud-activation-done"]');
+    // Il riferimento si prende a scollegamento AVVENUTO: fino a un attimo prima B è
+    // collegato e può fare il suo normale scaricamento periodico (misurato: le
+    // richieste "in più" partivano 0,1-0,5 s prima dello scollegamento, mai dopo).
+    const tScollegato = Date.now();
+    const bReqAtDisconnect = cloud.log.filter(r => r.who === 'B').length;
     await shot(B.page, 'g-scollegato');
     await B.page.getByRole('button', { name: 'Salva' }).click();
     await sleep(12000);
@@ -382,7 +386,8 @@ const stored = (page, key) => page.evaluate(k => JSON.parse(localStorage.getItem
     const bSettings = await stored(B.page, 'optiroute_settings_v1');
     check('g) scollegato: cloud spento e pilota locale spento su B', bCloud.enabled === false && bSettings.autopilot.enabled === false);
     check('g) la pausa locale NON arriva al server (pilota in cloud ancora attivo)', bPushes() === bPushesBefore && cloud.config.autopilot.enabled === true);
-    check('g) B non parla più col cloud', cloud.log.filter(r => r.who === 'B').length === bReqBefore);
+    const bAfter = cloud.log.filter(r => r.who === 'B').slice(bReqAtDisconnect);
+    check('g) B non parla più col cloud', bAfter.length === 0, bAfter.map(r => `${r.op} ${r.at - tScollegato} ms dopo lo scollegamento`).join(', '));
     await B.ctx.close();
 
     // chiave cambiata sul server: chip "chiave errata", dati locali intatti

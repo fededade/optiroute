@@ -2,10 +2,10 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// Guardia: l'invio al gestionale è stato tolto (novembre 2026) perché avveniva
-// senza autenticazione, con identificativi e chiavi del progetto scritti nel
-// codice. Nessuna chiave Google né il progetto del gestionale devono rientrare
-// nel codice dell'app, del server, delle funzioni o degli script.
+// Guardia: l'invio al gestionale è stato tolto (novembre 2026). Nessuna chiave
+// Google né il progetto del gestionale devono rientrare nel codice dell'app,
+// del server, delle funzioni o degli script: un eventuale nuovo invio passerà
+// dal server, con la configurazione nelle variabili d'ambiente.
 
 const ROOT = path.resolve(__dirname, '..');
 const DIRS = ['src', 'server', 'api', 'scripts'];

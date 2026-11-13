@@ -268,9 +268,8 @@ finestra di chiamata ("Registra esito della telefonata").
   per aggiungerlo e uno strumento (`capture_portal.py`) per rilevarne le pagine in forma
   anonimizzata. Vedi `prelios-bridge/README.md`.
 - **Invio al gestionale: tolto** (novembre 2026). OptiRoute non invia più i sopralluoghi
-  confermati al gestionale: l'invio avveniva senza autenticazione e il gestionale non lo
-  leggeva. Per riattivarlo andrà rifatto con un invio autenticato dal server; il codice
-  precedente è nella cronologia git.
+  confermati al gestionale, che non li importava. Per riattivarlo andrà rifatto con un
+  invio dal server; il codice precedente è nella cronologia git.
 
 ## Altre variabili d'ambiente
 

@@ -117,7 +117,7 @@ async function newPage(browser, viewport, settingsOver = {}) {
       return json(200, {
         protocol: 1, env: 'production', storeConfigured: true, retellConfigured: false,
         timezone: { zone: 'Europe/Rome', ok: true }, rev: 1, configRev: 1, appointmentCount: 0, lastTick: null,
-        schedulerSeenAt: new Date(Date.now() - 3 * 60000).toISOString(), webhookSeenAt: null, gestionaleSyncConfigured: false,
+        schedulerSeenAt: new Date(Date.now() - 3 * 60000).toISOString(), webhookSeenAt: null,
         webhookPath: '/api/cloud?op=webhook&token=tok-esempio', serverTime: new Date().toISOString(),
       });
     }

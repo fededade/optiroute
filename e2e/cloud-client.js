@@ -110,7 +110,7 @@ const handleCloud = async (route, who) => {
           return n;
         }));
       }
-      const summary = { outcomesApplied: 0, callsLaunched: launched, callsFailed: 0, recovered: 0, expired: 0, synced: 0, inFlight: launched, queued: 0, windowOpen: true, pilotEnabled: true, durationMs: 12 };
+      const summary = { outcomesApplied: 0, callsLaunched: launched, callsFailed: 0, recovered: 0, expired: 0, inFlight: launched, queued: 0, windowOpen: true, pilotEnabled: true, durationMs: 12 };
       cloud.lastTick = { at: now, source: 'browser', summary };
       return json(200, { summary, rev: cloud.rev, configRev: cloud.configRev });
     }

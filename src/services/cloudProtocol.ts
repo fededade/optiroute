@@ -139,7 +139,6 @@ export interface TickSummary {
   callsFailed: number;      // chiamate non partite
   recovered: number;        // lanci rimasti a metà recuperati
   expired: number;          // pratiche tolte dalla coda (slot trascorso)
-  synced: number;           // sopralluoghi inviati al gestionale
   inFlight: number;         // chiamate in corso dopo il passaggio
   queued: number;           // pratiche in coda dopo il passaggio
   windowOpen: boolean;      // fascia chiamate aperta
@@ -162,7 +161,6 @@ export interface CloudStatus {
   env: string;                       // production | preview | development
   storeConfigured: boolean;          // database collegato
   retellConfigured: boolean;         // chiavi Retell presenti
-  gestionaleSyncConfigured?: boolean; // il server invia i confermati al gestionale (variabili GESTIONALE_*)
   timezone: { zone: string; ok: boolean };
   rev: number;
   configRev: number;

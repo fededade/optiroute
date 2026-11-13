@@ -311,17 +311,10 @@ export interface LastTick {
   summary: TickSummary;
 }
 
-export interface LastSync {
-  at: string;
-  sent: number;
-  failed: number;
-}
-
 export interface CloudMeta {
   lastTick: LastTick | null;
   schedulerSeenAt: string | null;
   webhookSeenAt: string | null;
-  lastSync: LastSync | null;
   // Fine dell'ultimo passaggio in tempo reale (ms): serve a saltare i
   // passaggi del webhook troppo ravvicinati
   lastTickWallMs: number | null;
@@ -394,7 +387,7 @@ const parseLease = (raw: unknown): LeaseRecord | null => {
   return Number.isFinite(until) ? { deviceId: raw.slice(0, sep), until } : null;
 };
 
-const META_FIELDS: (keyof CloudMeta)[] = ['lastTick', 'schedulerSeenAt', 'webhookSeenAt', 'lastSync', 'lastTickWallMs'];
+const META_FIELDS: (keyof CloudMeta)[] = ['lastTick', 'schedulerSeenAt', 'webhookSeenAt', 'lastTickWallMs'];
 
 export const keyPrefix = (vercelEnv?: string): string => `optiroute:${vercelEnv || 'development'}:`;
 
@@ -464,7 +457,6 @@ export class RedisStore implements Store {
       lastTick: parseJson<LastTick>(map.get('lastTick')),
       schedulerSeenAt: map.get('schedulerSeenAt') || null,
       webhookSeenAt: map.get('webhookSeenAt') || null,
-      lastSync: parseJson<LastSync>(map.get('lastSync')),
       lastTickWallMs: map.get('lastTickWallMs') ? toInt(map.get('lastTickWallMs')) : null,
     };
   }

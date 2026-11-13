@@ -28,7 +28,7 @@ describe('bundle generati', () => {
     }
   });
 
-  it('non contengono chiavi: la destinazione del gestionale arriva solo dalle variabili d\'ambiente', async () => {
+  it('non contengono chiavi API Google né il progetto del gestionale', async () => {
     const { readFile } = await import('node:fs/promises');
     for (const file of ['api/cloud.js', 'api/cloud-tick.js']) {
       const code = await readFile(file, 'utf8');
@@ -52,11 +52,11 @@ describe('bundle generati', () => {
 });
 
 describe('bundle in funzione (archivio in memoria, Retell finto)', () => {
-  const VARS = ['OPTIROUTE_STORE', 'CRON_SECRET', 'RETELL_API_KEY', 'RETELL_FROM_NUMBER', 'RETELL_API_BASE', 'VERCEL_ENV', 'RETELL_AGENT_ID', 'OPTIROUTE_SYNC'];
+  const VARS = ['OPTIROUTE_STORE', 'CRON_SECRET', 'RETELL_API_KEY', 'RETELL_FROM_NUMBER', 'RETELL_API_BASE', 'VERCEL_ENV', 'RETELL_AGENT_ID'];
   const saved: Record<string, string | undefined> = {};
   let retell: FakeRetellHttp;
   const g = globalThis as { __optirouteNow?: () => Date; __optirouteMemoryRedis?: { clear(): void } };
-  // Nessuna richiesta deve uscire verso servizi veri (Retell, gestionale...)
+  // Nessuna richiesta deve uscire verso servizi veri (Retell...)
   const realFetch = globalThis.fetch;
   const external: string[] = [];
 
@@ -65,7 +65,6 @@ describe('bundle in funzione (archivio in memoria, Retell finto)', () => {
     for (const k of VARS) saved[k] = process.env[k];
     delete process.env.VERCEL_ENV;
     delete process.env.RETELL_AGENT_ID;
-    delete process.env.OPTIROUTE_SYNC;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       if (!url.startsWith('http://127.0.0.1:')) {
@@ -138,8 +137,7 @@ describe('bundle in funzione (archivio in memoria, Retell finto)', () => {
     });
     const sched = await invoke(cloudTick, { method: 'POST', headers: { ...AUTH, 'user-agent': 'vercel-cron/1.0' } });
     expect(sched.statusCode).toBe(200);
-    // con l'archivio in memoria la sync col gestionale vero è spenta
-    expect(sched.body.summary).toMatchObject({ outcomesApplied: 1, synced: 0 });
+    expect(sched.body.summary).toMatchObject({ outcomesApplied: 1 });
     expect(sched.body.summary.error).toBeUndefined();
 
     const hook = await invoke(cloud, { method: 'POST', query: { op: 'webhook', token: webhookToken(SECRET) }, body: { event: 'call_started' } });

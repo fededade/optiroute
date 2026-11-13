@@ -4,7 +4,7 @@ import type { Appointment } from '../src/types';
 import type { CloudConfig, CloudSnapshot, CloudStatus } from '../src/services/cloudProtocol';
 import { DEFAULT_AUTOPILOT_SETTINGS } from '../src/services/autopilotService';
 import { MemoryStore, commit, type Store } from '../server/store';
-import { createCloudHandler, createTickHandler, defaultDeps, syncEnabled, type HandlerDeps } from '../server/http';
+import { createCloudHandler, createTickHandler, type HandlerDeps } from '../server/http';
 import { webhookToken } from '../server/auth';
 import { FALLBACK, P, appt, at, stop, tech } from './fixtures';
 import { FakeRetell, invoke } from './serverFakes';
@@ -40,7 +40,6 @@ const make = (over: Partial<HandlerDeps> = {}) => {
     now: () => clock.now,
     clock: () => clock.wall,
     sleep: async ms => { clock.wall += ms; },
-    sync: async () => ({ sent: 0, failed: 0, errors: [], envName: 'collaudo' }),
     ...over,
   };
   const cloud = createCloudHandler(deps);
@@ -50,22 +49,6 @@ const make = (over: Partial<HandlerDeps> = {}) => {
   const init = () => call('init', { method: 'POST', body: { device: 'dev-a', appointments: APPTS(), config: CONFIG, replace: true } });
   return { store: store as Store, retell, clock, cloud, tick, call, init };
 };
-
-describe('sync col gestionale vero', () => {
-  it('spenta con l\'archivio in memoria (salvo OPTIROUTE_SYNC=on) o con OPTIROUTE_SYNC=off', () => {
-    const mem = new MemoryStore('optiroute:test:');
-    const target = { GESTIONALE_PROJECT_ID: 'progetto-finto', GESTIONALE_API_KEY: 'chiave-finta' };
-    expect(syncEnabled({ ...target }, mem)).toBe(false);
-    expect(syncEnabled({ ...target, OPTIROUTE_SYNC: 'on' }, mem)).toBe(true);
-    expect(syncEnabled({ ...target }, null)).toBe(true);
-    expect(syncEnabled({ ...target, OPTIROUTE_SYNC: 'off' }, null)).toBe(false);
-    // senza destinazione (variabili GESTIONALE_*) il server non invia nulla: lo fa il browser
-    expect(syncEnabled({}, null)).toBe(false);
-    expect(syncEnabled({ GESTIONALE_PROJECT_ID: 'solo-progetto' }, null)).toBe(false);
-    expect(syncEnabled({ OPTIROUTE_SYNC: 'on' }, mem)).toBe(false);
-    expect(defaultDeps({ env: {}, store: mem }).sync).toBeNull();
-  });
-});
 
 describe('ping', () => {
   it('senza chiave, solo protocollo e configurazione', async () => {

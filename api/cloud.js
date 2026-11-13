@@ -76,70 +76,6 @@ var applyAppointmentChanges = (all, changes) => {
   return list;
 };
 
-// src/services/gestionaleSync.ts
-var isSyncable = (a) => {
-  if (a.status !== "confirmed" || !a.date || !a.startTime) return false;
-  if (a.callOutcome?.result === "confermato") return true;
-  if (!a.phone) return true;
-  return false;
-};
-var getSyncableAppointments = (appointments) => appointments.filter(isSyncable);
-var fsString = (v) => ({ stringValue: v });
-var fsInt = (v) => ({ integerValue: String(Math.round(v)) });
-var fsDouble = (v) => ({ doubleValue: v });
-var fsBool = (v) => ({ booleanValue: v });
-var toFirestoreFields = (a) => {
-  const giornoIt = a.date ? (/* @__PURE__ */ new Date(`${a.date}T00:00:00`)).toLocaleDateString("it-IT", { weekday: "long", day: "2-digit", month: "2-digit" }) : "";
-  return {
-    codice: fsString(a.periziaCode || ""),
-    cliente: fsString(a.title),
-    telefono: fsString(a.phone || ""),
-    referente: fsString(a.contactPerson || ""),
-    indirizzo: fsString(a.shortAddress || a.address),
-    indirizzo_completo: fsString(a.address),
-    comune: fsString(a.comune || ""),
-    data: fsString(a.date || ""),
-    giorno: fsString(giornoIt),
-    ora_inizio: fsString(a.startTime || ""),
-    ora_fine: fsString(a.endTime || ""),
-    ordine: fsInt(a.sequenceOrder || 0),
-    progetto: fsString(a.project || ""),
-    note: fsString(a.notes || ""),
-    esito: fsString(a.callOutcome?.result || (a.phone ? "" : "senza_telefono")),
-    lat: fsDouble(a.coords.lat),
-    lng: fsDouble(a.coords.lng),
-    origine: fsString("optiroute"),
-    importato: fsBool(false),
-    aggiornato_il: fsString((/* @__PURE__ */ new Date()).toISOString())
-  };
-};
-var pushConfirmedToFirestore = async (appointments, target, envName) => {
-  const syncable = getSyncableAppointments(appointments);
-  const result = { sent: 0, failed: 0, errors: [], envName };
-  for (const appt of syncable) {
-    const docId = (appt.periziaCode || `app_${appt.id}`).replace(/[^\w-]/g, "_");
-    const url = `https://firestore.googleapis.com/v1/projects/${target.projectId}/databases/(default)/documents/optiroute_sync/${docId}?key=${target.apiKey}`;
-    try {
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields: toFirestoreFields(appt) })
-      });
-      if (response.ok) {
-        result.sent++;
-      } else {
-        const text = await response.text().catch(() => "");
-        result.failed++;
-        result.errors.push(`${appt.title}: HTTP ${response.status} ${text.slice(0, 120)}`);
-      }
-    } catch (error) {
-      result.failed++;
-      result.errors.push(`${appt.title}: ${error?.message || "errore di rete"}`);
-    }
-  }
-  return result;
-};
-
 // api/retell-call.ts
 var COMPANY_NAME = process.env.RETELL_COMPANY_NAME || "Effetre Properties";
 var AGENT_NAME = process.env.RETELL_AGENT_NAME || "Misi";
@@ -763,7 +699,7 @@ var parseLease = (raw) => {
   const until = Number(raw.slice(sep + 1));
   return Number.isFinite(until) ? { deviceId: raw.slice(0, sep), until } : null;
 };
-var META_FIELDS = ["lastTick", "schedulerSeenAt", "webhookSeenAt", "lastSync", "lastTickWallMs"];
+var META_FIELDS = ["lastTick", "schedulerSeenAt", "webhookSeenAt", "lastTickWallMs"];
 var keyPrefix = (vercelEnv) => `optiroute:${vercelEnv || "development"}:`;
 var RedisStore = class {
   kind;
@@ -828,7 +764,6 @@ var RedisStore = class {
       lastTick: parseJson(map.get("lastTick")),
       schedulerSeenAt: map.get("schedulerSeenAt") || null,
       webhookSeenAt: map.get("webhookSeenAt") || null,
-      lastSync: parseJson(map.get("lastSync")),
       lastTickWallMs: map.get("lastTickWallMs") ? toInt(map.get("lastTickWallMs")) : null
     };
   }
@@ -1811,13 +1746,11 @@ var buildDaySchedule = (appt, all, technicians, fallback, defaultDay) => {
 var LOCK_TTL_MS = 55e3;
 var LAUNCH_GAP_MS = 1500;
 var STALE_LAUNCH_MS = 3 * 6e4;
-var SYNC_INTERVAL_MS = 60 * 6e4;
 var RECENT_TICK_MS = 3e3;
 var DEFAULT_BUDGET_MS = { scheduler: 4e4, browser: 4e4, webhook: 8e3 };
 var OUTCOME_CONCURRENCY = 4;
 var CREATE_TIMEOUT_MS = 15e3;
 var WEBHOOK_MIN_LAUNCH_MS = 3500;
-var SYNC_MIN_REMAINING_MS = 1e4;
 var INTERRUPTED_LAUNCH_SUMMARY = "Avvio della chiamata interrotto";
 var OUTCOME_TIMEOUT_SUMMARY = "Esito non ricevuto nei tempi: controlla la dashboard Retell.";
 var realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1881,7 +1814,6 @@ var emptySummary = () => ({
   callsFailed: 0,
   recovered: 0,
   expired: 0,
-  synced: 0,
   inFlight: 0,
   queued: 0,
   windowOpen: false,
@@ -2087,33 +2019,6 @@ var runTick = async (deps, source, opts = {}) => {
         }
       }
     }
-    if (deps.sync && source !== "webhook" && remaining() > SYNC_MIN_REMAINING_MS) {
-      const meta = await store.readMeta();
-      const now = deps.now();
-      const last = meta.lastSync ? new Date(meta.lastSync.at).getTime() : NaN;
-      if (!Number.isFinite(last) || now.getTime() - last >= SYNC_INTERVAL_MS) {
-        const { appointments } = await store.readAppointments();
-        const list = appointments || [];
-        const syncable = getSyncableAppointments(list).length;
-        if (syncable > 0) {
-          let sent = 0;
-          let failed = 0;
-          try {
-            const r = await deps.sync(list);
-            sent = r.sent;
-            failed = r.failed;
-          } catch (err) {
-            logError("sync", err);
-            failed = syncable;
-          }
-          summary.synced = sent;
-          await store.updateMeta({ lastSync: { at: now.toISOString(), sent, failed } });
-          if (failed > 0 && !summary.error) {
-            summary.error = `Sincronizzazione col gestionale: ${failed} invii non riusciti`;
-          }
-        }
-      }
-    }
   } catch (err) {
     logError("passaggio", err);
     summary.error = errorText(err);
@@ -2284,17 +2189,6 @@ var httpRetellClient = {
 };
 
 // server/http.ts
-var syncTargetFromEnv = (env) => {
-  const projectId = (env.GESTIONALE_PROJECT_ID || "").trim();
-  const apiKey = (env.GESTIONALE_API_KEY || "").trim();
-  return projectId && apiKey ? { projectId, apiKey } : null;
-};
-var syncEnabled = (env, store) => {
-  if (env.OPTIROUTE_SYNC === "off") return false;
-  if (!syncTargetFromEnv(env)) return false;
-  if (store?.kind === "memory") return env.OPTIROUTE_SYNC === "on";
-  return true;
-};
 var LEASE_TTL_MS = 9e4;
 var defaultNow = (env) => () => {
   const hook = globalThis.__optirouteNow;
@@ -2310,7 +2204,6 @@ var defaultDeps = (overrides = {}) => {
     now: overrides.now || defaultNow(env),
     clock: overrides.clock || Date.now,
     retell: overrides.retell || httpRetellClient,
-    sync: "sync" in overrides ? overrides.sync ?? null : syncEnabled(env, store) ? (appointments) => pushConfirmedToFirestore(appointments, syncTargetFromEnv(env), "server") : null,
     sleep: overrides.sleep,
     timezone: overrides.timezone || timezoneStatus
   };
@@ -2319,7 +2212,6 @@ var engineDeps = (d, store) => ({
   store,
   now: d.now,
   retell: d.retell,
-  sync: d.sync || void 0,
   clock: d.clock,
   sleep: d.sleep,
   timezone: d.timezone
@@ -2467,7 +2359,6 @@ var handleOp = async (op, req, res, d) => {
         env: d.env.VERCEL_ENV || "development",
         storeConfigured: true,
         retellConfigured: !!retell.apiKey && !!retell.fromNumber,
-        gestionaleSyncConfigured: syncEnabled(d.env, store),
         timezone: d.timezone(),
         rev,
         configRev,

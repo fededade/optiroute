@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import {
   CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Map as MapIcon, MapPinned, Menu as MenuIcon,
-  Plug, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Truck, Upload, Users, X,
+  Plug, Plus, Search, Send, Settings2, Sparkles, Truck, Upload, Users, X,
 } from 'lucide-react';
 import type { Technician } from '../types';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Menu';
@@ -44,10 +44,6 @@ interface TopBarProps {
   exportHint?: string;       // "N pratiche: quelle mostrate ora"
   onSendReport: () => void;
   isSending: boolean;
-  onSyncGestionale: () => void;
-  isSyncing: boolean;
-  syncHint: string;
-  lastSyncInfo: string;
 
   currentDate: string;
   onDateChange: (d: string) => void;
@@ -198,7 +194,7 @@ const TopBar: React.FC<TopBarProps> = (p) => {
       </Menu>
       <Menu
         testId="menu-esporta"
-        title="Esporta e sincronizza"
+        title="Esporta e invia"
         ariaLabel="Esporta"
         minWidth={300}
         buttonClassName={toolClass}
@@ -207,16 +203,6 @@ const TopBar: React.FC<TopBarProps> = (p) => {
         <MenuLabel>Esporta</MenuLabel>
         <MenuItem icon={FileSpreadsheet} onSelect={p.onExport} hint={p.exportHint || 'Le pratiche della vista corrente'}>Esporta Excel</MenuItem>
         <MenuItem icon={Send} onSelect={p.onSendReport} disabled={p.isSending} hint={p.exportHint || 'Planning della vista corrente'}>{p.isSending ? 'Invio…' : 'Invia report'}</MenuItem>
-        <MenuDivider />
-        <MenuItem
-          icon={RefreshCw}
-          onSelect={p.onSyncGestionale}
-          disabled={p.isSyncing}
-          title="Invia al gestionale i sopralluoghi confermati (dal cliente o senza telefono) con orario calcolato"
-          hint={p.lastSyncInfo ? `Ultima: ${p.lastSyncInfo}` : p.syncHint}
-        >
-          {p.isSyncing ? 'Sincronizzazione…' : 'Sincronizza col gestionale'}
-        </MenuItem>
       </Menu>
     </>
   );

@@ -16,7 +16,6 @@ import {
 } from '../src/services/autopilotService';
 import { toCallOutcome } from '../src/services/callService';
 import { buildDaySchedule } from '../src/services/dayScheduleService';
-import { getSyncableAppointments, type SyncResult } from '../src/services/gestionaleSync';
 import type { RetellCallBody } from '../api/retell-call';
 import { timezoneStatus, type TimezoneStatus } from './tz';
 import { ConflictError, StoreError, commit, type Store } from './store';
@@ -33,14 +32,12 @@ import type { RetellClient } from './retell';
 export const LOCK_TTL_MS = 55_000;
 export const LAUNCH_GAP_MS = 1500;
 export const STALE_LAUNCH_MS = 3 * 60_000;     // "calling" senza callId da più di 3 minuti: lancio interrotto
-export const SYNC_INTERVAL_MS = 60 * 60_000;   // sync col gestionale al massimo una volta l'ora
 export const RECENT_TICK_MS = 3000;            // webhook: salta se un passaggio è finito da meno di 3 s
 export const DEFAULT_BUDGET_MS: Record<TickSource, number> = { scheduler: 40_000, browser: 40_000, webhook: 8000 };
 
 const OUTCOME_CONCURRENCY = 4;
 const CREATE_TIMEOUT_MS = 15_000;
 const WEBHOOK_MIN_LAUNCH_MS = 3500;            // webhook: budget minimo residuo per avviare una chiamata
-const SYNC_MIN_REMAINING_MS = 10_000;
 
 export const INTERRUPTED_LAUNCH_SUMMARY = 'Avvio della chiamata interrotto';
 export const OUTCOME_TIMEOUT_SUMMARY = 'Esito non ricevuto nei tempi: controlla la dashboard Retell.';
@@ -49,7 +46,6 @@ export interface EngineDeps {
   store: Store;
   now: () => Date;                         // ora di calendario (iniettabile nei test)
   retell: RetellClient;
-  sync?: (appointments: Appointment[]) => Promise<SyncResult>;
   clock?: () => number;                    // tempo reale per budget e pause (default Date.now)
   sleep?: (ms: number) => Promise<void>;
   timezone?: () => TimezoneStatus;
@@ -144,7 +140,6 @@ const emptySummary = (): TickSummary => ({
   callsFailed: 0,
   recovered: 0,
   expired: 0,
-  synced: 0,
   inFlight: 0,
   queued: 0,
   windowOpen: false,
@@ -375,36 +370,6 @@ export const runTick = async (deps: EngineDeps, source: TickSource, opts: TickOp
         }
       }
     }
-
-    // 5) Sync col gestionale, al massimo una volta l'ora (non nel webhook: passaggio leggero)
-    if (deps.sync && source !== 'webhook' && remaining() > SYNC_MIN_REMAINING_MS) {
-      const meta = await store.readMeta();
-      const now = deps.now();
-      const last = meta.lastSync ? new Date(meta.lastSync.at).getTime() : NaN;
-      if (!Number.isFinite(last) || now.getTime() - last >= SYNC_INTERVAL_MS) {
-        const { appointments } = await store.readAppointments();
-        const list = appointments || [];
-        const syncable = getSyncableAppointments(list).length;
-        if (syncable > 0) {
-          let sent = 0;
-          let failed = 0;
-          try {
-            const r = await deps.sync(list);
-            sent = r.sent;
-            failed = r.failed;
-          } catch (err) {
-            logError('sync', err);
-            failed = syncable;
-          }
-          summary.synced = sent;
-          // Registrato anche in caso di errore: si riprova fra un'ora, non a ogni passaggio
-          await store.updateMeta({ lastSync: { at: now.toISOString(), sent, failed } });
-          if (failed > 0 && !summary.error) {
-            summary.error = `Sincronizzazione col gestionale: ${failed} invii non riusciti`;
-          }
-        }
-      }
-    }
   } catch (err) {
     logError('passaggio', err);
     summary.error = errorText(err);
@@ -416,7 +381,7 @@ export const runTick = async (deps: EngineDeps, source: TickSource, opts: TickOp
     }
   }
 
-  // 6) Fotografia finale per il riepilogo
+  // 5) Fotografia finale per il riepilogo
   try {
     const { appointments } = await store.readAppointments();
     const stats = autopilotStats(appointments || [], planningFrom(cfg, deps.now()));

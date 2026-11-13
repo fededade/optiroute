@@ -128,7 +128,7 @@ class FakeCloud {
         return json(200, this.snapshot(device));
       case 'tick':
         this.onTick?.();
-        return json(200, { summary: { outcomesApplied: 0, callsLaunched: 1, callsFailed: 0, recovered: 0, expired: 0, synced: 0, inFlight: 1, queued: 0, windowOpen: true, pilotEnabled: true, durationMs: 5 }, rev: this.rev, configRev: this.configRev });
+        return json(200, { summary: { outcomesApplied: 0, callsLaunched: 1, callsFailed: 0, recovered: 0, expired: 0, inFlight: 1, queued: 0, windowOpen: true, pilotEnabled: true, durationMs: 5 }, rev: this.rev, configRev: this.configRev });
     }
     return json(400, { error: 'bad_request' });
   };

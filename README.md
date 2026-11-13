@@ -106,9 +106,6 @@ liberati anche con il PC spento, e gli stessi dati si vedono da più computer.
   arrivata nel mezzo non va persa.
 - Restano nel browser lo smistamento automatico e l'arrivo delle pratiche dal bridge
   (girano su un solo dispositivo alla volta).
-- L'invio dei confermati al gestionale resta al browser, quando è aperto. Per farlo anche
-  dal server (al massimo una volta l'ora) aggiungi su Vercel le variabili
-  `GESTIONALE_PROJECT_ID` e `GESTIONALE_API_KEY`: nel codice del server non ci sono chiavi.
 - "Pausa" ferma i lanci anche sul cloud. "Scollega questo browser" riporta quel browser ai
   soli dati locali, con il pilota locale spento: il motore sul cloud continua.
 
@@ -141,8 +138,8 @@ ogni pezzo risponde.
   *Da gestire* (solo ciò che richiede una decisione), *In attesa*, *Proposte*, *Agenda*
   (giorno, settimana, mese), *Problemi*, *Archivio*; in fondo *Tecnici* e *Impostazioni*.
 - **Barra in alto**: ricerca, filtro per tecnico e i menu *Importa* (Excel, Google My Maps,
-  bridge), *Pianifica* (smista per zona, ottimizza il giro), *Esporta* (Excel, report,
-  gestionale), più *Nuova pratica*.
+  bridge), *Pianifica* (smista per zona, ottimizza il giro), *Esporta* (Excel, report),
+  più *Nuova pratica*.
 - **Striscia del pilota** sotto la barra: stato, chiamate in coda e in corso, prossima
   chiamata, stato di cloud e bridge, Attiva/Pausa e impostazioni.
 - **Tutte le pratiche** è la tabella completa: stato, cliente, indirizzo, codice e
@@ -270,10 +267,10 @@ finestra di chiamata ("Registra esito della telefonata").
   fatto sotto supervisione. **Cerved** non è ancora collegato: il bridge ha la struttura
   per aggiungerlo e uno strumento (`capture_portal.py`) per rilevarne le pagine in forma
   anonimizzata. Vedi `prelios-bridge/README.md`.
-- **Sync verso il gestionale Effetre**: i sopralluoghi **confermati** (dal cliente in chiamata,
-  o senza telefono) con orario calcolato vengono inviati al gestionale (Firestore, collection
-  `optiroute_sync`) con "Sincronizza col gestionale" (menu "Esporta" o Impostazioni) e in automatico **ogni ora**. Ambiente di
-  default: collaudo; produzione con `VITE_SYNC_ENV=production`.
+- **Invio al gestionale: tolto** (novembre 2026). OptiRoute non invia più i sopralluoghi
+  confermati al gestionale: l'invio avveniva senza autenticazione e il gestionale non lo
+  leggeva. Per riattivarlo andrà rifatto con un invio autenticato dal server; il codice
+  precedente è nella cronologia git.
 
 ## Altre variabili d'ambiente
 

@@ -3,7 +3,6 @@ import type { AlternativeSlot, Appointment, Coordinates, AppointmentStatus, Call
 import { geocodeAddress } from './services/geocodingService';
 import { parseAddressInput } from './services/geminiService';
 import { parseExcelFile, exportAppointmentsToExcel, generateExcelBlob, blobToBase64, extractPhoneFromRow, extractUrgentFromRow, extractCodiceFromRow, parsePraticheMisi } from './services/excelService';
-import { syncConfirmedToGestionale, getSyncableAppointments, getSyncEnvName } from './services/syncService';
 import { optimizeRoute, calculateSchedule, calculateRouteSummary } from './utils/geo';
 import { buildDaySchedule as buildDayScheduleText } from './services/dayScheduleService';
 import { loadAppointments, saveAppointments, appointmentsFromStorageEvent, loadBase, saveBase, loadSettings, saveSettings, loadAutopilotSettings, loadBridgeSettings } from './services/storageService';
@@ -169,10 +168,6 @@ function App() {
   // AI call modal (Retell): singola pratica o coda "Chiama tutte"
   const [callTarget, setCallTarget] = useState<Appointment | null>(null);
   const [bulkCallList, setBulkCallList] = useState<Appointment[] | null>(null);
-
-  // Sync verso il gestionale (Firestore Effetre)
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
 
   // Filters
   const [filters, setFilters] = useState({
@@ -718,33 +713,6 @@ function App() {
     updateCloud({ ...cloud, enabled: false });
     setAutopilot(s => ({ ...s, enabled: false }));
   };
-
-  // --- Sync verso il gestionale Effetre (Firestore) ---
-  const handleSyncGestionale = useCallback(async (automatic = false) => {
-    const syncable = getSyncableAppointments(appointmentsRef.current);
-    if (syncable.length === 0) {
-      if (!automatic) alert("Nessun sopralluogo confermato da sincronizzare.\n(Vengono inviati solo i confermati dal cliente o senza telefono, con orario calcolato.)");
-      return;
-    }
-    setIsSyncing(true);
-    try {
-      const result = await syncConfirmedToGestionale(appointmentsRef.current);
-      const when = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
-      setLastSyncInfo(`${when}: ${result.sent} inviate (${result.envName})${result.failed ? `, ${result.failed} errori` : ''}`);
-      if (result.failed > 0) console.warn('Sync gestionale, errori:', result.errors);
-      if (!automatic && result.failed > 0) {
-        alert(`Sync completata con errori: ${result.sent} inviate, ${result.failed} fallite.\n${result.errors.slice(0, 3).join('\n')}`);
-      }
-    } finally {
-      setIsSyncing(false);
-    }
-  }, []);
-
-  // Sync automatica ogni ora (il gestionale importa a sua volta ogni ora)
-  useEffect(() => {
-    const interval = setInterval(() => { handleSyncGestionale(true); }, 60 * 60000);
-    return () => clearInterval(interval);
-  }, [handleSyncGestionale]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1578,7 +1546,6 @@ function App() {
     cancelled: listCancelled.length,
   };
   const optimizeLabel = `Ottimizza il giro del ${formatDayLabel(currentDate).replace(/\./g, '')}${selectedTech ? ` · ${selectedTech.name.split(' ')[0]}` : ''}`;
-  const syncHint = `${getSyncableAppointments(allAppointments).length} confermate da inviare · ${getSyncEnvName()}`;
   const techUnavailable = !!selectedTech && isFullyUnavailable(selectedTech, currentDate);
 
   // Tabella delle pratiche (sezione "Tutte le pratiche" e ricerca globale):
@@ -1743,10 +1710,6 @@ function App() {
             onOpenAutopilotSettings={() => setShowAutopilotSettings(true)}
             technicians={technicians}
             onOpenTech={(id) => openTechModal(id ?? null)}
-            onSyncGestionale={() => handleSyncGestionale(false)}
-            isSyncing={isSyncing}
-            syncHint={syncHint}
-            lastSyncInfo={lastSyncInfo}
           />
         );
     }
@@ -1938,10 +1901,6 @@ function App() {
           exportHint={`${plural(shownNow.length, 'pratica', 'pratiche')}: quelle mostrate ora`}
           onSendReport={handleSendToN8n}
           isSending={isSendingToN8n}
-          onSyncGestionale={() => handleSyncGestionale(false)}
-          isSyncing={isSyncing}
-          syncHint={syncHint}
-          lastSyncInfo={lastSyncInfo}
           currentDate={currentDate}
           onDateChange={setCurrentDate}
           viewMode={viewMode}

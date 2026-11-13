@@ -313,9 +313,14 @@ progetto o chiave è scritto nel codice.
 
 **Come il gestionale riceve i sopralluoghi confermati**: legge
 `GET /api/cloud?op=sopralluoghi` (con il biglietto di una qualunque persona del
-personale) e riceve data, orario, tecnico, cliente, contatti ed esito della chiamata di ogni
-sopralluogo confermato dal cliente (o confermato dall'operatore se la pratica non ha
-telefono), più l'elenco delle pratiche non ancora confermate. OptiRoute avvisa la pagina del
+personale) e riceve data, orario, tecnico, cliente e contatti di ogni sopralluogo
+**confermato** in OptiRoute, cioè ogni pratica in stato "Confermata" con data e orario: il
+gestionale rispecchia l'agenda dei confermati. Una pratica diventa confermata quando il
+cliente dice sì alla chiamata del pilota (finché aspetta la chiamata resta fra le proposte),
+oppure quando l'operatore la conferma ("Conferma giornata" o lo stato messo a mano), anche se
+ha il telefono. Per ognuna si sa chi l'ha confermata (la chiamata o l'operatore) e, se c'è
+stata una chiamata, com'è andata (anche "non risponde"). Arriva anche l'elenco delle pratiche
+non ancora confermate. OptiRoute avvisa la pagina del
 gestionale qualche secondo dopo ogni modifica, così l'elenco si aggiorna subito. Il server
 risponde alle chiamate da altri siti solo per le pagine indicate in `GESTIONALE_ORIGINS`.
 

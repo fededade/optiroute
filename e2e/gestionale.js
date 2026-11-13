@@ -349,7 +349,8 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       await api('POST', '/__test/reset');
       await seedServer([
         { id: 'c1', title: 'Cliente da Confermare', address: 'Via Roma 6, 20121 Milano MI', shortAddress: 'Via Roma 6', coords: P.milano, status: 'proposed', date: D,
-          startTime: '09:00', endTime: '09:20', technicianId: 'tech-1', province: 'MI', comune: 'Milano', periziaCode: 'ISP-C1', sequenceOrder: 1 },
+          startTime: '09:00', endTime: '09:20', technicianId: 'tech-1', province: 'MI', comune: 'Milano', periziaCode: 'ISP-C1', sequenceOrder: 1,
+          phone: '+390200000001' }, // con telefono: "Conferma giornata" conferma sulla parola dell'operatore
         { id: 'c2', title: 'Cliente in Attesa', address: 'Via Attesa 2, Milano', coords: P.milano, status: 'pending', technicianId: 'tech-1', province: 'MI', periziaCode: 'ISP-C2', phone: '+390200000002' },
       ]);
       const G = await newPage(browser, { localSeed: { optiroute_technicians_v1: [TECH], optiroute_cloud_v1: DEVICE_SEED } });
@@ -378,6 +379,8 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       assert.equal(s.oraInizio, '09:00');
       assert.equal(s.tecnico, 'Tecnico Uno');
       assert.equal(s.conferma, 'operatore');
+      assert.equal(s.telefono, '+390200000001');
+      assert.equal(s.chiamata, null);
       assert.equal(s.indirizzo, 'Via Roma 6');
 
       // intestazioni CORS viste dal server

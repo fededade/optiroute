@@ -43,19 +43,15 @@ export interface SopralluoghiExport {
   notConfirmedIds: string[];
 }
 
-// Un sopralluogo è confermato SOLO se:
-// - è in un giro approvato (confermato, con data e orario), e
-// - il cliente ha confermato alla chiamata, oppure non c'è telefono (nessuna
-//   chiamata possibile: fa fede la conferma dell'operatore).
-// Restano fuori: in attesa, proposte, stand-by, rifiutati, da riprogrammare,
-// non risposto, esiti da verificare e chiamate ancora senza esito.
-// (Stessa regola del vecchio invio al gestionale, tolto a novembre 2026.)
-export const isConfirmedByClient = (a: Appointment): boolean => {
-  if (a.status !== 'confirmed' || !a.date || !a.startTime) return false;
-  if (a.callOutcome?.result === 'confermato') return true;
-  if (!a.phone?.trim()) return true;
-  return false;
-};
+// Un sopralluogo è confermato quando in OptiRoute è "Confermato" con data e
+// orario: il gestionale rispecchia l'agenda dei sopralluoghi confermati.
+// In OptiRoute lo stato "Confermato" vuol già dire confermato: con il pilota
+// la pratica resta "proposta" finché il cliente non dice sì al telefono;
+// "Conferma giornata" (o lo stato messo a mano) conferma sulla parola
+// dell'operatore. Restano fuori: in attesa, proposte (anche in attesa della
+// chiamata), stand-by, problemi, annullate.
+export const isConfirmedInAgenda = (a: Appointment): boolean =>
+  a.status === 'confirmed' && !!a.date && !!a.startTime;
 
 const s = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -117,7 +113,7 @@ export const buildSopralluoghiExport = (appointments: Appointment[], technicians
   const otherIds: string[] = [];
   for (const a of appointments) {
     if (!a || typeof a.id !== 'string') continue;
-    if (isConfirmedByClient(a)) {
+    if (isConfirmedInAgenda(a)) {
       confirmed.push(toSopralluogo(a, (a.technicianId && names.get(a.technicianId)) || ''));
     } else {
       otherIds.push(a.id);

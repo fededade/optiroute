@@ -340,7 +340,7 @@ describe('/api/cloud: op=sopralluoghi', () => {
         callOutcome: { result: 'confermato', summary: 'Confermato', receivedAt: '2026-11-11T09:00:00.000Z' },
       }),
       stop('a', D, '09:00', '09:20', P.milano, { status: 'confirmed', phone: undefined, title: 'Cliente A', periziaCode: 'ISP-1', sequenceOrder: 1 }),
-      stop('c', D, '11:00', '11:20', P.milano, { status: 'confirmed', title: 'Cliente C', phone: '+390222222222', periziaCode: 'ISP-3' }),
+      stop('c', D, '11:00', '11:20', P.milano, { status: 'proposed', autoCall: 'route', title: 'Cliente C', phone: '+390222222222', periziaCode: 'ISP-3' }),
       appt({ id: 'd', periziaCode: 'ISP-4' }),
     ]);
     await t.store!.writeConfig(CONFIG);

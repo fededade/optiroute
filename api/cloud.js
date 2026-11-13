@@ -77,12 +77,7 @@ var applyAppointmentChanges = (all, changes) => {
 };
 
 // src/services/gestionaleExport.ts
-var isConfirmedByClient = (a) => {
-  if (a.status !== "confirmed" || !a.date || !a.startTime) return false;
-  if (a.callOutcome?.result === "confermato") return true;
-  if (!a.phone?.trim()) return true;
-  return false;
-};
+var isConfirmedInAgenda = (a) => a.status === "confirmed" && !!a.date && !!a.startTime;
 var s = (v) => typeof v === "string" ? v.trim() : "";
 var n = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 var toSopralluogo = (a, technicianName) => {
@@ -126,7 +121,7 @@ var buildSopralluoghiExport = (appointments, technicians) => {
   const otherIds = [];
   for (const a of appointments) {
     if (!a || typeof a.id !== "string") continue;
-    if (isConfirmedByClient(a)) {
+    if (isConfirmedInAgenda(a)) {
       confirmed.push(toSopralluogo(a, a.technicianId && names.get(a.technicianId) || ""));
     } else {
       otherIds.push(a.id);

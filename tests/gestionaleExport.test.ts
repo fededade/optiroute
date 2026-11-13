@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSopralluoghiExport, isConfirmedByClient } from '../src/services/gestionaleExport';
+import { buildSopralluoghiExport, isConfirmedInAgenda } from '../src/services/gestionaleExport';
 import { P, appt, outcome, tech } from './fixtures';
 
 // Regola "sopralluogo confermato" per il gestionale e forma dei dati.
@@ -13,25 +13,29 @@ const confirmed = (id: string, date: string, start: string, over = {}) =>
 
 describe('regola di conferma', () => {
   it('confermato dalla chiamata AI', () => {
-    expect(isConfirmedByClient(confirmed('1', D1, '09:00', { callOutcome: outcome('confermato') }))).toBe(true);
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { callOutcome: outcome('confermato') }))).toBe(true);
   });
   it('senza telefono: fa fede l\'operatore', () => {
-    expect(isConfirmedByClient(confirmed('1', D1, '09:00', { phone: undefined }))).toBe(true);
-    expect(isConfirmedByClient(confirmed('1', D1, '09:00', { phone: '  ' }))).toBe(true);
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { phone: undefined }))).toBe(true);
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { phone: '  ' }))).toBe(true);
   });
-  it('nel giro ma il cliente non ha ancora confermato', () => {
-    expect(isConfirmedByClient(confirmed('1', D1, '09:00'))).toBe(false);
-    expect(isConfirmedByClient(confirmed('1', D1, '09:00', { callStatus: 'called', callId: 'c1' }))).toBe(false);
-    for (const r of ['riprogrammare', 'non_risposto', 'sconosciuto', 'rifiutato'] as const) {
-      expect(isConfirmedByClient(confirmed('1', D1, '09:00', { callOutcome: outcome(r) }))).toBe(false);
+  it('confermato dall\'operatore anche con il telefono e senza chiamata (es. "Conferma giornata")', () => {
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00'))).toBe(true);
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { callStatus: 'called', callId: 'c1' }))).toBe(true);
+    for (const r of ['non_risposto', 'sconosciuto'] as const) {
+      expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { callOutcome: outcome(r) }))).toBe(true);
     }
+  });
+  it('proposta in attesa della chiamata ("Approva e chiama"): non ancora confermata', () => {
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { status: 'proposed', autoCall: 'route' }))).toBe(false);
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { status: 'proposed', callStatus: 'called', callId: 'c1' }))).toBe(false);
   });
   it('altri stati o senza data/orario', () => {
     for (const status of ['proposed', 'pending', 'standby', 'issue', 'cancelled'] as const) {
-      expect(isConfirmedByClient(confirmed('1', D1, '09:00', { status, callOutcome: outcome('confermato') }))).toBe(false);
+      expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { status, callOutcome: outcome('confermato') }))).toBe(false);
     }
-    expect(isConfirmedByClient(confirmed('1', D1, '09:00', { date: undefined, phone: undefined }))).toBe(false);
-    expect(isConfirmedByClient(confirmed('1', D1, '09:00', { startTime: undefined, phone: undefined }))).toBe(false);
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { date: undefined, phone: undefined }))).toBe(false);
+    expect(isConfirmedInAgenda(confirmed('1', D1, '09:00', { startTime: undefined, phone: undefined }))).toBe(false);
   });
 });
 
@@ -45,8 +49,10 @@ describe('elenco per il gestionale', () => {
       callOutcome: outcome('confermato', { summary: 'Il cliente conferma', clientNotes: 'Suonare due volte', receivedAt: '2026-11-11T09:00:00.000Z' }),
     }),
     confirmed('a', D1, '09:00', { phone: undefined, sequenceOrder: 1, technicianId: 'tech-ignoto' }),
-    confirmed('wait', D1, '11:00'),                                   // in giro, nessuna conferma
-    confirmed('nocode', D1, '12:00', { periziaCode: undefined }),     // senza codice
+    confirmed('wait', D1, '11:00', { status: 'proposed', autoCall: 'route' }), // in attesa della chiamata
+    appt({ id: 'nocode', status: 'pending' }),                          // senza codice
+    confirmed('op', D2, '10:00'),                                       // confermata dall'operatore, con telefono, senza chiamata
+    confirmed('nr', D2, '11:00', { callOutcome: outcome('non_risposto', { summary: 'Segreteria', receivedAt: '2026-11-11T08:00:00.000Z' }) }),
     appt({ id: 'pend', status: 'pending', periziaCode: 'ISP-pend' }),
     appt({ id: 'canc', status: 'cancelled', periziaCode: 'ISP-canc' }),
     appt({ id: 'dup', status: 'pending', periziaCode: 'ISP-pend' }),  // stesso codice: una volta sola
@@ -55,7 +61,18 @@ describe('elenco per il gestionale', () => {
   const out = buildSopralluoghiExport(list, TECHS);
 
   it('confermati in ordine di data e ora', () => {
-    expect(out.confirmed.map(s => s.id)).toEqual(['a', 'b', 'late']);
+    expect(out.confirmed.map(s => s.id)).toEqual(['a', 'b', 'late', 'op', 'nr']);
+  });
+
+  it('confermata dall\'operatore con telefono e senza chiamata: "operatore", nessuna chiamata', () => {
+    expect(out.confirmed.find(s => s.id === 'op')).toMatchObject({ conferma: 'operatore', chiamata: null, telefono: '+3902op' });
+  });
+
+  it('confermata dall\'operatore dopo un "non risponde": "operatore", con l\'esito della chiamata', () => {
+    expect(out.confirmed.find(s => s.id === 'nr')).toMatchObject({
+      conferma: 'operatore',
+      chiamata: { esito: 'non_risposto', riepilogo: 'Segreteria', noteCliente: '', ricevutoIl: '2026-11-11T08:00:00.000Z' },
+    });
   });
 
   it('non confermati: i codici non vuoti di tutte le altre pratiche, senza doppioni', () => {

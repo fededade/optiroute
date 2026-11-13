@@ -12,6 +12,11 @@ Dopo il login MANUALE (MFA) resta in esecuzione e a ogni ciclo:
 Se la sessione del portale scade lo stato diventa `login_required` e il
 bridge aspetta il nuovo login senza terminare. Ctrl+C per fermarlo.
 
+MODALITÀ GESTIONALE (bridge_config.json o --gestionale): il server HTTP
+parte subito ma il bridge resta "in attesa di attivazione"; Chrome e il
+portale vengono avviati SOLO dopo che un amministratore del gestionale lo ha
+attivato (POST /v1/attiva). Da lì in poi tutto procede come sopra.
+
 Selenium gira SOLO in questo thread (principale); il server HTTP è in un
 thread daemon e legge uno snapshot protetto da lock.
 """
@@ -24,7 +29,9 @@ from datetime import datetime
 from pathlib import Path
 
 from bridge_cache import BridgeCache, iso_utc
-from bridge_server import BridgeState, carica_o_crea_token, make_server, start_in_thread
+from bridge_config import CONFIG_PATH, ConfigNonValida, origini_effettive
+from bridge_server import (Attivazione, BridgeState, carica_o_crea_token, make_server,
+                           start_in_thread)
 from excel_pratiche import load_pratiche
 from portals import PortaleNonConfigurato, get_adapter
 
@@ -56,16 +63,50 @@ def _stampa_avvio(port: int, token: str, creato: bool) -> None:
     print(riga, flush=True)
 
 
+def _stampa_avvio_gestionale(port: int, origini: list[str], minuti: float) -> None:
+    riga = "=" * 68
+    print(riga)
+    print(f" OptiRoute Bridge acceso su http://127.0.0.1:{port}  (solo questo PC)")
+    print(" IN ATTESA DI ATTIVAZIONE dal gestionale.")
+    print(" Un amministratore (Super Amministratore o Amministratore) deve")
+    print(" aprire la pagina OptiRoute del gestionale: il bridge si attiva da solo.")
+    print(" Solo dopo l'attivazione si apre la finestra Chrome del portale.")
+    print(" Gestionale autorizzato: " + ", ".join(origini))
+    print(f" Controllo del portale ogni {minuti:g} minuti.")
+    print(" Lascia aperta questa finestra. Ctrl+C per fermare il bridge.")
+    print(riga, flush=True)
+
+
+def _attendi_attivazione(attivazione: Attivazione, passo: float = 0.5) -> None:
+    """Aspetta l'attivazione dal gestionale. Attese brevi e ripetute, così
+    Ctrl+C interrompe subito anche su Windows."""
+    while not attivazione.attendi(passo):
+        pass
+    utente = attivazione.utente
+    if utente is not None:
+        _log(f"Bridge attivato dal gestionale da {utente.nome or 'utente senza nome'} "
+             f"({utente.ruolo}).")
+    else:
+        _log("Bridge attivato dal gestionale.")
+
+
+def _crea_browser_predefinito():
+    from browser import PreliosBrowser
+    return PreliosBrowser()
+
+
 class _Servizio:
     """Stato del servizio per un singolo portale."""
 
-    def __init__(self, args, adapter, cache: BridgeCache, state: BridgeState):
+    def __init__(self, args, adapter, cache: BridgeCache, state: BridgeState,
+                 crea_browser=None):
         self.args = args
         self.adapter = adapter
         self.pid = adapter.id
         self.cache = cache
         self.state = state
         self.browser = None
+        self._crea_browser = crea_browser or _crea_browser_predefinito
 
     # --- pubblicazione verso l'HTTP ---
 
@@ -91,9 +132,8 @@ class _Servizio:
     # --- browser e login ---
 
     def avvia_browser(self) -> bool:
-        from browser import PreliosBrowser
-        self.browser = PreliosBrowser()
         try:
+            self.browser = self._crea_browser()
             self.browser.start()
             return True
         except Exception as e:  # noqa: BLE001
@@ -250,9 +290,30 @@ class _Servizio:
                 _log(f"DRY-RUN: pubblicate {len(righe)} pratiche dal file.")
             self.attendi(self.args.interval)
 
+    def esegui(self, attivazione: Attivazione | None = None) -> int:
+        """In modalità gestionale aspetta l'attivazione PRIMA di aprire il
+        browser o il portale; poi procede come sempre."""
+        if attivazione is not None and attivazione.gestionale:
+            _attendi_attivazione(attivazione)
+            self.stato("starting", "Bridge attivato dal gestionale: avvio in corso...")
+        if self.args.dry_run:
+            return self.loop_dry_run()
+        return self.loop_portale()
 
-def esegui_servizio(args) -> int:
-    """Punto d'ingresso di `run_giro.py --serve`."""
+
+def esegui_servizio(args, *, verifica=None, config_path=CONFIG_PATH,
+                    crea_browser=None) -> int:
+    """Punto d'ingresso di `run_giro.py --serve`.
+
+    `verifica`, `config_path` e `crea_browser` sono sostituibili nei test."""
+    try:
+        origini, _pagina = origini_effettive(getattr(args, "gestionale", None),
+                                             getattr(args, "senza_gestionale", False),
+                                             config_path)
+    except ConfigNonValida as e:
+        print(f"ERRORE: {e}")
+        return 2
+
     try:
         adapter = get_adapter(args.portal, user_id=args.user_id)
     except PortaleNonConfigurato as e:
@@ -285,26 +346,35 @@ def esegui_servizio(args) -> int:
     cache = BridgeCache(CACHE_PATH)
     if not args.dry_run:
         cache.load()
-    state = BridgeState()
-    state.set_portal(adapter.id, "starting", "Avvio del bridge...",
+    state = BridgeState(intervallo_minuti=args.interval)
+    messaggio_avvio = ("In attesa di attivazione dal gestionale." if origini
+                       else "Avvio del bridge...")
+    state.set_portal(adapter.id, "starting", messaggio_avvio,
                      last_sync=cache.last_sync(adapter.id))
     state.set_pratiche(adapter.id, cache.snapshot(adapter.id))
 
+    attivazione = None
+    if origini:
+        if verifica is None:
+            from verifica_gestionale import verifica_admin as verifica
+        attivazione = Attivazione(origini, verifica=verifica, log=_log)
+
     token, creato = carica_o_crea_token(TOKEN_PATH)
     try:
-        server = make_server(state, token, port=args.port)
+        server = make_server(state, token, port=args.port, attivazione=attivazione)
     except OSError as e:
         print(f"ERRORE: porta {args.port} non disponibile ({e}). Un altro bridge "
               "è già avviato? Usa --port per sceglierne un'altra.")
         return 6
     start_in_thread(server)
-    _stampa_avvio(server.server_address[1], token, creato)
+    if attivazione is not None:
+        _stampa_avvio_gestionale(server.server_address[1], list(origini), args.interval)
+    else:
+        _stampa_avvio(server.server_address[1], token, creato)
 
-    servizio = _Servizio(args, adapter, cache, state)
+    servizio = _Servizio(args, adapter, cache, state, crea_browser=crea_browser)
     try:
-        if args.dry_run:
-            return servizio.loop_dry_run()
-        return servizio.loop_portale()
+        return servizio.esegui(attivazione)
     except KeyboardInterrupt:
         _log("Interrotto dall'operatore (Ctrl+C).")
         return 0

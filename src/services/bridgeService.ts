@@ -119,12 +119,61 @@ export const parseBridgeSnapshot = (data: unknown): BridgeSnapshot | null => {
   };
 };
 
+// --- Accesso alla rete locale (Chrome, "Local Network Access") ---
+// Una pagina https che chiama un programma su questo computer (il bridge su
+// 127.0.0.1) deve dichiararlo, altrimenti le versioni recenti di Chrome
+// bloccano la richiesta anche dopo il permesso dell'utente. Il nome del
+// valore è cambiato nel tempo ('loopback' oggi, 'local' prima); un valore
+// sconosciuto fa fallire la richiesta, mentre i browser che non conoscono
+// l'opzione la ignorano. Si prova quale valore accetta questo browser
+// costruendo una Request (nessuna rete).
+
+// L'opzione non è ancora nei tipi del DOM
+type LocalNetworkInit = RequestInit & { targetAddressSpace?: string };
+type RequestCtor = new (input: string, init?: LocalNetworkInit) => unknown;
+
+export const loopbackAddressSpace = (RequestImpl: RequestCtor | undefined): string => {
+  if (typeof RequestImpl !== 'function') return '';
+  for (const value of ['loopback', 'local']) {
+    try {
+      new RequestImpl('http://127.0.0.1/', { targetAddressSpace: value });
+      return value;
+    } catch {
+      // valore non accettato: si prova il successivo
+    }
+  }
+  return '';
+};
+
+let addressSpaceCache: string | null = null;
+const browserLoopbackSpace = (): string => {
+  if (addressSpaceCache === null) {
+    addressSpaceCache = loopbackAddressSpace(typeof Request === 'undefined' ? undefined : (Request as unknown as RequestCtor));
+  }
+  return addressSpaceCache;
+};
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+export const isLoopbackUrl = (url: string): boolean => {
+  try {
+    return LOOPBACK_HOSTS.has(new URL(url).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+};
+
+// Opzioni della richiesta al bridge: la dichiarazione di rete locale solo per
+// un indirizzo di questo computer e solo se il browser la accetta
+export const bridgeRequestInit = (url: string, init: RequestInit, space: string = browserLoopbackSpace()): LocalNetworkInit =>
+  space && isLoopbackUrl(url) ? { ...init, targetAddressSpace: space } : init;
+
 // fetch con timeout (AbortController)
 const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs: number): Promise<Response> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal, cache: 'no-store' });
+    return await fetch(url, bridgeRequestInit(url, { ...init, signal: controller.signal, cache: 'no-store' }));
   } finally {
     clearTimeout(timer);
   }

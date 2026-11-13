@@ -60,7 +60,8 @@ Da sapere:
   permette (con l'anticipo minimo), per chi segue il giro in tempo reale.
 - A pilota spento l'app funziona come prima: smistamento e chiamate si avviano a mano.
 - Per leggere il bridge locale da un sito https serve Chrome o Edge (al primo accesso il
-  browser chiede il permesso di raggiungere la rete locale).
+  browser chiede il permesso di raggiungere la rete locale). La prima volta che Chrome chiede
+  di lasciare al sito l'accesso ai programmi di questo computer, scegli "Consenti".
 - Sull'agente Retell è consigliato aggiungere il campo di analisi `alternativa_scelta`
   (vedi sotto).
 - Gli orari proposti sono arrotondati ai 5 minuti.

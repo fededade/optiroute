@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Cloud, House, Loader2, Plug, RefreshCw, Trash2, Users } from 'lucide-react';
+import { Bot, Cloud, House, Loader2, Plug, Trash2, Users } from 'lucide-react';
 import type { Coordinates, Technician } from '../../types';
 
 interface SettingsSectionProps {
@@ -19,10 +19,6 @@ interface SettingsSectionProps {
   onOpenAutopilotSettings: () => void;
   technicians: Technician[];
   onOpenTech: (id?: string) => void;
-  onSyncGestionale: () => void;
-  isSyncing: boolean;
-  syncHint: string;
-  lastSyncInfo: string;
 }
 
 const Panel: React.FC<{ title: string; text: string; children: React.ReactNode; testId: string }> = ({ title, text, children, testId }) => (
@@ -103,14 +99,6 @@ const SettingsSection: React.FC<SettingsSectionProps> = (p) => (
       </button>
     </Panel>
 
-    <Panel testId="settings-gestionale" title="Gestionale" text="I sopralluoghi confermati vengono inviati al gestionale ogni ora; puoi farlo anche subito.">
-      <div className="flex items-center gap-3 flex-wrap">
-        <button type="button" className="btn btn-secondary" onClick={p.onSyncGestionale} disabled={p.isSyncing}>
-          <RefreshCw size={16} strokeWidth={1.75} className={p.isSyncing ? 'animate-spin' : ''} aria-hidden /> {p.isSyncing ? 'Sincronizzazione…' : 'Sincronizza col gestionale'}
-        </button>
-        <span className="text-xs text-ink-500">{p.lastSyncInfo ? `Ultima: ${p.lastSyncInfo}` : p.syncHint}</span>
-      </div>
-    </Panel>
   </div>
 );
 

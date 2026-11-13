@@ -94,7 +94,7 @@ fi
 
 start_cloud() {
   echo "Avvio il server cloud di sviluppo su 127.0.0.1:$CLOUD_PORT (archivio in memoria, Retell finto)"
-  (cd "$REPO" && unset VERCEL_ENV OPTIROUTE_SYNC RETELL_API_KEY && PORT="$CLOUD_PORT" CRON_SECRET="$CLOUD_KEY" FAKE_RETELL=1 \
+  (cd "$REPO" && unset VERCEL_ENV RETELL_API_KEY && PORT="$CLOUD_PORT" CRON_SECRET="$CLOUD_KEY" FAKE_RETELL=1 \
     exec setsid node scripts/dev-cloud-server.mjs) > "$LOGS/cloud-server.log" 2>&1 &
   STARTED_PIDS+=("$!")
   wait_http "http://127.0.0.1:$CLOUD_PORT/api/cloud?op=ping" 30

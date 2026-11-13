@@ -15,7 +15,7 @@ export interface ImportRow {
   street?: string;       // via (per il geocoding con fallback)
   civic?: string;
   fullAddress: string;
-  shortAddress?: string; // via + civico (pronunciato in chiamata e per il gestionale)
+  shortAddress?: string; // via + civico (pronunciato in chiamata)
   comune?: string;
   province?: string;
   phone?: string;

@@ -1,5 +1,5 @@
 // Rete di sicurezza per TUTTI i test: nessuna richiesta può uscire verso
-// servizi veri (gestionale/Firestore, Retell, Upstash, geocoding...). Sono
+// servizi veri (Retell, Upstash, geocoding...). Sono
 // ammessi solo i server finti in ascolto su questa macchina. I test che
 // simulano fetch (vi.stubGlobal, vi.fn) sostituiscono comunque questa funzione.
 const realFetch = globalThis.fetch;

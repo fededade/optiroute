@@ -1,5 +1,5 @@
 import '../server/tz';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Appointment } from '../src/types';
 import type { CloudConfig } from '../src/services/cloudProtocol';
 import { applyAppointmentChanges } from '../src/services/cloudProtocol';
@@ -372,25 +372,5 @@ describe('concorrenza e prudenza', () => {
     expect(h.retell.created).toHaveLength(0);
     // il lock è stato rilasciato
     expect(await h.store.acquireLock('dopo', 1000)).toBe(true);
-  });
-});
-
-describe('sync col gestionale', () => {
-  it('al massimo una volta l\'ora; errori nel riepilogo', async () => {
-    const confirmed = stop('c', D, '17:00', '17:20', P.navigli, { status: 'confirmed', callOutcome: outcome('confermato') });
-    const h = await setup([...world({ autoCall: undefined }), confirmed]);
-    const sync = vi.fn(async (list: Appointment[]) => ({ sent: list.filter(a => a.id === 'c').length, failed: 0, errors: [], envName: 'collaudo' }));
-    h.deps.sync = sync;
-    expect((await runTick(h.deps, 'scheduler')).synced).toBe(1);
-    h.clock.now = at('2026-11-11', '10:30');
-    expect((await runTick(h.deps, 'scheduler')).synced).toBe(0);
-    expect((await runTick(h.deps, 'webhook')).synced).toBe(0);
-    expect(sync).toHaveBeenCalledTimes(1);
-    h.clock.now = at('2026-11-11', '11:00');
-    sync.mockResolvedValueOnce({ sent: 0, failed: 1, errors: ['x'], envName: 'collaudo' });
-    const s = await runTick(h.deps, 'scheduler');
-    expect(sync).toHaveBeenCalledTimes(2);
-    expect(s.error).toMatch(/1 invii non riusciti/);
-    expect((await h.store.readMeta()).lastSync).toMatchObject({ sent: 0, failed: 1 });
   });
 });

@@ -7,9 +7,8 @@
 // res.status().json(), res.setHeader, res.end). Solo node:http, nessuna
 // dipendenza. Archivio in memoria (OPTIROUTE_STORE=memory): i dati si perdono
 // alla chiusura. CORS aperto a qualunque origine (SOLO per questo strumento
-// locale), così il browser in `npm run dev` può puntarci. Con l'archivio in
-// memoria la sync col gestionale vero è SPENTA (OPTIROUTE_SYNC=on la riaccende:
-// scriverebbe sul Firestore di collaudo o di produzione).
+// locale), così il browser in `npm run dev` può puntarci. Non c'è nessun
+// invio al gestionale (tolto a novembre 2026).
 //
 // Uso:
 //   CRON_SECRET=prova FAKE_RETELL=1 node scripts/dev-cloud-server.mjs

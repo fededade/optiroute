@@ -154,19 +154,28 @@ describe.each(backends)('%s', (_name, make) => {
   it('metadati', async () => {
     const store = make();
     expect(await store.readMeta()).toEqual({
-      lastTick: null, schedulerSeenAt: null, webhookSeenAt: null, lastSync: null, lastTickWallMs: null,
+      lastTick: null, schedulerSeenAt: null, webhookSeenAt: null, lastTickWallMs: null,
     });
     await store.updateMeta({ webhookSeenAt: '2026-11-11T10:00:00.000Z', lastTickWallMs: 1234 });
-    await store.updateMeta({ lastSync: { at: '2026-11-11T10:00:00.000Z', sent: 2, failed: 0 } });
     const meta = await store.readMeta();
     expect(meta.webhookSeenAt).toBe('2026-11-11T10:00:00.000Z');
     expect(meta.lastTickWallMs).toBe(1234);
-    expect(meta.lastSync).toEqual({ at: '2026-11-11T10:00:00.000Z', sent: 2, failed: 0 });
     expect(meta.schedulerSeenAt).toBeNull();
   });
 });
 
 describe('compressione e chiavi', () => {
+  it('metadati salvati prima della rimozione dell\'invio al gestionale: il vecchio campo lastSync è ignorato', async () => {
+    const redis = new MemoryRedis();
+    const store = new MemoryStore('optiroute:test:', redis);
+    redis.exec(['HSET', 'optiroute:test:meta', 'lastSync', JSON.stringify({ at: '2026-11-11T10:00:00.000Z', sent: 2, failed: 0 }), 'webhookSeenAt', '2026-11-11T09:00:00.000Z']);
+    expect(await store.readMeta()).toEqual({
+      lastTick: null, schedulerSeenAt: null, webhookSeenAt: '2026-11-11T09:00:00.000Z', lastTickWallMs: null,
+    });
+    await store.updateMeta({ lastTickWallMs: 5 });
+    expect((await store.readMeta()).lastTickWallMs).toBe(5);
+  });
+
   it('elenco salvato come gzip + base64, anche grande', async () => {
     const redis = new MemoryRedis();
     const store = new MemoryStore('optiroute:test:', redis);

@@ -18,6 +18,7 @@ import {
 } from '../src/services/gestionaleHost';
 import { GestionaleSession, GestionaleSessionError, SESSION_REFRESH_MARGIN_MS, checkParent } from '../src/services/gestionaleSession';
 import { fetchBridgeSnapshotViaParent } from '../src/services/bridgeService';
+import { bridgeInboxHere, turnAutomationsHere, type AutomationPlace } from '../src/services/automationTurn';
 import { P, appt, stop, tech } from './fixtures';
 
 // Lato browser del collegamento con il gestionale: memoria del browser
@@ -501,5 +502,31 @@ describe('cloud con l\'accesso dal gestionale', () => {
     const r = await cloudStatus({ key: '', credential: session.credential, fetch: cloud.fetch });
     expect(r.ok === false && r.error.kind).toBe('offline');
     session.destroy();
+  });
+});
+
+// --- Dove gira l'inbox del bridge ---
+
+describe('turno degli automatismi e inbox del bridge', () => {
+  const place = (over: Partial<AutomationPlace>): AutomationPlace =>
+    ({ embedded: false, isAutomationTab: true, cloudActive: true, leaseHolder: false, ...over });
+
+  it('fuori dal gestionale: come prima (scheda principale e, con il cloud, il turno)', () => {
+    expect(bridgeInboxHere(place({ cloudActive: false }))).toBe(true);
+    expect(bridgeInboxHere(place({ leaseHolder: true }))).toBe(true);
+    expect(bridgeInboxHere(place({ leaseHolder: false }))).toBe(false);
+    expect(bridgeInboxHere(place({ isAutomationTab: false, cloudActive: false }))).toBe(false);
+  });
+
+  it('dentro il gestionale: nella scheda principale anche senza turno', () => {
+    expect(bridgeInboxHere(place({ embedded: true, leaseHolder: false }))).toBe(true);
+    expect(bridgeInboxHere(place({ embedded: true, leaseHolder: true }))).toBe(true);
+    expect(bridgeInboxHere(place({ embedded: true, isAutomationTab: false }))).toBe(false);
+  });
+
+  it('lo smistamento automatico resta legato al turno, anche nel gestionale', () => {
+    expect(turnAutomationsHere(place({ embedded: true, leaseHolder: false }))).toBe(false);
+    expect(turnAutomationsHere(place({ embedded: true, leaseHolder: true }))).toBe(true);
+    expect(turnAutomationsHere(place({ cloudActive: false }))).toBe(true);
   });
 });

@@ -34,6 +34,7 @@ import { useCloudSync } from './hooks/useCloudSync';
 import { loadCloudSettings, saveCloudSettings, type CloudSettings } from './services/cloudSettings';
 import type { CloudConfig } from './services/cloudProtocol';
 import { prepareEmbeddedCloud } from './services/cloudSyncCore';
+import { bridgeInboxHere, turnAutomationsHere } from './services/automationTurn';
 import { fetchBridgeSnapshotViaParent } from './services/bridgeService';
 import type { GestionaleContext } from './Components/GestionaleGate';
 import AppointmentModal from './Components/AppointmentModal';
@@ -555,9 +556,12 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     applyConfig: applyCloudConfig,
   });
   // Smistamento automatico e inbox del bridge: con il cloud, un solo
-  // dispositivo alla volta (quello che ha il turno)
+  // dispositivo alla volta (quello che ha il turno). Dentro il gestionale
+  // l'inbox del bridge gira comunque qui (vedi services/automationTurn)
   const cloudLeaseHolder = cloudSync.state?.lease?.holder === true;
-  const browserAutomationsHere = isAutomationTab && (!cloudActive || cloudLeaseHolder);
+  const automationPlace = { embedded, isAutomationTab, cloudActive, leaseHolder: cloudLeaseHolder };
+  const browserAutomationsHere = turnAutomationsHere(automationPlace);
+  const bridgeHere = bridgeInboxHere(automationPlace);
 
   // Applica l'esito della conversazione alla pratica (riduttore puro del
   // pilota). Pilota spento: mappatura di sempre (confermato -> Confermata,
@@ -731,7 +735,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
 
   const bridgeInbox = useBridgeInbox({
     settings: bridgeSettings,
-    isLeader: browserAutomationsHere,
+    isLeader: bridgeHere,
     appointmentsRef,
     importBridge: importFromBridge,
     isImportBusy: isImportOrDispatchBusy,
@@ -740,13 +744,13 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   });
 
   // Il gestionale avvisa che il bridge ha novità: si scarica subito
-  const browserAutomationsHereRef = useRef(browserAutomationsHere);
-  browserAutomationsHereRef.current = browserAutomationsHere;
+  const bridgeHereRef = useRef(bridgeHere);
+  bridgeHereRef.current = bridgeHere;
   const bridgeSyncNow = bridgeInbox.syncNow;
   useEffect(() => {
     if (!gestionale) return;
     return gestionale.host.on('bridge.updated', () => {
-      if (browserAutomationsHereRef.current) void bridgeSyncNow();
+      if (bridgeHereRef.current) void bridgeSyncNow();
     });
   }, [gestionale, bridgeSyncNow]);
 
@@ -1990,7 +1994,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
           onPause={() => setAutopilot(s => ({ ...s, enabled: false }))}
           onOpenSettings={() => setShowAutopilotSettings(true)}
           onBridgeSyncNow={() => { void bridgeInbox.syncNow(); }}
-          cloud={cloudActive ? { mirror: !isAutomationTab, state: cloudSync.state, leaseHolder: cloudLeaseHolder } : null}
+          cloud={cloudActive ? { mirror: !isAutomationTab, state: cloudSync.state, leaseHolder: cloudLeaseHolder, bridgeHere: embedded && bridgeHere } : null}
           requestEnable={autopilotEnableRequest}
           onIntroOpenChange={setAutopilotIntroOpen}
         />

@@ -306,6 +306,44 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       await G.ctx.close();
     });
 
+    // 2b) Il turno del cloud ce l'ha UN ALTRO dispositivo: il bridge sta su
+    //     questo PC, quindi le sue pratiche arrivano lo stesso
+    await step('bridge con il turno su un altro dispositivo: le pratiche arrivano lo stesso', async () => {
+      await api('POST', '/__test/reset');
+      const OTHER = 'dev-e2e-altro-dispositivo';
+      await seedServer([], OTHER); // il caricamento prende il turno per l'altro dispositivo
+      const holdTurn = () => api('GET', `/api/cloud?op=pull&rev=-1&configRev=-1&device=${OTHER}`, { headers: auth });
+      const first = await holdTurn();
+      assert.equal(first.json.lease.holder, true, 'l\'altro dispositivo ha il turno');
+      const keepAlive = setInterval(() => { void holdTurn(); }, 15000);
+      try {
+        const G = await newPage(browser, { localSeed: { optiroute_technicians_v1: [TECH], optiroute_cloud_v1: DEVICE_SEED } });
+        await G.app.locator('[data-testid="autopilot-bar"]').waitFor({ timeout: 30000 });
+        // il turno resta all'altro dispositivo: lo dice la riga del turno (solo smistamento)
+        await G.app.getByTestId('cloud-chip').waitFor({ timeout: 20000 });
+        const chip = G.app.getByTestId('bridge-chip');
+        await waitFor(async () => /avvialo dalla barra del gestionale/.test(await chip.innerText()), 'chip bridge con lo stato normale', 30000)
+          .catch(async err => { log('chip:', await chip.textContent().catch(() => '?')); throw err; });
+        assert.doesNotMatch(await chip.innerText(), /gestito da un altro dispositivo/);
+        await parentEval(G.page, () => {
+          window.__bridge = { status: 'ok', snapshot: { bridge: 'optiroute-bridge', version: 1, generatedAt: new Date().toISOString(),
+            portals: [{ id: 'prelios', status: 'ok', lastSync: new Date().toISOString() }],
+            pratiche: [{ portal: 'prelios', codice: 'ISP-T1', intestatario: 'Neri Nino', via: 'Via Turno', civico: '3', comune: 'Milano', provincia: 'MI', telefono: '+390233330003', note: '', progetto: '', tipologia: '', esito: '', aggiornatoIl: '' }] } };
+          window.__emit('bridge.updated');
+        });
+        await waitFor(async () => (await serverList()).some(a => a.periziaCode === 'ISP-T1'), 'pratica del bridge sul server senza turno', 30000);
+        assert.ok(true, 'pratica ISP-T1 importata senza il turno');
+        const still = await api('GET', `/api/cloud?op=pull&rev=-1&configRev=-1&device=${OTHER}`, { headers: auth });
+        assert.equal(still.json.lease.holder, true, 'il turno è rimasto all\'altro dispositivo');
+        const leaseLine = G.app.getByTestId('cloud-lease');
+        if (await leaseLine.count()) assert.doesNotMatch(await leaseLine.innerText(), /bridge/);
+        await G.page.screenshot({ path: path.join(OUT, '2b-bridge-senza-turno.png') });
+        await G.ctx.close();
+      } finally {
+        clearInterval(keepAlive);
+      }
+    });
+
     // 3) Conferma -> "changed" -> il gestionale legge i sopralluoghi confermati
     await step('conferma: changed al gestionale e sopralluogo in ?op=sopralluoghi con CORS', async () => {
       await api('POST', '/__test/reset');

@@ -15,6 +15,7 @@ export interface CloudBarInfo {
   mirror: boolean;               // scheda secondaria: sincronizza la scheda principale
   state: CloudSyncState | null;  // stato della sincronizzazione (scheda principale)
   leaseHolder: boolean;          // smistamento automatico e bridge girano su questo dispositivo
+  bridgeHere?: boolean;          // (gestionale) il bridge gira qui anche senza turno
 }
 
 interface AutopilotBarProps {
@@ -169,7 +170,7 @@ const AutopilotBar: React.FC<AutopilotBarProps> = ({
   const cloudHint = cloud && on && !cloud.mirror && cloudState && cloudState.phase !== 'starting';
   const cloudLease = cloud && !cloud.mirror && cloudState && !cloud.leaseHolder
     && (cloudState.phase === 'synced' || cloudState.phase === 'sending')
-    && ((on && settings.autoDispatch) || bridge.kind !== 'disabled');
+    && ((on && settings.autoDispatch) || (!cloud.bridgeHere && bridge.kind !== 'disabled'));
 
   // Etichette di stato del pilota acceso
   let counters: React.ReactNode = null;
@@ -212,7 +213,13 @@ const AutopilotBar: React.FC<AutopilotBarProps> = ({
     ));
   }
   if (cloudLease) {
-    secondary.push(<span key="lease" data-testid="cloud-lease">Automatismi attivi su un altro dispositivo (smistamento e bridge).</span>);
+    secondary.push(
+      <span key="lease" data-testid="cloud-lease">
+        {cloud?.bridgeHere
+          ? 'Smistamento automatico attivo su un altro dispositivo.'
+          : 'Automatismi attivi su un altro dispositivo (smistamento e bridge).'}
+      </span>
+    );
   }
 
   const CloudIcon = chip?.down ? CloudOff : Cloud;

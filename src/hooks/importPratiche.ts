@@ -3,6 +3,7 @@ import { geocodeAddressParts } from '../services/geocodingService';
 import { matchTechnician } from '../services/technicianService';
 import { provinceToCode } from '../utils/provinces';
 import type { BridgePratica } from '../services/bridgeService';
+import { codeKey, praticaKey } from '../services/praticaCode';
 
 // Nucleo dell'import delle pratiche, comune all'import da file (Excel / MISI)
 // e all'inbox del bridge: righe strutturate -> pratiche (merge per codice,
@@ -44,8 +45,10 @@ export const importRowsToAppointments = async (
   // Merge per codice pratica: le pratiche già presenti vengono AGGIORNATE
   // (telefono/note/progetto) invece di essere duplicate — è il flusso del
   // file arricchito dal bridge Prelios.
+  // Confronto per chiave del codice ("845326" = "845.326" = "Rif: ISP 845.326"
+  // in testa alle note): i codici salvati non cambiano
   const byCode = new Map<string, Appointment>();
-  existingAppointments.forEach(a => { if (a.periziaCode) byCode.set(a.periziaCode, a); });
+  existingAppointments.forEach(a => { const key = praticaKey(a); if (key) byCode.set(key, a); });
 
   const newAppointments: Appointment[] = [];
   const updates = new Map<string, Partial<Appointment>>();
@@ -59,12 +62,13 @@ export const importRowsToAppointments = async (
     onProgress?.(processedCount, importRows.length);
 
     // Dedupe righe duplicate nello stesso file
-    if (row.codice) {
-      if (seenCodes.has(row.codice)) continue;
-      seenCodes.add(row.codice);
+    const rowKey = codeKey(row.codice);
+    if (rowKey) {
+      if (seenCodes.has(rowKey)) continue;
+      seenCodes.add(rowKey);
     }
 
-    const existing = row.codice ? byCode.get(row.codice) : undefined;
+    const existing = rowKey ? byCode.get(rowKey) : undefined;
     if (existing) {
       updates.set(existing.id, {
         phone: row.phone || existing.phone,

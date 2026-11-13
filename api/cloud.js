@@ -36,6 +36,32 @@ var timezoneStatus = () => {
   }
 };
 
+// src/services/praticaCode.ts
+var RIF_LINE = /^\s*rif\s*:\s*(.*?)\s*$/i;
+var notesRef = (notes) => {
+  if (!notes) return null;
+  const lines = notes.split(/\r?\n/);
+  const i = lines.findIndex((l) => l.trim() !== "");
+  if (i < 0) return null;
+  const m = RIF_LINE.exec(lines[i]);
+  if (!m || !m[1]) return null;
+  return { code: m[1], rest: lines.slice(i + 1).join("\n").trim() };
+};
+var displayCode = (a) => a.periziaCode?.trim() || notesRef(a.notes)?.code || "";
+var displayNotes = (a) => {
+  if (a.periziaCode?.trim()) return a.notes || "";
+  const ref = notesRef(a.notes);
+  return ref ? ref.rest : a.notes || "";
+};
+var NUMBERED = /^(?:[A-Z]+ ?)?(\d{5,7}|\d{2,4}[. ]\d{3})$/;
+var codeKey = (text) => {
+  const clean = (text || "").trim().replace(/\s+/g, " ").toUpperCase();
+  if (!clean) return "";
+  const m = NUMBERED.exec(clean);
+  return m ? m[1].replace(/\D/g, "") : clean;
+};
+var praticaKey = (a) => codeKey(displayCode(a));
+
 // src/services/cloudProtocol.ts
 var CLOUD_PROTOCOL_VERSION = 1;
 var CLOUD_API_PATH = "/api/cloud";
@@ -57,8 +83,8 @@ var applyAppointmentChanges = (all, changes) => {
         replace(index, { ...list[index], ...change.value });
         continue;
       }
-      const code = change.value.periziaCode?.trim();
-      const twin = code ? list.findIndex((a) => a.periziaCode?.trim() === code) : -1;
+      const key = praticaKey(change.value);
+      const twin = key ? list.findIndex((a) => praticaKey(a) === key) : -1;
       if (twin >= 0) {
         if (!list[twin].phone?.trim() && change.value.phone?.trim()) {
           replace(twin, { ...list[twin], phone: change.value.phone });
@@ -85,7 +111,7 @@ var toSopralluogo = (a, technicianName) => {
   const o = a.callOutcome;
   return {
     id: a.id,
-    codice: s(a.periziaCode),
+    codice: s(displayCode(a)),
     data: s(a.date),
     oraInizio: s(a.startTime),
     oraFine: s(a.endTime),
@@ -102,7 +128,7 @@ var toSopralluogo = (a, technicianName) => {
     lng: n(a.coords?.lng),
     approssimato: a.approximate === true,
     progetto: s(a.project),
-    note: s(a.notes),
+    note: s(displayNotes(a)),
     urgente: a.urgent === true,
     conferma: byCall ? "chiamata" : "operatore",
     chiamata: o ? {
@@ -117,7 +143,7 @@ var compare = (x, y) => x.data.localeCompare(y.data) || x.oraInizio.localeCompar
 var buildSopralluoghiExport = (appointments, technicians) => {
   const names = new Map(technicians.map((t) => [t.id, s(t.name)]));
   const confirmed = [];
-  const others = /* @__PURE__ */ new Set();
+  const others = /* @__PURE__ */ new Map();
   const otherIds = [];
   for (const a of appointments) {
     if (!a || typeof a.id !== "string") continue;
@@ -125,13 +151,14 @@ var buildSopralluoghiExport = (appointments, technicians) => {
       confirmed.push(toSopralluogo(a, a.technicianId && names.get(a.technicianId) || ""));
     } else {
       otherIds.push(a.id);
-      const code = s(a.periziaCode);
-      if (code) others.add(code);
+      const code = s(displayCode(a));
+      const key = codeKey(code);
+      if (key && !others.has(key)) others.set(key, code);
     }
   }
   confirmed.sort(compare);
-  const confirmedCodes = new Set(confirmed.map((c) => c.codice).filter(Boolean));
-  const notConfirmed = [...others].filter((c) => !confirmedCodes.has(c)).sort();
+  const confirmedKeys = new Set(confirmed.map((c) => codeKey(c.codice)).filter(Boolean));
+  const notConfirmed = [...others].filter(([key]) => !confirmedKeys.has(key)).map(([, code]) => code).sort();
   const notConfirmedIds = [...new Set(otherIds)].sort();
   return { confirmed, notConfirmed, notConfirmedIds };
 };

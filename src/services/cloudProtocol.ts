@@ -1,5 +1,6 @@
 import type { Appointment, Coordinates, Technician } from '../types';
 import type { AutopilotSettings } from './autopilotService';
+import { praticaKey } from './praticaCode';
 
 // Protocollo fra il browser e il server (pilota in cloud). Condiviso da
 // entrambi: tipi dei messaggi e le funzioni PURE con cui si confrontano e si
@@ -102,8 +103,10 @@ export const applyAppointmentChanges = (all: Appointment[], changes: Appointment
         replace(index, { ...list[index], ...change.value });
         continue;
       }
-      const code = change.value.periziaCode?.trim();
-      const twin = code ? list.findIndex(a => a.periziaCode?.trim() === code) : -1;
+      // stessa pratica anche se il numero è scritto in modo diverso
+      // ("845326" / "845.326" / "Rif: ISP 845.326" nelle note)
+      const key = praticaKey(change.value);
+      const twin = key ? list.findIndex(a => praticaKey(a) === key) : -1;
       if (twin >= 0) {
         if (!list[twin].phone?.trim() && change.value.phone?.trim()) {
           replace(twin, { ...list[twin], phone: change.value.phone });

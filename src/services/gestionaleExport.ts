@@ -1,4 +1,5 @@
 import type { Appointment, Technician } from '../types';
+import { codeKey, displayCode, displayNotes } from './praticaCode';
 
 // Elenco dei sopralluoghi CONFERMATI da consegnare al gestionale
 // (GET /api/cloud?op=sopralluoghi). Funzioni PURE, usate dal server.
@@ -61,7 +62,7 @@ export const toSopralluogo = (a: Appointment, technicianName: string): Sopralluo
   const o = a.callOutcome;
   return {
     id: a.id,
-    codice: s(a.periziaCode),
+    codice: s(displayCode(a)),
     data: s(a.date),
     oraInizio: s(a.startTime),
     oraFine: s(a.endTime),
@@ -78,7 +79,7 @@ export const toSopralluogo = (a: Appointment, technicianName: string): Sopralluo
     lng: n(a.coords?.lng),
     approssimato: a.approximate === true,
     progetto: s(a.project),
-    note: s(a.notes),
+    note: s(displayNotes(a)),
     urgente: a.urgent === true,
     conferma: byCall ? 'chiamata' : 'operatore',
     chiamata: o
@@ -99,6 +100,8 @@ const compare = (x: Sopralluogo, y: Sopralluogo): number =>
   x.id.localeCompare(y.id);
 
 // confirmed: i sopralluoghi confermati, in ordine di data e ora.
+// codice: periziaCode, oppure il "Rif:" in testa alle note (import da My Maps);
+// note: senza quella riga quando è usata come codice.
 // notConfirmed: i codici (non vuoti, senza doppioni) di tutte le altre
 // pratiche presenti in OptiRoute; mai un codice che compare anche fra i
 // confermati (due pratiche con lo stesso codice, una confermata: il codice
@@ -109,7 +112,7 @@ const compare = (x: Sopralluogo, y: Sopralluogo): number =>
 export const buildSopralluoghiExport = (appointments: Appointment[], technicians: Technician[]): SopralluoghiExport => {
   const names = new Map(technicians.map(t => [t.id, s(t.name)]));
   const confirmed: Sopralluogo[] = [];
-  const others = new Set<string>();
+  const others = new Map<string, string>(); // chiave -> codice come scritto (il primo)
   const otherIds: string[] = [];
   for (const a of appointments) {
     if (!a || typeof a.id !== 'string') continue;
@@ -117,13 +120,15 @@ export const buildSopralluoghiExport = (appointments: Appointment[], technicians
       confirmed.push(toSopralluogo(a, (a.technicianId && names.get(a.technicianId)) || ''));
     } else {
       otherIds.push(a.id);
-      const code = s(a.periziaCode);
-      if (code) others.add(code);
+      const code = s(displayCode(a));
+      const key = codeKey(code);
+      if (key && !others.has(key)) others.set(key, code);
     }
   }
   confirmed.sort(compare);
-  const confirmedCodes = new Set(confirmed.map(c => c.codice).filter(Boolean));
-  const notConfirmed = [...others].filter(c => !confirmedCodes.has(c)).sort();
+  // stesso numero scritto in modi diversi ("845326" / "845.326") = stessa pratica
+  const confirmedKeys = new Set(confirmed.map(c => codeKey(c.codice)).filter(Boolean));
+  const notConfirmed = [...others].filter(([key]) => !confirmedKeys.has(key)).map(([, code]) => code).sort();
   const notConfirmedIds = [...new Set(otherIds)].sort();
   return { confirmed, notConfirmed, notConfirmedIds };
 };

@@ -137,32 +137,8 @@ export const kmLabel =(km?: number): string =>
 // Le pratiche importate da Google My Maps non hanno periziaCode: l'import
 // mette il riferimento come prima riga delle note ("Rif: ISP 845.326").
 // Qui lo si mostra come codice; i dati salvati non cambiano.
-
-const RIF_LINE = /^\s*rif\s*:\s*(.*?)\s*$/i;
-
-// Riga "Rif: …" se è la prima riga non vuota delle note
-const notesRef = (notes?: string): { code: string; rest: string } | null => {
-  if (!notes) return null;
-  const lines = notes.split(/\r?\n/);
-  const i = lines.findIndex(l => l.trim() !== '');
-  if (i < 0) return null;
-  const m = RIF_LINE.exec(lines[i]);
-  if (!m || !m[1]) return null;
-  return { code: m[1], rest: lines.slice(i + 1).join('\n').trim() };
-};
-
-type CodeSource = Pick<Appointment, 'periziaCode' | 'notes'>;
-
-// Codice da mostrare: periziaCode; altrimenti il "Rif:" in testa alle note
-export const displayCode = (a: CodeSource): string =>
-  a.periziaCode?.trim() || notesRef(a.notes)?.code || '';
-
-// Note da mostrare: senza la riga "Rif:" quando è usata come codice
-export const displayNotes = (a: CodeSource): string => {
-  if (a.periziaCode?.trim()) return a.notes || '';
-  const ref = notesRef(a.notes);
-  return ref ? ref.rest : (a.notes || '');
-};
+// (Le funzioni stanno in services/praticaCode, condivise con il server.)
+export { displayCode, displayNotes, notesRef } from '../services/praticaCode';
 
 // Confronto "di sostanza": senza maiuscole, accenti, spazi e punteggiatura
 const squash = (s?: string): string => norm(s || '').replace(/[\s,.;:'"\-–—/()]+/g, '');

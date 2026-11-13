@@ -1,4 +1,5 @@
 import type { Appointment } from '../types';
+import { codeKey, praticaKey } from './praticaCode';
 
 // Client del bridge locale dei portali (prelios-bridge, contratto v1):
 // un programma sul PC dell'operatore legge le pratiche dai portali e le
@@ -225,9 +226,12 @@ export interface BridgeDiff {
 // ha un telefono. Un telefono già presente non si sovrascrive mai (potrebbe
 // averlo corretto l'operatore).
 export const diffBridgeSnapshot = (snapshot: Pick<BridgeSnapshot, 'pratiche'>, appointments: Appointment[]): BridgeDiff => {
+  // Confronto per chiave del codice: "845326" del bridge = "845.326" salvato
+  // o "Rif: ISP 845.326" in testa alle note (import da My Maps)
   const byCode = new Map<string, Appointment>();
   for (const a of appointments) {
-    if (a.periziaCode && !byCode.has(a.periziaCode)) byCode.set(a.periziaCode, a);
+    const key = praticaKey(a);
+    if (key && !byCode.has(key)) byCode.set(key, a);
   }
 
   const nuove: BridgePratica[] = [];
@@ -236,10 +240,11 @@ export const diffBridgeSnapshot = (snapshot: Pick<BridgeSnapshot, 'pratiche'>, a
 
   for (const p of snapshot.pratiche) {
     const codice = p.codice?.trim();
-    if (!codice || seen.has(codice)) continue;
-    seen.add(codice);
+    const key = codeKey(codice);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
 
-    const existing = byCode.get(codice);
+    const existing = byCode.get(key);
     if (!existing) {
       nuove.push(p);
       continue;

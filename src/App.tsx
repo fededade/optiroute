@@ -23,7 +23,7 @@ import {
   reduceCallOutcome,
   reduceCallStarted,
 } from './services/autopilotService';
-import { applyPatches, type AppointmentPatch } from './services/slotService';
+import { applyPatches, localDateStr, type AppointmentPatch } from './services/slotService';
 import type { BridgeSettings } from './services/bridgeService';
 import { type ImportRow, applyImportResult, importRowsToAppointments } from './hooks/importPratiche';
 import { useTabLock } from './hooks/useTabLock';
@@ -139,7 +139,8 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   const [kmzFile, setKmzFile] = useState<File | null>(null);
 
   // Settings & View
-  const [currentDate, setCurrentDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  // Data LOCALE: con toISOString (UTC) fra mezzanotte e l'una/le due "oggi" era ancora ieri
+  const [currentDate, setCurrentDate] = useState<string>(() => localDateStr(new Date()));
   const [viewMode, setViewMode] = useState<ViewMode>('day');
   const [startTime, setStartTime] = useState(() => loadSettings()?.startTime || "09:00");
   const [endTimeLimit, setEndTimeLimit] = useState(() => loadSettings()?.endTimeLimit || "18:00");
@@ -1388,7 +1389,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   const tomorrowStr = (() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
+    return localDateStr(d);
   })();
   const withFollowUp = allAppointments
     .filter(a => (a.status === 'issue' || a.status === 'pending') && a.followUpDate)
@@ -1413,7 +1414,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   })();
 
   // Carico di lavoro mostrato sul chip: in attesa + proposte + confermate da oggi in poi
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = localDateStr(new Date());
   const countForTech = (techId: string): number =>
     allAppointments.filter(a =>
       a.technicianId === techId &&

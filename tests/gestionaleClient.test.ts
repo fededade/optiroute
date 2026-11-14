@@ -509,7 +509,7 @@ describe('cloud con l\'accesso dal gestionale', () => {
 
 describe('turno degli automatismi e inbox del bridge', () => {
   const place = (over: Partial<AutomationPlace>): AutomationPlace =>
-    ({ embedded: false, isAutomationTab: true, cloudActive: true, leaseHolder: false, ...over });
+    ({ embedded: false, isAutomationTab: true, cloudActive: true, leaseHolder: false, cloudLoaded: true, ...over });
 
   it('fuori dal gestionale: come prima (scheda principale e, con il cloud, il turno)', () => {
     expect(bridgeInboxHere(place({ cloudActive: false }))).toBe(true);
@@ -518,10 +518,22 @@ describe('turno degli automatismi e inbox del bridge', () => {
     expect(bridgeInboxHere(place({ isAutomationTab: false, cloudActive: false }))).toBe(false);
   });
 
-  it('dentro il gestionale: nella scheda principale anche senza turno', () => {
+  it('fuori dal gestionale il primo scaricamento non cambia la regola (vale il turno)', () => {
+    expect(bridgeInboxHere(place({ cloudActive: false, cloudLoaded: false }))).toBe(true);
+    expect(bridgeInboxHere(place({ leaseHolder: true, cloudLoaded: false }))).toBe(true);
+    expect(bridgeInboxHere(place({ leaseHolder: false, cloudLoaded: false }))).toBe(false);
+  });
+
+  it('dentro il gestionale: nella scheda principale anche senza turno, dopo il primo scaricamento', () => {
     expect(bridgeInboxHere(place({ embedded: true, leaseHolder: false }))).toBe(true);
     expect(bridgeInboxHere(place({ embedded: true, leaseHolder: true }))).toBe(true);
     expect(bridgeInboxHere(place({ embedded: true, isAutomationTab: false }))).toBe(false);
+  });
+
+  it('dentro il gestionale: prima del primo scaricamento dal cloud l\'inbox aspetta', () => {
+    expect(bridgeInboxHere(place({ embedded: true, cloudLoaded: false }))).toBe(false);
+    expect(bridgeInboxHere(place({ embedded: true, leaseHolder: true, cloudLoaded: false }))).toBe(false);
+    expect(bridgeInboxHere(place({ embedded: true, isAutomationTab: false, cloudLoaded: false }))).toBe(false);
   });
 
   it('lo smistamento automatico resta legato al turno, anche nel gestionale', () => {

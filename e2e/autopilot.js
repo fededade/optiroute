@@ -1,7 +1,7 @@
 // E2E del pilota automatico e dell'inbox del bridge (dati sintetici).
 // Interfaccia INTEGRATA (struttura a sezioni + finestre ridisegnate): cambiano
 // solo i percorsi per raggiungere i comandi, le asserzioni sono quelle di prima.
-// Avvio: VITE_PORT=5271 node autopilot.js [abcde]   (server Vite già acceso)
+// Avvio: VITE_PORT=5271 node autopilot.js [abcdef]   (server Vite già acceso)
 const { chromium } = require('playwright');
 const { assert, counter, report } = require('./lib');
 const path = require('path');
@@ -477,10 +477,35 @@ async function scenarioE(browser) {
   await context.close();
 }
 
+// ---------------------------------------------------------------------------
+// Pratica in attesa con il tecnico di una configurazione vecchia (non esiste
+// più): lo smistamento automatico la assegna per zona e la propone lo stesso
+async function scenarioF(browser) {
+  const seed = {
+    optiroute_appointments_v1: [pend('f1', 'Tecnico Sparito', P.cityLife, { technicianId: 'tech-inesistente' })],
+    optiroute_settings_v1: { ...settings({}, { enabled: true, autoDispatch: true }), autopilotIntroSeen: true },
+  };
+  const { context, page } = await newPage(browser, { time: ROME_10, seed });
+  const all = await waitFor(async () => {
+    const s = await state(page);
+    return byTitle(s, 'Tecnico Sparito').status === 'proposed' && s;
+  }, 'pratica con tecnico inesistente proposta', 30000).catch(async err => {
+    log('stato:', JSON.stringify((await state(page)).map(a => [a.id, a.status, a.technicianId])));
+    throw err;
+  });
+  const f1 = byTitle(all, 'Tecnico Sparito');
+  assert.equal(f1.technicianId, 'tech-1', 'assegnata per zona al tecnico esistente');
+  assert.equal(f1.date, '2026-11-12', 'proposta da domani');
+  assert.ok(f1.startTime, 'con orario');
+  await shot(page, 'f-tecnico-inesistente.png');
+  results.push(`f) OK: pratica con tecnico inesistente riassegnata a tech-1 e proposta il ${f1.date} alle ${f1.startTime}`);
+  await context.close();
+}
+
 (async () => {
   const browser = await chromium.launch();
   const only = process.argv[2];
-  const all = { a: scenarioA, b: scenarioB, c: scenarioC, d: scenarioD, e: scenarioE };
+  const all = { a: scenarioA, b: scenarioB, c: scenarioC, d: scenarioD, e: scenarioE, f: scenarioF };
   let failed = false;
   for (const [k, fn] of Object.entries(all)) {
     if (only && !only.includes(k)) continue;

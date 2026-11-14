@@ -17,6 +17,7 @@ import {
   approveForCalling,
   attentionItems,
   autopilotStats,
+  baseFor,
   cancelAutoCalls,
   isCallInFlight,
   reduceCallLaunchResult,
@@ -25,7 +26,7 @@ import {
 } from './services/autopilotService';
 import { applyPatches, localDateStr, type AppointmentPatch } from './services/slotService';
 import type { BridgeSettings } from './services/bridgeService';
-import { type ImportRow, applyImportResult, importRowsToAppointments } from './hooks/importPratiche';
+import { type ImportRow, applyImportResult, importRowsToAppointments, newAppointmentsToAdd, reassignUnknownTechnicians } from './hooks/importPratiche';
 import { useTabLock } from './hooks/useTabLock';
 import { useAutopilot, autopilotQueueKey } from './hooks/useAutopilot';
 import { useAutoDispatch } from './hooks/useAutoDispatch';
@@ -36,6 +37,7 @@ import type { CloudConfig } from './services/cloudProtocol';
 import { prepareEmbeddedCloud } from './services/cloudSyncCore';
 import { bridgeInboxHere, turnAutomationsHere } from './services/automationTurn';
 import { fetchBridgeSnapshotViaParent } from './services/bridgeService';
+import { applyGestionaleExclusions, type ExclusionOptions, type GestionaleExclusion } from './services/gestionaleExclusions';
 import type { GestionaleContext } from './Components/GestionaleGate';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
@@ -558,9 +560,11 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   });
   // Smistamento automatico e inbox del bridge: con il cloud, un solo
   // dispositivo alla volta (quello che ha il turno). Dentro il gestionale
-  // l'inbox del bridge gira comunque qui (vedi services/automationTurn)
+  // l'inbox del bridge gira comunque qui, ma solo dopo il primo
+  // scaricamento dal cloud (vedi services/automationTurn)
   const cloudLeaseHolder = cloudSync.state?.lease?.holder === true;
-  const automationPlace = { embedded, isAutomationTab, cloudActive, leaseHolder: cloudLeaseHolder };
+  const cloudLoaded = cloudSync.state?.loaded === true;
+  const automationPlace = { embedded, isAutomationTab, cloudActive, leaseHolder: cloudLeaseHolder, cloudLoaded };
   const browserAutomationsHere = turnAutomationsHere(automationPlace);
   const bridgeHere = bridgeInboxHere(automationPlace);
 
@@ -715,13 +719,20 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
       result.updates.clear();
       const phoneById = new Map(phoneUpdates.map(u => [u.id, u.changes]));
       let updated = 0;
-      setAllAppointments(prev => applyImportResult(prev, result).map(a => {
-        const changes = phoneById.get(a.id);
-        if (!changes || a.phone?.trim()) return a;
-        updated += 1;
-        return { ...a, ...changes };
-      }));
-      return { added: result.newAppointments.length, updated, failed: result.failures.length };
+      let added = 0;
+      setAllAppointments(prev => {
+        // Sull'elenco e sui tecnici di ADESSO (possono essere cambiati
+        // durante l'import): niente doppioni, niente tecnici inesistenti
+        const fresh = reassignUnknownTechnicians(newAppointmentsToAdd(prev, result.newAppointments), techniciansRef.current);
+        added = fresh.length;
+        return applyImportResult(prev, { ...result, newAppointments: fresh }).map(a => {
+          const changes = phoneById.get(a.id);
+          if (!changes || a.phone?.trim()) return a;
+          updated += 1;
+          return { ...a, ...changes };
+        });
+      });
+      return { added, updated, failed: result.failures.length };
     } finally {
       importBusyRef.current = false;
       setImportBusy(false);
@@ -734,14 +745,32 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     [gestionale]
   );
 
+  // Dentro il gestionale: le pratiche che il gestionale indica come già
+  // concordate, fatte o chiuse escono dal lavoro (annullate, con una riga
+  // nelle note). Arriva al server con la normale sincronizzazione.
+  const applyGestionaleExcluded = useCallback((excluded: GestionaleExclusion[]): number => {
+    const ctx = getPlanningContext();
+    const opts: ExclusionOptions = { now: ctx.now, dayBase: (technicianId, date) => baseFor(ctx, technicianId, date) };
+    const { removed } = applyGestionaleExclusions(appointmentsRef.current, excluded, opts);
+    if (removed.length === 0) return 0;
+    setAllAppointments(prev => applyGestionaleExclusions(prev, excluded, opts).list);
+    return removed.length;
+  }, [getPlanningContext, setAllAppointments]);
+
   const bridgeInbox = useBridgeInbox({
     settings: bridgeSettings,
     isLeader: bridgeHere,
     appointmentsRef,
     importBridge: importFromBridge,
     isImportBusy: isImportOrDispatchBusy,
-    followerMessage: cloudActive && isAutomationTab ? 'Bridge: gestito da un altro dispositivo collegato al cloud' : undefined,
+    followerMessage: embedded && isAutomationTab && !cloudLoaded
+      ? 'Bridge: in attesa dei dati dal cloud'
+      : cloudActive && isAutomationTab ? 'Bridge: gestito da un altro dispositivo collegato al cloud' : undefined,
     source: bridgeViaParent,
+    applyExcluded: gestionale ? applyGestionaleExcluded : undefined,
+    // Dentro il gestionale niente scaricamenti prima dei dati del cloud,
+    // nemmeno da "Scarica ora" o dall'avviso del gestionale
+    waiting: embedded && !cloudLoaded,
   });
 
   // Il gestionale avvisa che il bridge ha novità: si scarica subito
@@ -862,14 +891,20 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
         (processedCount, total) => setUploadProgress(`Elaborazione pratica ${processedCount} di ${total}...${excludedInfo}`)
       );
 
-      setAllAppointments(prev => applyImportResult(prev, { newAppointments, updates }));
+      // Nuove davvero aggiunte: fuori quelle il cui codice è arrivato
+      // nell'elenco durante l'import
+      let added = 0;
+      setAllAppointments(prev => {
+        added = newAppointmentsToAdd(prev, newAppointments).length;
+        return applyImportResult(prev, { newAppointments, updates });
+      });
 
-      setImportStats({ success: newAppointments.length + updates.size, failed: failures.length, approx: approximates.length });
+      setImportStats({ success: added + updates.size, failed: failures.length, approx: approximates.length });
       setFailedImports(failures);
       setApproxImports(approximates);
       setImportFinished(true);
       setUploadProgress(updates.size > 0
-        ? `Completato! ${newAppointments.length} nuove, ${updates.size} aggiornate (telefono/note).${excludedInfo}`
+        ? `Completato! ${added} nuove, ${updates.size} aggiornate (telefono/note).${excludedInfo}`
         : `Completato!${excludedInfo}`);
 
     } catch (error) {

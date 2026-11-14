@@ -136,7 +136,7 @@ const techById = (technicians: Technician[], id?: string): Technician | undefine
   id ? technicians.find(t => t.id === id) : undefined;
 
 // Base del giorno per ricalcolare i viaggi (anche se il tecnico non lavora)
-const baseFor = (ctx: PlanningContext, technicianId: string | undefined, date: string) => {
+export const baseFor =(ctx: PlanningContext, technicianId: string | undefined, date: string) => {
   const tech = techById(ctx.technicians, technicianId);
   const day = dayContextFor(tech, date, ctx.fallback);
   return { base: day ? day.base : tech?.baseCoords || ctx.fallback.base };

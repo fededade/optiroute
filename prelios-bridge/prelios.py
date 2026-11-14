@@ -376,6 +376,120 @@ return found.map(function(f) { return {tag: f.tag, text: f.text}; });
 
 MAX_PAGINE = 20
 
+# Struttura della pagina dell'elenco, SOLO LETTURA (nessun click, nessun
+# valore scritto), per elenco_struttura.json:
+# - "th": righe di celle <th> delle tabelle, con numero di celle e posizione
+#   della Tipologia della prima riga dati della STESSA tabella (per capire
+#   se sono davvero i titoli della griglia);
+# - "controlli": campi del modulo (input/select/textarea) FUORI dalle righe
+#   dati: id, name, tipo, se è vuoto (MAI il valore), etichetta vicina, voci
+#   dei menu a tendina, spunte;
+# - "controlli_in_griglia": quanti campi stanno dentro le righe dati (saltati).
+# Ogni parte è protetta: un elemento strano non ferma la lettura.
+_JS_STRUTTURA_PAGINA = """
+var reT = /^(FULL|DSKT|DRIVE)\\s*-\\s*\\S+/i;
+var out = {th: [], controlli: [], controlli_in_griglia: 0};
+function txt(e) {
+    try { return ((e && (e.innerText || e.textContent)) || '').replace(/\\s+/g, ' ').trim().substring(0, 120); }
+    catch (x) { return ''; }
+}
+function colTipologia(tr) {
+    if (!tr || !tr.cells) return -1;
+    for (var j = 0; j < tr.cells.length; j++) { if (reT.test(txt(tr.cells[j]))) return j; }
+    return -1;
+}
+try {
+    var tables = document.querySelectorAll('table');
+    for (var i = 0; i < tables.length && i < 300 && out.th.length < 20; i++) {
+        var rows = tables[i].rows || [];
+        var heads = [], nDati = null, tDati = null;
+        for (var r = 0; r < rows.length && r < 400; r++) {
+            var tr = rows[r];
+            if (!tr.cells || !tr.cells.length) continue;
+            var tutteTh = true;
+            for (var c = 0; c < tr.cells.length; c++) { if (tr.cells[c].tagName !== 'TH') { tutteTh = false; break; } }
+            if (tutteTh && tr.cells.length > 1) {
+                var celle = [];
+                for (var c2 = 0; c2 < tr.cells.length; c2++) celle.push(txt(tr.cells[c2]));
+                heads.push(celle);
+                continue;
+            }
+            var t = colTipologia(tr);
+            if (t >= 0 && nDati === null) { nDati = tr.cells.length; tDati = t; }
+        }
+        for (var h = 0; h < heads.length; h++) {
+            out.th.push({celle: heads[h], n_celle_dati: nDati, col_tipologia_dati: tDati});
+        }
+    }
+} catch (e) { out.errore_th = String(e).substring(0, 100); }
+try {
+    var els = document.querySelectorAll('input, select, textarea');
+    for (var k = 0; k < els.length && out.controlli.length < 150; k++) {
+        try {
+            var el = els[k];
+            var tag = el.tagName.toLowerCase();
+            var tipo = tag === 'input' ? (el.type || 'text').toLowerCase() : (tag === 'select' ? (el.multiple ? 'select-multiple' : 'select') : tag);
+            if (tipo === 'button' || tipo === 'submit' || tipo === 'image' || tipo === 'reset' || tipo === 'file' || tipo === 'password') continue;
+            var riga = el.closest ? el.closest('tr') : null;
+            if (riga && colTipologia(riga) >= 0) { out.controlli_in_griglia++; continue; }
+            var etichetta = '';
+            if (el.id) {
+                var lab = document.querySelector('label[for="' + el.id.replace(/"/g, '') + '"]');
+                if (lab) etichetta = txt(lab);
+            }
+            if (!etichetta && el.closest && el.closest('label')) etichetta = txt(el.closest('label'));
+            if (!etichetta && el.closest) {
+                var td = el.closest('td');
+                var prev = td ? td.previousElementSibling : null;
+                if (prev) etichetta = txt(prev);
+            }
+            if (!etichetta) etichetta = (el.title || el.getAttribute('placeholder') || '').substring(0, 120);
+            var rect = el.getBoundingClientRect();
+            var c = {id: el.id || '', name: el.getAttribute('name') || '', tipo: tipo,
+                     etichetta: etichetta, visibile: rect.width > 0 && rect.height > 0 && tipo !== 'hidden'};
+            if (tipo === 'checkbox' || tipo === 'radio') {
+                c.selezionato = !!el.checked;
+            } else if (tag === 'select') {
+                c.n_opzioni = el.options.length;
+                c.opzioni = [];
+                for (var o = 0; o < el.options.length && o < 50; o++) c.opzioni.push(txt(el.options[o]) || (el.options[o].text || ''));
+                c.indice_selezionato = el.selectedIndex;
+            } else {
+                c.vuoto = !(el.value || '').length;
+            }
+            out.controlli.push(c);
+        } catch (e2) { }
+    }
+} catch (e) { out.errore_controlli = String(e).substring(0, 100); }
+return out;
+"""
+
+
+def read_page_structure(browser: PreliosBrowser) -> dict:
+    """Struttura della pagina dell'elenco (documento e frame), SOLO lettura.
+
+    Returns:
+        {"th": [...], "controlli": [...], "controlli_in_griglia": n,
+         "origini": numero di documenti/frame letti}
+        Ogni controllo ha in più "origine" ('main' o 'frame_N')."""
+    th: list[dict] = []
+    controlli: list[dict] = []
+    in_griglia = 0
+    origini = 0
+    for origine, val in _collect_everywhere(browser, _JS_STRUTTURA_PAGINA):
+        if not isinstance(val, dict):
+            continue
+        origini += 1
+        th.extend(dict(t, origine=origine) for t in (val.get("th") or []) if isinstance(t, dict))
+        controlli.extend(dict(c, origine=origine) for c in (val.get("controlli") or [])
+                         if isinstance(c, dict))
+        try:
+            in_griglia += int(val.get("controlli_in_griglia") or 0)
+        except (TypeError, ValueError):
+            pass
+    return {"th": th, "controlli": controlli, "controlli_in_griglia": in_griglia,
+            "origini": origini}
+
 
 def _collect_everywhere(browser: PreliosBrowser, js: str, *args) -> list[tuple[str, object]]:
     """Esegue il JS nel documento E in ogni frame; ritorna TUTTI i risultati
@@ -475,7 +589,7 @@ def apri_elenco_completo(browser: PreliosBrowser, log=print) -> bool:
 
 
 def list_assigned(browser: PreliosBrowser, log=print,
-                  max_pagine: int = MAX_PAGINE) -> list[list[str]]:
+                  max_pagine: int = MAX_PAGINE, info: dict | None = None) -> list[list[str]]:
     """Legge dal portale le righe GREZZE dell'elenco pratiche (BEST-EFFORT).
 
     Naviga all'Elenco Perizie, svuota il filtro Cod. Immobile, esegue
@@ -488,15 +602,29 @@ def list_assigned(browser: PreliosBrowser, log=print,
     esattamente uno riconoscibile, fino a `max_pagine`; si ferma appena una
     pagina non porta righe nuove. Altrimenti legge solo la pagina corrente e
     lo scrive chiaramente nel log.
+
+    Se `info` è un dizionario, viene riempito (SOLO lettura, per
+    elenco_struttura.json) con: "pagina" (struttura della prima pagina:
+    intestazioni <th> e campi del modulo), "controlli_paginazione",
+    "pagine" (pagine lette). Un errore in questa raccolta non ferma la
+    lettura dell'elenco.
     """
+    if info is None:
+        info = {}
+    info["pagine"] = 1
     apri_elenco_completo(browser, log)
     griglia = attendi_griglia(browser)
+    try:
+        info["pagina"] = read_page_structure(browser)
+    except Exception as e:  # noqa: BLE001 — solo descrizione, mai bloccante
+        info["pagina"] = {"errore": str(e)[:200]}
     righe: list[list[str]] = list(griglia["rows"])
     firme = {tuple(r) for r in righe}
     log(f"Elenco: lette {len(righe)} righe grezze da {len(griglia['frames'])} "
         f"documenti/frame ({_conta_righe_tipologia(righe)} con tipologia).")
 
     candidati = find_next_controls(browser)
+    info["controlli_paginazione"] = candidati
     if len(candidati) != 1:
         motivo = ("nessun controllo 'pagina successiva' riconosciuto"
                   if not candidati else
@@ -519,8 +647,10 @@ def list_assigned(browser: PreliosBrowser, log=print,
         pagine += 1
         righe.extend(nuove)
         firme.update(tuple(r) for r in nuove)
+        info["pagine"] = pagine
         if len(find_next_controls(browser)) != 1:
             break
+    info["pagine"] = pagine
     log(f"Paginazione (NON verificata sul portale reale): lette {pagine} "
         f"pagine, {len(righe)} righe grezze in totale."
         + (f" Raggiunto il tetto di {max_pagine} pagine." if pagine >= max_pagine else ""))

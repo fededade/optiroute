@@ -7,6 +7,7 @@ import {
   type BridgePortal,
   type BridgeSettings,
 } from '../services/bridgeService';
+import type { GestionaleExclusion } from '../services/gestionaleExclusions';
 import { bridgePraticaToRow, type ImportRow } from './importPratiche';
 
 // Inbox del bridge: le pratiche arrivano da sole. Se il bridge è abilitato e
@@ -15,6 +16,9 @@ import { bridgePraticaToRow, type ImportRow } from './importPratiche';
 // file, ma in silenzio: il risultato compare nel chip) e si riporta il
 // telefono sulle pratiche già presenti che non l'avevano. Mai in parallelo a
 // un altro import. Il token non compare mai nei log.
+// Dentro il gestionale, dopo ogni scaricamento riuscito si tolgono dal
+// lavoro le pratiche che il gestionale indica come già concordate, fatte o
+// chiuse (anche quando non ci sono pratiche nuove).
 
 export const BRIDGE_POLL_MS = 5 * 60 * 1000;
 
@@ -44,6 +48,7 @@ export interface BridgeImportOutcome {
   added: number;
   updated: number;
   failed: number;
+  removed?: number;   // tolte perché già nel gestionale
 }
 
 interface UseBridgeInboxOptions {
@@ -58,6 +63,13 @@ interface UseBridgeInboxOptions {
   // Dentro il gestionale: le pratiche arrivano tramite la pagina del
   // gestionale (indirizzo e token del bridge nelle impostazioni non si usano)
   source?: () => Promise<BridgeFetchResult>;
+  // Dentro il gestionale: toglie dal lavoro le pratiche escluse dal
+  // gestionale; restituisce quante ne ha tolte
+  applyExcluded?: (excluded: GestionaleExclusion[]) => number;
+  // In attesa di un prerequisito (dentro il gestionale: il primo
+  // scaricamento dal cloud): niente scaricamenti né import, nemmeno da
+  // "Scarica ora" o dall'avviso del gestionale
+  waiting?: boolean;
 }
 
 const hhmm = (d: Date) => d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
@@ -69,6 +81,7 @@ export const describeImport = (o: BridgeImportOutcome, at: Date): string => {
   if (o.added > 0) parts.push(plural(o.added, 'nuova pratica', 'nuove pratiche'));
   if (o.updated > 0) parts.push(plural(o.updated, 'telefono arrivato', 'telefoni arrivati'));
   if (o.failed > 0) parts.push(plural(o.failed, 'indirizzo non trovato', 'indirizzi non trovati'));
+  if (o.removed && o.removed > 0) parts.push(`${plural(o.removed, 'tolta', 'tolte')} perché già nel gestionale`);
   return parts.length > 0 ? `${parts.join(', ')} alle ${hhmm(at)}` : `nessuna novità alle ${hhmm(at)}`;
 };
 
@@ -81,20 +94,21 @@ const initialStatus = (settings: BridgeSettings, viaParent = false): BridgeInbox
       portals: [],
     });
 
-export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBridge, isImportBusy, followerMessage, source }: UseBridgeInboxOptions) => {
+export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBridge, isImportBusy, followerMessage, source, applyExcluded, waiting = false }: UseBridgeInboxOptions) => {
   const viaParent = !!source;
   const [status, setStatus] = useState<BridgeInboxStatus>(() => initialStatus(settings, viaParent));
   const runningRef = useRef(false);
   const lastResultRef = useRef<string | undefined>(undefined);
 
-  const latest = useRef({ settings, importBridge, isImportBusy, source });
-  latest.current = { settings, importBridge, isImportBusy, source };
+  const latest = useRef({ settings, importBridge, isImportBusy, source, applyExcluded, waiting });
+  latest.current = { settings, importBridge, isImportBusy, source, applyExcluded, waiting };
 
   const configured = viaParent || (settings.enabled && !!settings.token.trim());
 
   const syncNow = useCallback(async (): Promise<void> => {
-    const { settings: s, importBridge: doImport, isImportBusy: busy, source: src } = latest.current;
+    const { settings: s, importBridge: doImport, isImportBusy: busy, source: src, applyExcluded: exclude } = latest.current;
     if (!src && (!s.enabled || !s.token.trim())) return;
+    if (latest.current.waiting) return;
     if (runningRef.current) return;
     if (busy()) {
       // Un altro import è in corso: si riprova fra poco
@@ -124,6 +138,10 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
         return;
       }
 
+      // Nel frattempo si è tornati in attesa (es. sincronizzazione ripartita):
+      // niente confronto con un elenco che sta per essere sostituito
+      if (latest.current.waiting) return;
+
       const snapshot = result.snapshot;
       const diff = diffBridgeSnapshot(snapshot, appointmentsRef.current);
       let outcome: BridgeImportOutcome = { added: 0, updated: 0, failed: 0 };
@@ -136,8 +154,12 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
         }
         outcome = await doImport(diff.nuove.map(bridgePraticaToRow), diff.aggiornamenti);
       }
+      // Pratiche che il gestionale dice di non lavorare (solo dentro il gestionale)
+      if (src && exclude && result.excluded && result.excluded.length > 0) {
+        outcome = { ...outcome, removed: exclude(result.excluded) };
+      }
       const done = new Date();
-      if (outcome.added + outcome.updated + outcome.failed > 0 || !lastResultRef.current) {
+      if (outcome.added + outcome.updated + outcome.failed + (outcome.removed || 0) > 0 || !lastResultRef.current) {
         lastResultRef.current = describeImport(outcome, done);
       }
 
@@ -165,7 +187,9 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
         setStatus({
           kind: 'ok',
           message: `Bridge collegato · ${lastResultRef.current}`,
-          detail: `${snapshot.pratiche.length} pratiche nel bridge · aggiornato alle ${hhmm(done)}`,
+          detail: `${result.portalCount !== undefined
+            ? `${result.portalCount} pratiche sul portale, ${snapshot.pratiche.length} da programmare`
+            : `${snapshot.pratiche.length} pratiche nel bridge`} · aggiornato alle ${hhmm(done)}`,
           lastCheckAt: done,
           lastResult: lastResultRef.current,
           portals: snapshot.portals,

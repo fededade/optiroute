@@ -135,13 +135,41 @@ export const importRowsToAppointments = async (
   return { newAppointments, updates, failures, approximates };
 };
 
-// Applica il risultato dell'import all'elenco (aggiornamenti + nuove in coda)
+// Pratiche nuove da aggiungere DAVVERO all'elenco di adesso: fuori quelle il
+// cui codice c'è già (l'elenco può essere cambiato durante l'import, es. è
+// arrivato il primo scaricamento dal cloud) e i doppioni fra le nuove. Le
+// pratiche senza codice passano tutte.
+export const newAppointmentsToAdd = (all: Appointment[], newAppointments: Appointment[]): Appointment[] => {
+  const known = new Set<string>();
+  all.forEach(a => { const key = praticaKey(a); if (key) known.add(key); });
+  return newAppointments.filter(a => {
+    const key = praticaKey(a);
+    if (!key) return true;
+    if (known.has(key)) return false;
+    known.add(key);
+    return true;
+  });
+};
+
+// Tecnico delle pratiche nuove: se non è fra i tecnici di adesso (es. la
+// configurazione è arrivata dal cloud durante l'import) si riassegna per zona
+// sui tecnici attuali; se nessuno corrisponde, la pratica resta senza tecnico
+export const reassignUnknownTechnicians = (newAppointments: Appointment[], technicians: Technician[]): Appointment[] => {
+  const ids = new Set(technicians.map(t => t.id));
+  return newAppointments.map(a => {
+    if (!a.technicianId || ids.has(a.technicianId)) return a;
+    return { ...a, technicianId: matchTechnician(a, technicians)?.id };
+  });
+};
+
+// Applica il risultato dell'import all'elenco (aggiornamenti + nuove in coda,
+// senza le nuove il cui codice è già nell'elenco)
 export const applyImportResult = (
   all: Appointment[],
   result: Pick<ImportCoreResult, 'newAppointments' | 'updates'>
 ): Appointment[] => [
   ...all.map(a => (result.updates.has(a.id) ? { ...a, ...result.updates.get(a.id) } : a)),
-  ...result.newAppointments,
+  ...newAppointmentsToAdd(all, result.newAppointments),
 ];
 
 // Pratica del bridge -> riga di import (stessa forma dell'elenco MISI)

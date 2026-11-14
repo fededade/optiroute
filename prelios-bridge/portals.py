@@ -10,6 +10,8 @@ modalità servizio) non dipende dai dettagli del singolo portale:
                              essere supportato: `supporta_elenco = False`)
 - `enrich(browser, pratica)` telefono/note di una pratica →
                              (telefono, esito, nota_contatto)
+- `descrizione_elenco()`     descrizione ANONIMA dell'ultimo elenco letto dal
+                             portale (per elenco_struttura.json), o None
 
 Il modulo NON importa Selenium: i moduli del portale sono importati solo
 quando servono (così i test puri girano anche senza selenium).
@@ -47,6 +49,17 @@ class PortalAdapter:
     def enrich(self, browser, pratica: Pratica, log=print) -> tuple[str, str, str]:
         raise NotImplementedError
 
+    def descrizione_elenco(self) -> dict | None:
+        """Descrizione anonima dell'ultimo elenco letto (struttura_elenco.py),
+        None se non disponibile."""
+        return getattr(self, "_descrizione", None)
+
+    def valori_da_nascondere(self) -> set[str]:
+        """Nomi, vie e comuni di TUTTE le righe dell'ultimo elenco letto
+        (anche di altre tipologie), per il controllo finale della
+        descrizione. Restano in memoria, non vengono mai scritti."""
+        return set(getattr(self, "_vietati", set()))
+
 
 # ---------------------------------------------------------------------------
 # PRELIOS — wrapper delle funzioni esistenti di prelios.py
@@ -74,9 +87,18 @@ class PreliosAdapter(PortalAdapter):
         """Elenco dalla griglia del portale (BEST-EFFORT, non verificato sul
         portale reale) passato al parser ad ancora-Tipologia dei file."""
         import prelios
-        righe = prelios.list_assigned(browser, log=log)
+        self._descrizione = None
+        self._vietati = set()
+        info: dict = {}
+        righe = prelios.list_assigned(browser, log=log, info=info)
         stats: dict = {}
         pratiche = parse_grid_rows(righe, stats=stats)
+        try:
+            from struttura_elenco import descrivi_elenco, valori_vietati
+            self._vietati = valori_vietati(righe)
+            self._descrizione = descrivi_elenco(righe, stats, info)
+        except Exception as e:  # noqa: BLE001 — la descrizione non deve mai fermare il giro
+            log(f"ATTENZIONE: descrizione dell'elenco non preparata ({e}).")
         log(f"Elenco Prelios: {stats.get('righe', 0)} righe lette, "
             f"{stats.get('con_tipologia', 0)} con tipologia, "
             f"{stats.get('altre_tipologie', 0)} di altre tipologie, "

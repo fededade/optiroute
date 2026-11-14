@@ -1,5 +1,6 @@
 import type { Appointment } from '../types';
 import { codeKey, praticaKey } from './praticaCode';
+import { parseExcluded, type GestionaleExclusion } from './gestionaleExclusions';
 
 // Client del bridge locale dei portali (prelios-bridge, contratto v1):
 // un programma sul PC dell'operatore legge le pratiche dai portali e le
@@ -55,8 +56,10 @@ export interface BridgeSnapshot {
 // inactive = (dentro il gestionale) bridge avviato ma non ancora attivato
 export type BridgeErrorKind = 'offline' | 'token' | 'invalid' | 'inactive';
 
+// Dentro il gestionale la risposta porta anche le pratiche del portale da
+// NON lavorare (excluded) e quante ne aveva il portale prima del filtro
 export type BridgeFetchResult =
-  | { ok: true; snapshot: BridgeSnapshot }
+  | { ok: true; snapshot: BridgeSnapshot; excluded?: GestionaleExclusion[]; portalCount?: number }
   | { ok: false; error: BridgeErrorKind; message: string };
 
 const BRIDGE_NAME = 'optiroute-bridge';
@@ -230,8 +233,11 @@ export const fetchBridgeSnapshotViaParent = async (
   const message = typeof r.message === 'string' && r.message ? r.message : '';
   if (r.status === 'ok') {
     const snapshot = parseBridgeSnapshot(r.snapshot);
+    const portalCount = typeof r.portalCount === 'number' && Number.isInteger(r.portalCount) && r.portalCount >= 0
+      ? r.portalCount
+      : undefined;
     return snapshot
-      ? { ok: true, snapshot }
+      ? { ok: true, snapshot, excluded: parseExcluded(r.excluded), ...(portalCount === undefined ? {} : { portalCount }) }
       : { ok: false, error: 'invalid', message: 'Risposta inattesa: non sembra il bridge di OptiRoute' };
   }
   if (r.status === 'offline') return { ok: false, error: 'offline', message: message || 'Bridge non avviato' };

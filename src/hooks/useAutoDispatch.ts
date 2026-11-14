@@ -16,6 +16,10 @@ import { approveForCalling, nextCallWindowStart, type AutopilotSettings } from '
 // tecnico, configurazione dei tecnici, data di oggi), con un debounce, mai in
 // parallelo a un import, a un altro smistamento o con lo smistamento manuale
 // aperto.
+// Niente lavoro perso: se dopo l'applicazione c'è una pratica da smistare che
+// il calcolo non ha visto in quella forma (arrivata durante il calcolo, o con
+// il tecnico tolto perché inesistente o non attivo) si ricalcola subito, con
+// un tetto ai rilanci consecutivi che non collocano nulla.
 
 export const AUTO_DISPATCH_DEBOUNCE_MS = 3000;
 
@@ -36,6 +40,45 @@ export const autoDispatchSignature = (all: Appointment[], technicians: Technicia
     .sort()
     .join('|');
   return `${today}#${technicianSignature(technicians)}#${pending}`;
+};
+
+// Voci della firma, per pratica: id -> rientro, date rifiutate, tecnico
+// (stessi campi di autoDispatchSignature)
+export const autoDispatchEntries = (all: Appointment[]): Map<string, string> =>
+  new Map(
+    all
+      .filter(isAutoDispatchable)
+      .map(a => [a.id, `${a.followUpDate || ''}~${(a.declinedDates || []).join(',')}~${a.technicianId || ''}`])
+  );
+
+// Dopo un calcolo: c'è una pratica da smistare che il calcolo non ha visto in
+// questa forma (id nuovo o voce cambiata)? Le pratiche rimaste uguali (non
+// collocabili) non contano: niente cicli.
+export const needsAnotherRun = (input: Map<string, string>, after: Map<string, string>): boolean => {
+  for (const [id, entry] of after) {
+    if (input.get(id) !== entry) return true;
+  }
+  return false;
+};
+
+// Rilanci consecutivi senza nessuna pratica collocata: oltre si registra la
+// firma e ci si ferma
+export const AUTO_DISPATCH_MAX_RERUNS = 3;
+
+// Decisione dopo l'applicazione di un calcolo. `reruns`: rilanci consecutivi
+// già fatti senza collocare nulla. Un calcolo che colloca qualcosa azzera il
+// conto.
+export const afterDispatchRun = (
+  input: Map<string, string>,
+  after: Map<string, string>,
+  placed: number,
+  reruns: number
+): { rerun: boolean; reruns: number } => {
+  const base = placed > 0 ? 0 : reruns;
+  if (!needsAnotherRun(input, after)) return { rerun: false, reruns: base };
+  if (placed > 0) return { rerun: true, reruns: 0 };
+  if (base >= AUTO_DISPATCH_MAX_RERUNS) return { rerun: false, reruns: base };
+  return { rerun: true, reruns: base + 1 };
 };
 
 // Firma delle tappe già nel giro: se cambia durante il calcolo, il risultato
@@ -90,6 +133,7 @@ export const useAutoDispatch = ({
 }: UseAutoDispatchOptions): AutoDispatchInfo => {
   const [info, setInfo] = useState<AutoDispatchInfo>({ running: false, lastRunAt: null, lastPlaced: 0 });
   const lastSignatureRef = useRef<string | null>(null);
+  const rerunsRef = useRef(0); // rilanci consecutivi senza nulla di collocato
   const runningRef = useRef(false);
   const [rerun, setRerun] = useState(0);
 
@@ -110,11 +154,15 @@ export const useAutoDispatch = ({
         setRerun(n => n + 1); // si riprova al prossimo giro
         return;
       }
+      // Firma cambiata per altri motivi (non per un nostro rilancio): il
+      // conto dei rilanci riparte
+      if (lastSignatureRef.current !== null) rerunsRef.current = 0;
       const { technicians: techs, fallbackBase: base, settings: s } = latest.current;
       const before = appointmentsRef.current;
       const sigNow = autoDispatchSignature(before, techs, localDateStr(new Date()));
       const pendingList = before.filter(isAutoDispatchable);
       if (pendingList.length === 0) { lastSignatureRef.current = sigNow; return; }
+      const inputEntries = autoDispatchEntries(before);
 
       runningRef.current = true;
       setBusy(true);
@@ -152,9 +200,19 @@ export const useAutoDispatch = ({
           if (s.autoApprove && placedIds.length > 0) next = approveForCalling(next, placedIds, now);
           return next;
         });
-        // Firma dopo l'applicazione: le pratiche rimaste in attesa (non
-        // collocabili) non devono far ripartire il calcolo
-        lastSignatureRef.current = autoDispatchSignature(appointmentsRef.current, techs, localDateStr(new Date()));
+        // Pratiche da smistare che il calcolo non ha visto in questa forma
+        // (arrivate nel frattempo, o con il tecnico tolto perché inesistente
+        // o non attivo): si ricalcola subito, con un tetto ai rilanci
+        const decision = afterDispatchRun(inputEntries, autoDispatchEntries(appointmentsRef.current), placed, rerunsRef.current);
+        rerunsRef.current = decision.reruns;
+        if (decision.rerun) {
+          lastSignatureRef.current = null;
+          setRerun(n => n + 1);
+        } else {
+          // Firma dopo l'applicazione: le pratiche rimaste in attesa (non
+          // collocabili) non devono far ripartire il calcolo
+          lastSignatureRef.current = autoDispatchSignature(appointmentsRef.current, techs, localDateStr(new Date()));
+        }
       } catch (err) {
         console.error('Smistamento automatico non riuscito', err);
         lastSignatureRef.current = sigNow; // niente tentativi a raffica

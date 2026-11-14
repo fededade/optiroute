@@ -15,3 +15,7 @@ bridge_config.json
 captures/
 elenco_dump*.json
 campi_*.json
+
+# Descrizione anonima dell'elenco del portale (riscritta a ogni lettura)
+elenco_struttura.json
+.elenco_struttura_*.tmp

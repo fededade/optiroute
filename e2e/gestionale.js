@@ -478,6 +478,104 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       await G.ctx.close();
     });
 
+    // 2e) Stato sul portale (contratto §6), con una pagina del gestionale che
+    //     non filtra: sopralluogo già fissato o perizia chiusa sul portale ->
+    //     mai lavorate; sospese -> stato dalla nota, mai proposte
+    await step('bridge: stato sul portale (fissate, chiuse, sospese)', async () => {
+      await api('POST', '/__test/reset');
+      const fissato = romeDay(3);
+      const itDate = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+      const richiamo = romeDay(5);
+      const dispo = romeDay(60); // oltre l'orizzonte dello smistamento
+      const cloudConfig = { ...CONFIG, autopilot: { enabled: true, autoDispatch: true } };
+      const init = await api('POST', '/api/cloud?op=init', { body: { device: DEVICE, replace: true, config: cloudConfig, appointments: [
+        { id: 'f1', title: 'Cliente Già Fissato', address: 'Via Fissata 1, Milano', coords: P.milano, status: 'pending',
+          technicianId: 'tech-1', province: 'MI', comune: 'Milano', periziaCode: '847.001', phone: '+390255500101', notes: 'Scala A' },
+      ] }, headers: auth });
+      assert.equal(init.status, 200);
+      const pratica = (codice, intestatario, via, telefono, extra = {}) => ({ portal: 'prelios', codice, intestatario, via, civico: '9', comune: 'Milano', provincia: 'MI',
+        telefono, note: '', progetto: '', tipologia: '', esito: '', aggiornatoIl: '', ...extra });
+      const G = await newPage(browser, { localSeed: { optiroute_technicians_v1: [TECH], optiroute_cloud_v1: DEVICE_SEED }, watchBridgeChip: true });
+      await G.app.locator('[data-testid="autopilot-bar"]').waitFor({ timeout: 30000 });
+      const chip = G.app.getByTestId('bridge-chip');
+      await waitFor(async () => /avvialo dalla barra del gestionale/.test(await chip.innerText()), 'chip bridge offline', 30000);
+      const pratiche = [
+        pratica('847001', 'Cliente Già Fissato', 'Via Fissata', '+390255500101', { stato: 'Sopralluogo fissato', fase: 'fissato', dataSopralluogo: fissato }),
+        pratica('847002', 'Cliente Chiusa', 'Via Chiusa', '+390255500102', { stato: 'Consegnata', fase: 'chiusa' }),
+        pratica('847003', 'Cliente Da Richiamare', 'Via Richiamo', '+390255500103',
+          { stato: 'Sospesa', fase: 'sospesa', sospensione: { nota: `cliente da richiamare il ${richiamo.slice(8, 10)}/${richiamo.slice(5, 7)}` } }),
+        pratica('847004', 'Cliente Disponibile Dopo', 'Via Dopo', '+390255500104',
+          { stato: 'Sospesa', fase: 'sospesa', sospensione: { nota: `cliente disponibile solo dal ${itDate(dispo)}`, dal: romeDay(-3) } }),
+        pratica('847005', 'Cliente Normale', 'Via Normale', '+390255500105', { fase: 'da_fissare' }),
+      ];
+      await parentEval(G.page, list => {
+        window.__bridge = { status: 'ok', portalCount: list.length,
+          snapshot: { bridge: 'optiroute-bridge', version: 1, generatedAt: new Date().toISOString(),
+            portals: [{ id: 'prelios', status: 'ok', lastSync: new Date().toISOString() }], pratiche: list },
+          excluded: [] };
+        window.__emit('bridge.updated');
+      }, pratiche);
+      const digits = c => String(c || '').replace(/\D/g, '');
+      const find = (l, code) => l.filter(a => digits(a.periziaCode) === code);
+      // si osserva il server fino a quando la normale è proposta dallo smistamento
+      const seenStatuses = { '847003': new Set(), '847004': new Set() };
+      const list = await waitFor(async () => {
+        const l = await serverList();
+        for (const code of Object.keys(seenStatuses)) find(l, code).forEach(a => seenStatuses[code].add(a.status));
+        const n = find(l, '847005')[0];
+        return n && n.status === 'proposed' && l.find(a => a.id === 'f1')?.status === 'cancelled' ? l : null;
+      }, 'pratica normale proposta e fissata tolta', 60000).catch(async err => {
+        log('server:', JSON.stringify((await serverList()).map(a => [a.id, a.periziaCode, a.status, a.issueType, a.followUpDate])));
+        log('chip:', JSON.stringify(await G.frame.evaluate(() => window.__chipTexts).catch(() => null)));
+        throw err;
+      });
+      await sleep(3000);
+      const final = await serverList();
+      for (const code of Object.keys(seenStatuses)) find(final, code).forEach(a => seenStatuses[code].add(a.status));
+      log('server:', JSON.stringify(final.map(a => [a.id, a.periziaCode, a.status, a.issueType, a.followUpDate])));
+      // già presente, fissata sul portale: archiviata con la riga del portale
+      const f1 = final.find(a => a.id === 'f1');
+      assert.equal(f1.status, 'cancelled');
+      assert.equal(f1.notes, `Scala A\nTolta dal giro: sul portale il sopralluogo risulta già fissato per il ${itDate(fissato)}.`);
+      assert.equal(find(final, '847001').length, 1, 'nessun doppione della fissata');
+      // chiusa sul portale: mai importata
+      assert.equal(find(final, '847002').length, 0, 'la chiusa non si importa');
+      // sospesa da richiamare: problematica con la data, mai proposta
+      const s1 = find(final, '847003');
+      assert.equal(s1.length, 1);
+      assert.equal(s1[0].status, 'issue');
+      assert.equal(s1[0].issueType, 'callback');
+      assert.equal(s1[0].followUpDate, richiamo);
+      assert.equal(s1[0].date, undefined);
+      assert.match(s1[0].notes, /Sospesa sul portale: cliente da richiamare il /);
+      assert.equal(s1[0].portalSuspension, `cliente da richiamare il ${richiamo.slice(8, 10)}/${richiamo.slice(5, 7)}`);
+      assert.ok(!seenStatuses['847003'].has('proposed') && !seenStatuses['847003'].has('pending'), 'mai in attesa né proposta');
+      // sospesa disponibile da una data: in attesa con la data di rientro
+      const s2 = find(final, '847004');
+      assert.equal(s2.length, 1);
+      assert.equal(s2[0].status, 'pending');
+      assert.equal(s2[0].followUpDate, dispo);
+      assert.ok(!seenStatuses['847004'].has('proposed'), 'mai proposta prima della data');
+      // normale: importata e smistata come sempre
+      assert.equal(list.find(a => digits(a.periziaCode) === '847005').status, 'proposed');
+      await waitFor(async () => /2 sospese sul portale/.test(await chip.innerText()), 'chip con le sospese', 15000)
+        .catch(async err => { log('chip:', JSON.stringify(await G.frame.evaluate(() => window.__chipTexts).catch(() => null))); throw err; });
+      assert.match(await chip.innerText(), /3 nuove pratiche/);
+      // etichetta nella scheda della pratica (fra i problemi)
+      await G.app.getByTestId('nav-problemi').click();
+      const tag = G.app.getByTestId('pratica-portal-suspension').first();
+      await tag.waitFor({ timeout: 15000 });
+      assert.equal((await tag.innerText()).trim(), 'Sospesa sul portale');
+      // stesso snapshot di nuovo: niente cambia
+      const before = JSON.stringify((await serverList()).filter(a => ['847001', '847003', '847004'].includes(digits(a.periziaCode))));
+      await parentEval(G.page, () => window.__emit('bridge.updated'));
+      await sleep(3000);
+      const after = JSON.stringify((await serverList()).filter(a => ['847001', '847003', '847004'].includes(digits(a.periziaCode))));
+      assert.equal(after, before, 'secondo scaricamento: nessuna modifica');
+      await G.page.screenshot({ path: path.join(OUT, '2e-bridge-stato-portale.png') });
+      await G.ctx.close();
+    });
+
     // 3) Conferma -> "changed" -> il gestionale legge i sopralluoghi confermati
     await step('conferma: changed al gestionale e sopralluogo in ?op=sopralluoghi con CORS', async () => {
       await api('POST', '/__test/reset');

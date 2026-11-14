@@ -98,7 +98,9 @@ Gli indirizzi devono essere `https://` (`http://localhost` e
    **FULL - Acquisto** (le altre — Surroga, DSKT, ecc. — sono escluse).
    L'elenco viene da un file Excel/TSV esportato dal portale oppure, in
    modalità servizio, può essere letto direttamente dalla griglia del portale
-   (**best-effort, da verificare**: vedi sotto).
+   (**best-effort, da verificare**: vedi sotto). Dall'elenco legge anche lo
+   **stato** di ogni perizia (sopralluogo fissato, fatto, chiusa, sospesa:
+   vedi «Stato delle perizie sul portale»).
 2. Apre Chrome, ti fa fare il **login Prelios manuale (MFA)**, poi per ogni
    pratica: cerca la perizia, la apre e legge il telefono dalle **Note del
    Gestore** (con i fallback: Telefono Mutuatario, Note perito, Telefono
@@ -125,6 +127,7 @@ Gli errori sulla singola pratica NON fermano il giro (finiscono nella colonna
 | `browser.py` | browser Selenium autonomo (Chrome remote-debugging, porta 9223) |
 | `prelios.py` | login + elenco + ricerca + apertura + lettura telefono |
 | `excel_pratiche.py` | lettura/filtro elenco (FULL - Acquisto), da file o da griglia |
+| `stato_portale.py` | stato di ogni perizia sul portale (fase, date, nota di sospensione) |
 | `contact_parse.py` | estrazione telefono/referente dalle note |
 | `anonimizza.py` | anonimizzazione delle catture (lettere→x, cifre→9) |
 | `dump_perizia_fields.py` | diagnostico (mappa i campi di una perizia) |
@@ -173,6 +176,7 @@ python run_giro.py --serve elenco.xlsx           # elenco dal file, riletto a og
 python run_giro.py --serve --port 8765 --interval 15 --portal prelios
 python run_giro.py --serve --gestionale https://gestionale.example   # solo per questa volta
 python run_giro.py --serve --senza-gestionale    # modalità manuale anche con bridge_config.json
+python run_giro.py --serve --max-righe 500       # «Max Righe» dell'elenco (default 200; 0 = non toccarlo)
 python avvia_bridge.py --limit 3                 # come il doppio clic, con opzioni in più
 ```
 
@@ -207,7 +211,60 @@ Regole dei cicli (cache `bridge_cache.json` nella cartella del bridge):
   vengono eliminate;
 - se la lettura dell'elenco dal portale restituisce zero pratiche mentre
   l'ultimo elenco noto non era vuoto, l'elenco noto NON viene cancellato
-  (stato `error`, da controllare con `dump_elenco.py`).
+  (stato `error`, da controllare con `dump_elenco.py`);
+- le pratiche che sul portale hanno il sopralluogo **già fissato**, **già
+  fatto** o sono **chiuse** NON vengono aperte (non verranno programmate);
+  se più avanti tornano da fissare o sospese, si aprono allora;
+- per le **sospese**, oltre al telefono si legge la nota di sospensione
+  (pagina «Sospesi» della perizia). La nota si rilegge quando cambia la
+  data di sospensione o dopo 24 ore, al massimo 10 riletture per ciclo
+  (prima i telefoni mancanti, poi le note).
+
+### Stato delle perizie sul portale
+
+Dall'elenco il bridge legge, **per nome della colonna** (non per posizione),
+le colonne Conclusa, Sopralluogo, Valutata, Sospesa, Revoca, Sospensione e
+Inoltrata Perizia, e calcola per ogni pratica la `fase`:
+
+| fase | quando |
+|---|---|
+| `chiusa` | Conclusa, Inoltrata Perizia o Revoca non vuote |
+| `effettuato` | Valutata non vuota, oppure Sopralluogo con una data passata |
+| `fissato` | Sopralluogo con la data di oggi o futura |
+| `sospesa` | la perizia è fra le **sospese adesso** (vedi sotto) |
+| `da_fissare` | altrimenti |
+
+**Sospese adesso**: una data nella colonna «Sospensione» non basta (la
+perizia può essere stata riattivata). Dopo la lettura normale il bridge fa
+una **seconda ricerca** con «Stato Perizia» = la voce che contiene
+«sospes» (se ce n'è esattamente una), legge le righe e rimette il menu
+vuoto. Le sospese trovate così che non stanno fra le perizie più recenti
+vengono aggiunte all'elenco. Se la seconda ricerca non è possibile, il
+bridge lo scrive nel log e ripiega sulla colonna «Sospensione» non vuota.
+
+Prima della ricerca il bridge porta «Max Righe» a 200 (`--max-righe`):
+il portale mostra solo le perizie più recenti fino a quel numero. Se
+«Trovati» è maggiore delle righe lette lo scrive nel log. I numeri di
+pagina NON vengono cliccati (sono solo descritti in `elenco_struttura.json`).
+
+Dopo ogni lettura, nella finestra del bridge compare una riga di soli
+conteggi, per esempio: `Stato sul portale: 4 con sopralluogo fissato, 5 già
+fatte o chiuse, 6 sospese, 0 da fissare`. Se le intestazioni non si trovano
+o manca una di quelle colonne, lo scrive nel log e le pratiche restano
+senza stato (comportamento di prima). Vale anche per gli elenchi da file
+(Excel/TSV) se hanno quelle intestazioni (lì senza seconda ricerca: vale la
+colonna «Sospensione»).
+
+**Nota di sospensione**: per le sospese, dopo l'Anagrafica il bridge
+clicca la voce del menu della perizia il cui testo è esattamente
+«Sospesi» (nessun altro comando: mai Nuovo, Salva, Canc., Riattiva; niente
+scritto nei campi), aspetta la griglia e ne legge SOLO le colonne «Data» e
+«Note»: la nota è quella della riga più recente, preceduta dal «Motivo
+Sospensione» scelto. Cognome, nome, cellulare ed email di chi ha sospeso
+non vengono letti. Se la nota più recente dice «sopralluogo fissato» con
+una data e la colonna Sopralluogo è vuota, la pratica vale `fissato` con
+quella data. Se la voce «Sospesi» non si trova o la griglia non compare,
+la nota resta vuota e compare UNA riga nel log per ciclo.
 
 `--serve --dry-run elenco.xlsx` espone le pratiche del file senza aprire il
 portale (telefoni vuoti, cache non scritta): utile per provare la web app.
@@ -250,7 +307,11 @@ Il token non compare in nessun log. Per revocarlo: cancella
   - `pratiche[]`: `{portal, codice, intestatario, via, civico, comune,
     provincia, telefono, note, progetto, tipologia, esito, aggiornatoIl}`.
     Sono esposte le pratiche dell'ultimo elenco letto, anche quelle non
-    ancora lavorate (`esito: "IN ATTESA"`, telefono vuoto).
+    ancora lavorate (`esito: "IN ATTESA"`, telefono vuoto). Solo quando
+    noti, in più: `stato` (testo, es. «Sopralluogo fissato per il
+    20/11/2026»), `fase` (`da_fissare | fissato | effettuato | sospesa |
+    chiusa`), `dataSopralluogo` (`AAAA-MM-GG`) e, solo con `fase: "sospesa"`,
+    `sospensione: {"nota": "...", "dal": "AAAA-MM-GG"}` (`dal` può mancare).
 - CORS: `Access-Control-Allow-Origin` (Origin riflesso, altrimenti `*`),
   `Vary: Origin`; `OPTIONS` → `204` con i permessi del preflight
   (incluso `Access-Control-Allow-Private-Network: true`).
@@ -274,6 +335,14 @@ Verificato (test automatici, senza portale):
 - descrizione anonima dell'elenco (`elenco_struttura.json`): categorie,
   intestazioni, filtri e controllo finale su griglie e pagine simulate
   (nessun nome, indirizzo, telefono, codice, data o nota nel file);
+- stato delle perizie: tabella delle fasi, date non valide, intestazioni in
+  ordine diverso o mancanti, seconda ricerca delle sospese e «Max Righe» su
+  un portale simulato, nota dalla pagina «Sospesi» simulata (i dati di chi
+  ha sospeso non finiscono mai in log, cache, snapshot o descrizione),
+  regola "quali aprire", riletture della nota, cache vecchia che si carica;
+- gli script JavaScript nuovi sono stati eseguiti in un Chromium vero su
+  pagine finte (elenco con le 32 colonne, pagina della perizia, pagina
+  «Sospesi»), fuori dal repository;
 - il giro classico `--dry-run` produce lo stesso output di prima;
 - collegamento col gestionale: indirizzi ammessi/rifiutati, controllo
   amministratore con un gestionale simulato (admin, tecnico, email non
@@ -297,7 +366,21 @@ la lettura del gestionale reale.
   filtri e intestazioni della pagina è provata solo su pagine simulate;
 - **paginazione**: il bridge segue un controllo "pagina successiva" solo se
   ne trova esattamente uno inequivocabile (max 20 pagine), altrimenti legge
-  la prima pagina e lo scrive nel log;
+  la prima pagina e lo scrive nel log; i numeri di pagina («- 1 2 3 … 15
+  +») non vengono cliccati;
+- **«Max Righe»** (`PageSize`): che il portale accetti il valore scritto
+  dal bridge (con gli eventi change/blur) prima di `cmdFindClick()`;
+- **seconda ricerca delle sospese**: la scelta in «Stato Perizia» della
+  voce che contiene «sospes», l'attesa della griglia nuova e il ritorno del
+  menu al valore vuoto;
+- **pagina «Sospesi»**: il clic sulla voce «Sospesi», l'attesa della
+  griglia e la lettura di «Data» e «Note» (scritti dal video del portale e
+  provati solo su pagine finte in un Chromium vero);
+- **colonne a icona** («VT», «App 1/2/3», «Sospesa», «Revoca»): il bridge
+  non le usa per lo stato; ne descrive solo il contenuto (immagini,
+  chiamate) in `elenco_struttura.json`;
+- l'ipotesi che la regola delle fasi corrisponda a come il portale usa le
+  colonne di data;
 - il rilevamento della sessione scaduta usa lo stesso segnale del login
   (`wsTbs` presente e URL `perizie.prelios.com`).
 
@@ -331,7 +414,21 @@ non dei clienti:
 - per le sole colonne di **stato/categoria** (pochi valori brevi e
   ripetuti, senza numeri lunghi né date) i valori in chiaro con quante
   pratiche ne hanno ciascuno: è da qui che si capisce, per esempio, quali
-  pratiche hanno già il sopralluogo fissato o fatto.
+  pratiche hanno già il sopralluogo fissato o fatto;
+- per ogni colonna, cosa c'è nelle celle **oltre al testo** (immagini con
+  nome del file/alt/title se pochi, caselle, link, sfondi, chiamate
+  `onclick` con i numeri lunghi mascherati): serve per le colonne a icona
+  come «VT», «App 1/2/3» e «Sospesa»;
+- per il menu **«Stato Perizia»** le voci in chiaro; i numeri di
+  «Trovati» e «Max Righe»; i **link delle pagine** (solo descritti);
+- come è stato deciso chi è **sospeso** (seconda ricerca o ripiego sulla
+  colonna) con i conteggi per fase;
+- la sezione **`perizia`**: com'è fatta la pagina Anagrafica di una
+  perizia e, se raggiunta, la pagina «Sospesi» (campi senza valori,
+  intestazioni delle tabelle, comandi del menu con la chiamata completa e
+  i numeri lunghi mascherati). Se nel ciclo non si apre nessuna perizia, il
+  bridge ne apre una (sospesa o da fissare) solo per descriverla, una volta
+  per avvio.
 
 **Non contiene dati dei clienti**: nomi, indirizzi, comuni, telefoni,
 email, codici, date e note non vengono mai scritti in chiaro. Prima di
@@ -344,7 +441,10 @@ Nella finestra del bridge, dopo ogni lettura, compare una riga come:
 dell'elenco salvata in elenco_struttura.json, senza dati dei clienti)`.
 
 **Quando mandarlo**: se l'elenco che arriva in OptiRoute non è quello che ti
-aspetti (pratiche in più o in meno, pratiche già chiuse), manda allo
+aspetti (pratiche in più o in meno, pratiche già chiuse, sospese sbagliate,
+nota di sospensione vuota — riga «nota di sospensione non letta» nel log),
+lascia girare il bridge per un ciclo intero (così il file contiene anche la
+sezione `perizia`) e poi manda allo
 sviluppatore il file `elenco_struttura.json` che trovi nella cartella del
 bridge: serve a capire quali filtri e quali stati usa il portale. Il file
 non va nel repository (escluso da git).
@@ -414,6 +514,7 @@ python test_excel_pratiche.py
 python test_contact_parse.py
 python test_elenco_griglia.py
 python test_struttura_elenco.py
+python test_stato_portale.py
 python test_bridge_cache.py
 python test_servizio.py
 python test_bridge_server.py

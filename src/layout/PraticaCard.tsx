@@ -178,6 +178,11 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
                 {appt.status === 'issue' ? ISSUE_LABEL[appt.issueType || 'callback'].reentry : 'Rientro'} {dayLabel(appt.followUpDate)}
               </span>
             )}
+            {appt.portalSuspension && (
+              <span className="chip chip-neutral" title={appt.portalSuspension === '-' ? 'Sospesa sul portale (nessuna nota)' : appt.portalSuspension} data-testid="pratica-portal-suspension">
+                Sospesa sul portale
+              </span>
+            )}
             {appt.contactPerson && (
               <span className="chip chip-neutral max-w-full" title={appt.referredBy ? `Indicato da ${appt.referredBy}` : 'Referente da contattare'}>
                 <UserRound size={12} strokeWidth={2} aria-hidden /><span className="truncate">{appt.contactPerson}</span>

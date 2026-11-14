@@ -5,9 +5,11 @@ import {
   fetchBridgeSnapshot,
   type BridgeFetchResult,
   type BridgePortal,
+  type BridgePratica,
   type BridgeSettings,
 } from '../services/bridgeService';
-import type { GestionaleExclusion } from '../services/gestionaleExclusions';
+import { mergeExclusions, type ExclusionChange, type GestionaleExclusion } from '../services/gestionaleExclusions';
+import { isPortalExcluded, portalExclusions } from '../services/portalState';
 import { bridgePraticaToRow, type ImportRow } from './importPratiche';
 
 // Inbox del bridge: le pratiche arrivano da sole. Se il bridge è abilitato e
@@ -19,6 +21,11 @@ import { bridgePraticaToRow, type ImportRow } from './importPratiche';
 // Dentro il gestionale, dopo ogni scaricamento riuscito si tolgono dal
 // lavoro le pratiche che il gestionale indica come già concordate, fatte o
 // chiuse (anche quando non ci sono pratiche nuove).
+// Stato sul portale (contratto §6), in ogni modalità: le pratiche che il
+// portale dà già fissate, fatte o chiuse escono dal lavoro (insieme a quelle
+// del gestionale) e non si importano; le sospese si importano e, nello
+// stesso aggiornamento dell'elenco, prendono lo stato dato dalla nota di
+// sospensione (lo smistamento non fa in tempo a proporle).
 
 export const BRIDGE_POLL_MS = 5 * 60 * 1000;
 
@@ -49,23 +56,33 @@ export interface BridgeImportOutcome {
   updated: number;
   failed: number;
   removed?: number;   // tolte perché già nel gestionale
+  removedPortal?: number; // tolte perché già fissate, fatte o chiuse sul portale
+  suspended?: number; // sospese sul portale (stato dato dalla nota)
 }
 
 interface UseBridgeInboxOptions {
   settings: BridgeSettings;
   isLeader: boolean;
   appointmentsRef: React.MutableRefObject<Appointment[]>;
-  // Import silenzioso delle righe nuove (nucleo comune) + aggiornamenti telefono
-  importBridge: (rows: ImportRow[], updates: { id: string; changes: Partial<Appointment> }[]) => Promise<BridgeImportOutcome>;
+  // Import silenzioso delle righe nuove (nucleo comune) + aggiornamenti telefono;
+  // nello stesso aggiornamento dell'elenco applica le sospensioni del portale
+  // (`portal`: le pratiche dello snapshot) e le conta in `suspended`
+  importBridge: (
+    rows: ImportRow[],
+    updates: { id: string; changes: Partial<Appointment> }[],
+    portal: BridgePratica[]
+  ) => Promise<BridgeImportOutcome>;
+  // C'è qualcosa da fare per le sospensioni del portale sulle pratiche di adesso?
+  suspensionsPending?: (portal: BridgePratica[]) => boolean;
   isImportBusy: () => boolean;
   // Testo del chip quando gli automatismi girano altrove (default: altra scheda)
   followerMessage?: string;
   // Dentro il gestionale: le pratiche arrivano tramite la pagina del
   // gestionale (indirizzo e token del bridge nelle impostazioni non si usano)
   source?: () => Promise<BridgeFetchResult>;
-  // Dentro il gestionale: toglie dal lavoro le pratiche escluse dal
-  // gestionale; restituisce quante ne ha tolte
-  applyExcluded?: (excluded: GestionaleExclusion[]) => number;
+  // Toglie dal lavoro le pratiche escluse (dal gestionale o dal portale);
+  // restituisce quelle tolte
+  applyExcluded?: (excluded: GestionaleExclusion[]) => ExclusionChange[];
   // In attesa di un prerequisito (dentro il gestionale: il primo
   // scaricamento dal cloud): niente scaricamenti né import, nemmeno da
   // "Scarica ora" o dall'avviso del gestionale
@@ -82,6 +99,12 @@ export const describeImport = (o: BridgeImportOutcome, at: Date): string => {
   if (o.updated > 0) parts.push(plural(o.updated, 'telefono arrivato', 'telefoni arrivati'));
   if (o.failed > 0) parts.push(plural(o.failed, 'indirizzo non trovato', 'indirizzi non trovati'));
   if (o.removed && o.removed > 0) parts.push(`${plural(o.removed, 'tolta', 'tolte')} perché già nel gestionale`);
+  if (o.removedPortal && o.removedPortal > 0) {
+    parts.push(o.removedPortal === 1
+      ? '1 tolta perché già fissata o chiusa sul portale'
+      : `${o.removedPortal} tolte perché già fissate o chiuse sul portale`);
+  }
+  if (o.suspended && o.suspended > 0) parts.push(plural(o.suspended, 'sospesa sul portale', 'sospese sul portale'));
   return parts.length > 0 ? `${parts.join(', ')} alle ${hhmm(at)}` : `nessuna novità alle ${hhmm(at)}`;
 };
 
@@ -94,19 +117,19 @@ const initialStatus = (settings: BridgeSettings, viaParent = false): BridgeInbox
       portals: [],
     });
 
-export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBridge, isImportBusy, followerMessage, source, applyExcluded, waiting = false }: UseBridgeInboxOptions) => {
+export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBridge, isImportBusy, followerMessage, source, applyExcluded, suspensionsPending, waiting = false }: UseBridgeInboxOptions) => {
   const viaParent = !!source;
   const [status, setStatus] = useState<BridgeInboxStatus>(() => initialStatus(settings, viaParent));
   const runningRef = useRef(false);
   const lastResultRef = useRef<string | undefined>(undefined);
 
-  const latest = useRef({ settings, importBridge, isImportBusy, source, applyExcluded, waiting });
-  latest.current = { settings, importBridge, isImportBusy, source, applyExcluded, waiting };
+  const latest = useRef({ settings, importBridge, isImportBusy, source, applyExcluded, suspensionsPending, waiting });
+  latest.current = { settings, importBridge, isImportBusy, source, applyExcluded, suspensionsPending, waiting };
 
   const configured = viaParent || (settings.enabled && !!settings.token.trim());
 
   const syncNow = useCallback(async (): Promise<void> => {
-    const { settings: s, importBridge: doImport, isImportBusy: busy, source: src, applyExcluded: exclude } = latest.current;
+    const { settings: s, importBridge: doImport, isImportBusy: busy, source: src, applyExcluded: exclude, suspensionsPending: suspensionsDue } = latest.current;
     if (!src && (!s.enabled || !s.token.trim())) return;
     if (latest.current.waiting) return;
     if (runningRef.current) return;
@@ -143,23 +166,35 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
       if (latest.current.waiting) return;
 
       const snapshot = result.snapshot;
+      // Pratiche da non lavorare: quelle della pagina del gestionale e quelle
+      // che il portale dà già fissate, fatte o chiuse (stessa pratica = una volta)
+      const excluded = mergeExclusions(result.excluded || [], portalExclusions(snapshot.pratiche));
       const diff = diffBridgeSnapshot(snapshot, appointmentsRef.current);
-      let outcome: BridgeImportOutcome = { added: 0, updated: 0, failed: 0 };
-      if (diff.nuove.length > 0 || diff.aggiornamenti.length > 0) {
-        // Ricontrollo subito prima di importare (l'utente potrebbe aver
-        // avviato un import da file durante lo scaricamento)
-        if (busy()) {
-          setTimeout(() => { void syncNow(); }, 10000);
-          return;
-        }
-        outcome = await doImport(diff.nuove.map(bridgePraticaToRow), diff.aggiornamenti);
+      // Le pratiche già fissate, fatte o chiuse sul portale non si importano mai
+      const nuove = diff.nuove.filter(p => !isPortalExcluded(p));
+      const suspensions = !!suspensionsDue && suspensionsDue(snapshot.pratiche);
+      const toImport = nuove.length > 0 || diff.aggiornamenti.length > 0 || suspensions;
+      // Ricontrollo subito prima di importare (l'utente potrebbe aver
+      // avviato un import da file durante lo scaricamento)
+      if (toImport && busy()) {
+        setTimeout(() => { void syncNow(); }, 10000);
+        return;
       }
-      // Pratiche che il gestionale dice di non lavorare (solo dentro il gestionale)
-      if (src && exclude && result.excluded && result.excluded.length > 0) {
-        outcome = { ...outcome, removed: exclude(result.excluded) };
+      let outcome: BridgeImportOutcome = { added: 0, updated: 0, failed: 0 };
+      if (exclude && excluded.length > 0) {
+        const removed = exclude(excluded);
+        outcome = {
+          ...outcome,
+          removed: removed.filter(r => r.fonte !== 'portale').length,
+          removedPortal: removed.filter(r => r.fonte === 'portale').length,
+        };
+      }
+      if (toImport) {
+        const imported = await doImport(nuove.map(bridgePraticaToRow), diff.aggiornamenti, snapshot.pratiche);
+        outcome = { ...imported, removed: outcome.removed, removedPortal: outcome.removedPortal };
       }
       const done = new Date();
-      if (outcome.added + outcome.updated + outcome.failed + (outcome.removed || 0) > 0 || !lastResultRef.current) {
+      if (outcome.added + outcome.updated + outcome.failed + (outcome.removed || 0) + (outcome.removedPortal || 0) + (outcome.suspended || 0) > 0 || !lastResultRef.current) {
         lastResultRef.current = describeImport(outcome, done);
       }
 

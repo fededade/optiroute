@@ -362,8 +362,16 @@ async function scenarioC(browser) {
     bridgePratica('BR-1', 'Bridge Uno', 'Via Sesto', 'Sesto San Giovanni', '+390244400001'),
     bridgePratica('BR-2', 'Bridge Due', 'Via Monza', 'Monza', '+390299999999'), // non sovrascrive
     bridgePratica('BR-3', 'Bridge Tre', 'Via Segrate', 'Segrate', '+390244400003'),
+    // stato sul portale (contratto §6), anche con il bridge diretto
+    { ...bridgePratica('BR-4', 'Bridge Chiusa', 'Via Rho', 'Rho', '+390244400004'), fase: 'chiusa' },
+    { ...bridgePratica('BR-5', 'Bridge Sospesa', 'Via Monza', 'Monza', '+390244400005'), fase: 'sospesa', sospensione: { nota: 'cliente da richiamare il 20/11' } },
   ]);
   await page.getByRole('button', { name: 'Scarica ora', exact: true }).click();
+  all = await waitFor(async () => { const s = await state(page); return byTitle(s, 'Bridge Sospesa') && s; }, 'sospesa importata', 20000);
+  assert.equal(byTitle(all, 'Bridge Chiusa'), undefined, 'chiusa sul portale: mai importata');
+  assert.equal(byTitle(all, 'Bridge Sospesa').status, 'issue', 'sospesa: mai lavoro normale');
+  assert.equal(byTitle(all, 'Bridge Sospesa').issueType, 'callback');
+  assert.equal(byTitle(all, 'Bridge Sospesa').followUpDate, '2026-11-20');
   all = await waitFor(async () => { const s = await state(page); return byTitle(s, 'Bridge Tre').phone && s; }, 'telefono riportato', 20000);
   assert.equal(byTitle(all, 'Bridge Tre').phone, '+390244400003');
   assert.equal(byTitle(all, 'Bridge Due').phone, '+390244400002', 'telefono esistente non sovrascritto');

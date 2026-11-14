@@ -42,6 +42,22 @@ export interface BridgePratica {
   tipologia: string;
   esito: string;
   aggiornatoIl: string;
+  // Stato della pratica sul portale (contratto §6), tutti facoltativi: un
+  // bridge vecchio non li manda e tutto funziona come prima
+  stato?: string;                 // parole del portale (solo per mostrarle)
+  fase?: BridgeFase;              // stato normalizzato dal bridge
+  dataSopralluogo?: string;       // YYYY-MM-DD, se il portale la mostra
+  sospensione?: BridgeSospensione; // solo con fase "sospesa"
+}
+
+// da_fissare = sopralluogo ancora da concordare (come prima), fissato = data
+// del sopralluogo già fissata, effettuato = sopralluogo fatto, sospesa =
+// pratica sospesa (con la nota di sospensione), chiusa = consegnata/chiusa/annullata
+export type BridgeFase = 'da_fissare' | 'fissato' | 'effettuato' | 'sospesa' | 'chiusa';
+
+export interface BridgeSospensione {
+  nota: string;   // testo della nota di sospensione (può essere vuoto)
+  dal?: string;   // YYYY-MM-DD
 }
 
 export interface BridgeSnapshot {
@@ -69,7 +85,48 @@ const baseUrl = (url: string): string => (url || DEFAULT_BRIDGE_SETTINGS.url).tr
 
 const str = (v: unknown): string => (v === null || v === undefined ? '' : `${v}`.trim());
 
-// Normalizza una pratica del bridge (campi mancanti -> stringa vuota).
+const FASI: BridgeFase[] = ['da_fissare', 'fissato', 'effettuato', 'sospesa', 'chiusa'];
+const STATO_MAX = 80;
+const NOTA_MAX = 600;
+
+// Testo facoltativo: solo stringhe, spazi ripuliti, al massimo `max` caratteri
+const cleanText = (v: unknown, max: number): string | undefined => {
+  if (typeof v !== 'string') return undefined;
+  const t = v.replace(/\s+/g, ' ').trim();
+  return t ? t.slice(0, max).trim() : undefined;
+};
+
+// Data YYYY-MM-DD esistente sul calendario; altrimenti assente
+export const isoDateOrUndefined = (v: unknown): string | undefined => {
+  if (typeof v !== 'string') return undefined;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v.trim());
+  if (!m) return undefined;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d ? m[0] : undefined;
+};
+
+// Campi del §6, ripuliti: tipo o forma sbagliati = campo assente (mai errori)
+const portalState = (r: Record<string, unknown>): Pick<BridgePratica, 'stato' | 'fase' | 'dataSopralluogo' | 'sospensione'> => {
+  const out: Pick<BridgePratica, 'stato' | 'fase' | 'dataSopralluogo' | 'sospensione'> = {};
+  const stato = cleanText(r.stato, STATO_MAX);
+  if (stato) out.stato = stato;
+  if (typeof r.fase === 'string' && FASI.includes(r.fase.trim() as BridgeFase)) out.fase = r.fase.trim() as BridgeFase;
+  const dataSopralluogo = isoDateOrUndefined(r.dataSopralluogo);
+  if (dataSopralluogo) out.dataSopralluogo = dataSopralluogo;
+  const sosp = r.sospensione;
+  if (sosp && typeof sosp === 'object' && !Array.isArray(sosp)) {
+    const s = sosp as Record<string, unknown>;
+    if (typeof s.nota === 'string') {
+      const dal = isoDateOrUndefined(s.dal);
+      out.sospensione = { nota: cleanText(s.nota, NOTA_MAX) || '', ...(dal ? { dal } : {}) };
+    }
+  }
+  return out;
+};
+
+// Normalizza una pratica del bridge (campi mancanti -> stringa vuota; i
+// campi facoltativi dello stato sul portale restano assenti se non validi).
 // null se manca il codice: senza codice non si può fare il merge.
 const toPratica = (raw: unknown): BridgePratica | null => {
   if (!raw || typeof raw !== 'object') return null;
@@ -90,6 +147,7 @@ const toPratica = (raw: unknown): BridgePratica | null => {
     tipologia: str(r.tipologia),
     esito: str(r.esito),
     aggiornatoIl: str(r.aggiornatoIl),
+    ...portalState(r),
   };
 };
 

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import type { Appointment } from '../types';
 import type { CloudConfig } from '../services/cloudProtocol';
 import type { CloudSettings } from '../services/cloudSettings';
-import { cloudPing, cloudStatus, describeCloudFailure } from '../services/cloudSync';
+import { cloudPing, cloudStatus, describeCloudFailure, type CloudCredential } from '../services/cloudSync';
 import { replaceCloudData, schedulerFresh, startActivation } from '../services/cloudSyncCore';
 import {
   Activity, Check, CircleAlert, CircleCheck, CircleDashed, CircleX, Cloud, CloudDownload, CloudUpload, Copy, Info,
@@ -24,8 +24,9 @@ const fmtWhen = (iso: string): string => {
   return d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
 
-// Controlli del collegamento: ping (senza chiave) + stato (con chiave)
-const runCloudChecks = async (key: string): Promise<{ checks: CloudCheck[]; webhookUrl: string | null }> => {
+// Controlli del collegamento: ping (senza chiave) + stato (con chiave, o con
+// l'accesso dal gestionale)
+const runCloudChecks = async (key: string, credential?: CloudCredential): Promise<{ checks: CloudCheck[]; webhookUrl: string | null }> => {
   const checks: CloudCheck[] = [];
   const ping = await cloudPing({});
   if (!ping.ok) {
@@ -37,9 +38,13 @@ const runCloudChecks = async (key: string): Promise<{ checks: CloudCheck[]; webh
     });
     return { checks, webhookUrl: null };
   }
-  const status = ping.data.secretConfigured && key ? await cloudStatus({ key }) : null;
+  const status = ping.data.secretConfigured && (key || credential) ? await cloudStatus({ key, credential }) : null;
 
-  if (!ping.data.secretConfigured) {
+  if (credential) {
+    checks.push(status && status.ok
+      ? { id: 'key', state: 'ok', label: 'Accesso dal gestionale', detail: 'Il server ha riconosciuto l\'accesso.' }
+      : { id: 'key', state: 'ko', label: 'Accesso dal gestionale', detail: status && !status.ok ? describeCloudFailure(status.error) : 'Su Vercel manca la variabile CRON_SECRET.' });
+  } else if (!ping.data.secretConfigured) {
     checks.push({ id: 'key', state: 'ko', label: 'Chiave accettata', detail: 'Su Vercel manca la variabile CRON_SECRET: impostala e rifai il deploy.' });
   } else if (!key) {
     checks.push({ id: 'key', state: 'ko', label: 'Chiave accettata', detail: 'Inserisci la chiave di accesso (il valore di CRON_SECRET su Vercel).' });
@@ -105,6 +110,8 @@ interface CloudSectionProps {
   onKeySave: (key: string) => void;
   keyDraft: string;
   setKeyDraft: (key: string) => void;
+  // Dentro il gestionale: chi è collegato e il suo accesso (niente chiave)
+  gestionale?: { user: { name: string; role: string }; credential: CloudCredential } | null;
 }
 
 type ActivationUi =
@@ -116,8 +123,8 @@ type ActivationUi =
 
 const plural = (n: number) => `${n} ${n === 1 ? 'pratica' : 'pratiche'}`;
 
-const CloudSection: React.FC<CloudSectionProps> = ({ cloud, getLocalCloudData, onActivate, onDisconnect, onKeySave, keyDraft, setKeyDraft }) => {
-  const active = cloud.enabled && !!cloud.key;
+const CloudSection: React.FC<CloudSectionProps> = ({ cloud, getLocalCloudData, onActivate, onDisconnect, onKeySave, keyDraft, setKeyDraft, gestionale }) => {
+  const active = !!gestionale || (cloud.enabled && !!cloud.key);
   const [checking, setChecking] = useState(false);
   const [checks, setChecks] = useState<CloudCheck[] | null>(null);
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
@@ -129,7 +136,7 @@ const CloudSection: React.FC<CloudSectionProps> = ({ cloud, getLocalCloudData, o
     setChecking(true);
     setChecks(null);
     try {
-      const r = await runCloudChecks(key);
+      const r = gestionale ? await runCloudChecks('', gestionale.credential) : await runCloudChecks(key);
       setChecks(r.checks);
       setWebhookUrl(r.webhookUrl);
     } finally {
@@ -210,6 +217,19 @@ const CloudSection: React.FC<CloudSectionProps> = ({ cloud, getLocalCloudData, o
         </div>
       )}
 
+      {gestionale ? (
+        <div>
+          <p className="field-label">Accesso</p>
+          <p data-testid="cloud-gestionale-user" className="flex items-center gap-2 text-sm text-ink-800">
+            <KeyRound {...ic} className="shrink-0 text-ink-400" />
+            <span>
+              Accesso dal gestionale come <b className="font-semibold">{gestionale.user.name || 'utente del gestionale'}</b>
+              {gestionale.user.role ? ` (${gestionale.user.role})` : ''}
+            </span>
+          </p>
+          <p className="field-hint">Non serve la chiave: l'accesso arriva dal gestionale e si rinnova da solo.</p>
+        </div>
+      ) : (
       <div>
         <label htmlFor="cloud-key" className="field-label">Chiave di accesso</label>
         <div className="flex flex-wrap gap-2">
@@ -232,6 +252,7 @@ const CloudSection: React.FC<CloudSectionProps> = ({ cloud, getLocalCloudData, o
         </div>
         <p className="field-hint">La stessa chiave serve anche alle chiamate manuali.</p>
       </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -243,7 +264,7 @@ const CloudSection: React.FC<CloudSectionProps> = ({ cloud, getLocalCloudData, o
           {checking ? <Spinner /> : <Activity {...ic} />}
           {checking ? 'Verifico...' : 'Prova collegamento'}
         </button>
-        {!active ? (
+        {gestionale ? null : !active ? (
           <button
             type="button"
             onClick={handleActivate}
@@ -353,7 +374,9 @@ const CloudSection: React.FC<CloudSectionProps> = ({ cloud, getLocalCloudData, o
 
       <p className="flex items-center gap-1.5 text-xs text-ink-400">
         <Info {...ic} size={14} />
-        Attivazione e scollegamento hanno effetto subito (non serve "Salva").
+        {gestionale
+          ? 'Dentro il gestionale il cloud è sempre attivo: i dati stanno sul server di OptiRoute.'
+          : 'Attivazione e scollegamento hanno effetto subito (non serve "Salva").'}
       </p>
     </section>
   );

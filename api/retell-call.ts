@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 // Retell AI outbound confirmation call.
 // Required env vars (Vercel dashboard):
@@ -12,6 +12,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 //   RETELL_MANDANTE     -> chain of principals (default: "Prelios per conto di Banca Intesa")
 //   RETELL_API_BASE     -> base dell'API Retell (default https://api.retellai.com; per i test)
 //   CRON_SECRET         -> se impostata, l'endpoint richiede Authorization: Bearer <CRON_SECRET>
+//                          (o un biglietto di sessione del gestionale, vedi server/auth.ts)
 //
 // NB: questo file è importato (e impacchettato) anche dal motore lato server
 // (server/engine.ts): niente import relativi qui, Vercel non li risolverebbe.
@@ -35,17 +36,31 @@ export const retellEnv = (): RetellEnv => ({
   apiBase: (process.env.RETELL_API_BASE || 'https://api.retellai.com').replace(/\/+$/, ''),
 });
 
-// Protezione opzionale: con CRON_SECRET impostata serve la chiave (confronto
-// a tempo costante sui digest); senza, l'endpoint resta aperto come prima.
-export const isCallApiAuthorized = (headers: VercelRequest['headers'] | undefined): boolean => {
+// Protezione opzionale: con CRON_SECRET impostata serve la chiave oppure un
+// biglietto di sessione del gestionale ancora valido (confronti a tempo
+// costante sui digest); senza CRON_SECRET l'endpoint resta aperto come prima.
+// La verifica del biglietto è la stessa di server/auth.ts (copiata: qui
+// niente import relativi); un test controlla che coincidano.
+const sha256 = (v: string) => createHash('sha256').update(v, 'utf8').digest();
+const sameSecret = (a: string, b: string) => timingSafeEqual(sha256(a), sha256(b));
+const isSessionTokenFor = (token: string, secret: string, nowMs: number): boolean => {
+  const m = /^ors1\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/.exec(token);
+  if (!m) return false;
+  const exp = parseInt(m[1], 10);
+  if (exp * 1000 <= nowMs || exp * 1000 > nowMs + 61 * 60 * 1000) return false;
+  const key = createHmac('sha256', secret).update('optiroute-sessione-v1').digest();
+  return sameSecret(m[2], createHmac('sha256', key).update(`ors1.${exp}`).digest('base64url'));
+};
+
+export const isCallApiAuthorized = (headers: VercelRequest['headers'] | undefined, nowMs: number = Date.now()): boolean => {
   const secret = process.env.CRON_SECRET || '';
   if (!secret) return true;
   const raw = headers?.authorization;
   const value = Array.isArray(raw) ? raw[0] || '' : raw || '';
   const m = /^Bearer\s+(.+)$/i.exec(value.trim());
   if (!m) return false;
-  const digest = (v: string) => createHash('sha256').update(v, 'utf8').digest();
-  return timingSafeEqual(digest(m[1].trim()), digest(secret));
+  const token = m[1].trim();
+  return sameSecret(token, secret) || isSessionTokenFor(token, secret, nowMs);
 };
 
 // Normalize to E.164; numbers without prefix are assumed to be Italian (+39)

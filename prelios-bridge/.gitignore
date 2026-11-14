@@ -7,6 +7,10 @@ bridge_cache.json.corrotto
 .bridge_cache_*.tmp
 bridge_token.txt
 
+# Indirizzi del gestionale di QUESTO PC (creato da installa_bridge.py)
+bridge_config.json
+.bridge_config_*.tmp
+
 # Catture e dump diagnostici (possono contenere dati personali)
 captures/
 elenco_dump*.json

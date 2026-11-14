@@ -375,6 +375,8 @@ var createRetellCall = async (body, opts = {}) => {
 
 // server/auth.ts
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+var SESSION_PREFIX = "ors1";
+var SESSION_TTL_MS = 60 * 60 * 1e3;
 var safeEqual = (a, b) => {
   const da = createHash("sha256").update(a, "utf8").digest();
   const db = createHash("sha256").update(b, "utf8").digest();
@@ -389,10 +391,28 @@ var bearerToken = (headers) => {
   const m = /^Bearer\s+(.+)$/i.exec(headerValue(headers, "authorization").trim());
   return m ? m[1].trim() : "";
 };
-var isAuthorized = (headers, secret) => {
-  const token = bearerToken(headers);
-  return !!secret && !!token && safeEqual(token, secret);
+var sessionMac = (secret, exp) => {
+  const key = createHmac("sha256", secret).update("optiroute-sessione-v1").digest();
+  return createHmac("sha256", key).update(`${SESSION_PREFIX}.${exp}`).digest("base64url");
 };
+var SESSION_RE = /^ors1\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/;
+var isValidSessionToken = (token, secret, nowMs) => {
+  if (typeof token !== "string" || !secret) return false;
+  const m = SESSION_RE.exec(token);
+  if (!m) return false;
+  const exp = parseInt(m[1], 10);
+  if (exp * 1e3 <= nowMs || exp * 1e3 > nowMs + SESSION_TTL_MS + 6e4) return false;
+  return safeEqual(m[2], sessionMac(secret, exp));
+};
+var isAuthorized = (headers, secret, nowMs = Date.now()) => {
+  const token = bearerToken(headers);
+  if (!secret || !token) return false;
+  return safeEqual(token, secret) || isValidSessionToken(token, secret, nowMs);
+};
+
+// server/gestionale.ts
+var STAFF_CACHE_TTL_MS = 5 * 60 * 1e3;
+var CLOCK_SKEW_S = 5 * 60;
 
 // server/store.ts
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -938,6 +958,56 @@ CODE_BY_CLEAN_NAME[cleanName("Reggio di Calabria")] = "RC";
 CODE_BY_CLEAN_NAME[cleanName("Massa e Carrara")] = "MS";
 CODE_BY_CLEAN_NAME[cleanName("Aoste")] = "AO";
 CODE_BY_CLEAN_NAME[cleanName("Bolzano - Bozen")] = "BZ";
+
+// src/services/safeStorage.ts
+var memoryStorage = () => {
+  const map = /* @__PURE__ */ new Map();
+  return {
+    getItem: (key) => map.has(key) ? map.get(key) : null,
+    setItem: (key, value) => {
+      map.set(key, String(value));
+    },
+    removeItem: (key) => {
+      map.delete(key);
+    }
+  };
+};
+var createSafeStorage = (getNative) => {
+  let resolved = null;
+  const fallback = memoryStorage();
+  const resolve = () => {
+    if (resolved) return resolved;
+    try {
+      const native = getNative();
+      if (!native) {
+        resolved = { mode: "absent", store: fallback };
+      } else {
+        native.getItem("optiroute_prova_memoria");
+        resolved = { mode: "native", store: native };
+      }
+    } catch {
+      resolved = { mode: "memory", store: fallback };
+    }
+    return resolved;
+  };
+  return {
+    mode: () => resolve().mode,
+    getItem: (key) => {
+      const r = resolve();
+      if (r.mode !== "native") return r.store.getItem(key);
+      try {
+        return r.store.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    setItem: (key, value) => resolve().store.setItem(key, value),
+    removeItem: (key) => resolve().store.removeItem(key)
+  };
+};
+var safeLocalStorage = createSafeStorage(
+  () => typeof localStorage === "undefined" ? void 0 : localStorage
+);
 
 // src/services/technicianService.ts
 var dateInRange = (date, from, to) => {
@@ -2162,7 +2232,8 @@ var defaultDeps = (overrides = {}) => {
     clock: overrides.clock || Date.now,
     retell: overrides.retell || httpRetellClient,
     sleep: overrides.sleep,
-    timezone: overrides.timezone || timezoneStatus
+    timezone: overrides.timezone || timezoneStatus,
+    gestionale: overrides.gestionale
   };
 };
 var engineDeps = (d, store) => ({
@@ -2210,7 +2281,7 @@ var requireStore = (d) => {
 };
 var authenticate = (req, d) => {
   const secret = requireSecret(d);
-  if (!isAuthorized(req.headers, secret)) throw new HttpError(401, "auth");
+  if (!isAuthorized(req.headers, secret, d.clock())) throw new HttpError(401, "auth");
   return requireStore(d);
 };
 var runAndSummarize = async (d, store, source) => runTick(engineDeps(d, store), source);

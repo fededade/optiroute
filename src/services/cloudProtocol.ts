@@ -1,5 +1,6 @@
 import type { Appointment, Coordinates, Technician } from '../types';
 import type { AutopilotSettings } from './autopilotService';
+import { praticaKey } from './praticaCode';
 
 // Protocollo fra il browser e il server (pilota in cloud). Condiviso da
 // entrambi: tipi dei messaggi e le funzioni PURE con cui si confrontano e si
@@ -102,8 +103,10 @@ export const applyAppointmentChanges = (all: Appointment[], changes: Appointment
         replace(index, { ...list[index], ...change.value });
         continue;
       }
-      const code = change.value.periziaCode?.trim();
-      const twin = code ? list.findIndex(a => a.periziaCode?.trim() === code) : -1;
+      // stessa pratica anche se il numero è scritto in modo diverso
+      // ("845326" / "845.326" / "Rif: ISP 845.326" nelle note)
+      const key = praticaKey(change.value);
+      const twin = key ? list.findIndex(a => praticaKey(a) === key) : -1;
       if (twin >= 0) {
         if (!list[twin].phone?.trim() && change.value.phone?.trim()) {
           replace(twin, { ...list[twin], phone: change.value.phone });
@@ -201,7 +204,28 @@ export type CloudErrorCode =
   | 'store_not_configured'  // 503: sul server manca il database
   | 'bad_request'           // 400
   | 'conflict'              // 409: troppe modifiche concorrenti, riprovare
-  | 'server';               // 500
+  | 'server'                // 500
+  // Collegamento con il gestionale (op=session, op=sopralluoghi)
+  | 'forbidden'                  // 403: non amministratore / non personale
+  | 'gestionale_not_configured'  // 503: mancano le variabili GESTIONALE_*
+  | 'gestionale_unreachable';    // 502: Google o il gestionale non rispondono
+
+// GET ?op=ping: risposta (senza chiave)
+export interface CloudPingResponse {
+  protocol: number;
+  secretConfigured: boolean;
+  storeConfigured: boolean;
+  // `parentAllowed`: la pagina indicata con &parent= è del gestionale
+  // (l'elenco delle pagine ammesse non viene mai restituito)
+  gestionale?: { enabled: boolean; parentAllowed: boolean };
+}
+
+// POST ?op=session: biglietto di sessione per chi usa OptiRoute dal gestionale
+export interface CloudSessionResponse {
+  token: string;
+  expiresAt: string;
+  user: { name: string; role: string };
+}
 
 export interface CloudError {
   error: CloudErrorCode;

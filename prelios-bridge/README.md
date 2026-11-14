@@ -12,6 +12,86 @@ apertura, lettura campi), qui riscritta in forma autonoma.
 Il **login con MFA resta sempre manuale**: il bridge non lo aggira né lo
 automatizza, aspetta che l'operatore lo completi nella finestra Chrome.
 
+## Avvio con un doppio clic
+
+**La prima volta (una sola volta per PC)**
+1. Installa **Python** (3.10 o più recente) da
+   <https://www.python.org/downloads/>; su Windows spunta *"Add python.exe
+   to PATH"* durante l'installazione. Serve anche **Google Chrome**.
+2. Nella cartella del bridge fai doppio clic su **`Installa.bat`**
+   (su macOS: dal Terminale `python3 installa_bridge.py`).
+3. Il programma installa i componenti che mancano e ti chiede
+   l'**indirizzo del gestionale**: incollalo (es.
+   `https://gestionale.example/optiroute.html`) e premi Invio; lascia vuoto
+   per saltare. Su Windows crea anche l'icona **"OptiRoute Bridge"** sul
+   Desktop e il collegamento che permette al pulsante del gestionale di
+   accendere il bridge.
+
+**Ogni giorno**
+- Doppio clic sull'icona **OptiRoute Bridge** del Desktop (oppure su
+  `Avvia bridge.bat` nella cartella; su macOS `avvia-bridge.command`),
+  **oppure** il pulsante per avviare il bridge nella pagina OptiRoute del
+  gestionale (solo Windows: il browser chiede la conferma ad aprire
+  "OptiRoute Bridge").
+- Si apre una **finestra nera**: lasciala aperta, è il bridge. Con il doppio
+  clic si apre anche la pagina OptiRoute del gestionale.
+- Finché un amministratore del gestionale non apre la pagina OptiRoute, la
+  finestra dice **"IN ATTESA DI ATTIVAZIONE"**. Appena un amministratore la
+  apre, il bridge si attiva da solo, scrive chi lo ha attivato e apre il
+  **Chrome del portale**: fai il login (MFA) come sempre.
+- Da lì il bridge controlla il portale **ogni 15 minuti** e passa i dati a
+  OptiRoute da solo.
+- **Per fermarlo**: chiudi la finestra nera (oppure `Ctrl+C` e conferma).
+
+Se il bridge è già acceso, un nuovo doppio clic lo dice (il messaggio resta
+visibile qualche secondo) e non ne avvia un secondo; il pulsante del
+gestionale, in quel caso, non fa nulla. Se manca un componente il lanciatore lo installa da solo (serve
+Internet); se non ci riesce lo spiega e la finestra resta aperta.
+
+## Collegamento con il gestionale
+
+- **Chi può attivarlo**: solo un utente del gestionale con ruolo
+  **Super Amministratore** o **Amministratore**. Un tecnico che apre la
+  pagina non attiva nulla. Il bridge controlla il ruolo leggendo la scheda
+  del personale nel gestionale con l'accesso dell'utente stesso.
+- **Da dove**: solo dalle pagine degli indirizzi salvati in
+  `bridge_config.json` (il browser dichiara sempre da che sito arriva la
+  richiesta e non lo si può falsificare). Qualsiasi altro sito viene
+  rifiutato.
+- **"In attesa di attivazione"**: il bridge è acceso ma non ha ancora aperto
+  il portale e non consegna dati. Si attiva alla prima apertura della pagina
+  da parte di un amministratore e resta attivo finché la finestra nera
+  resta aperta.
+- **Il pulsante "avvia bridge" del gestionale** (solo Windows) usa il
+  collegamento `optiroute-bridge://` registrato dall'installazione: Windows
+  avvia direttamente Python con `avvia_bridge.py --da-gestionale`, senza
+  passare dal Prompt dei comandi. Windows aggiunge in fondo l'indirizzo
+  cliccato, ma il programma **non lo usa**: con `--da-gestionale` ignora
+  qualunque altra cosa scritta sulla riga di comando e parte sempre con le
+  impostazioni normali. Così nessun sito può far eseguire comandi o cambiare
+  le impostazioni del bridge. Il pulsante accende soltanto il bridge, che
+  poi va comunque attivato da un amministratore. Se il bridge si ferma per
+  un errore, la finestra aspetta Invio prima di chiudersi.
+- **Niente token da incollare**: quando un amministratore attiva il bridge,
+  la pagina del gestionale riceve da sola la chiave di accesso ai dati.
+- **Aggiungere un altro indirizzo**: rilancia `Installa.bat` e incolla il
+  nuovo indirizzo (quelli già salvati restano), oppure
+  `python installa_bridge.py --gestionale https://altro.example`.
+- **Tornare indietro**:
+  - per togliere l'icona e il collegamento col pulsante:
+    `py installa_bridge.py --disinstalla` (configurazione, token e dati
+    salvati restano);
+  - per tornare alla modalità manuale (token incollato a mano): cancella
+    `bridge_config.json`, oppure avvia con `--senza-gestionale`.
+
+Il file `bridge_config.json` sta nella cartella del bridge, non va nel
+repository (è nel `.gitignore`) e ha questa forma:
+```json
+{ "gestionale": ["https://gestionale.example"], "pagina": "/optiroute.html" }
+```
+Gli indirizzi devono essere `https://` (`http://localhost` e
+`http://127.0.0.1` sono ammessi solo per le prove sul proprio PC).
+
 ## Cosa fa
 
 1. Legge l'elenco pratiche e tiene SOLO le righe con tipologia
@@ -33,9 +113,13 @@ Gli errori sulla singola pratica NON fermano il giro (finiscono nella colonna
 
 | File | Ruolo |
 |---|---|
+| `Installa.bat` / `installa_bridge.py` | installazione (una volta): componenti, indirizzo del gestionale, icona e collegamento (Windows) |
+| `Avvia bridge.bat` / `avvia-bridge.command` / `avvia_bridge.py` | avvio con un doppio clic (Windows / macOS) |
 | `run_giro.py` | comando principale (giro classico e `--serve`) |
 | `servizio.py` | modalità servizio: cicli periodici, login, consegna |
 | `bridge_server.py` | server HTTP locale (contratto v1, solo 127.0.0.1) |
+| `bridge_config.py` | indirizzi del gestionale (`bridge_config.json`) |
+| `verifica_gestionale.py` | controllo che chi attiva sia un amministratore |
 | `bridge_cache.py` | cache persistente `bridge_cache.json` |
 | `portals.py` | adapter dei portali (Prelios; Cerved registrato ma non configurato) |
 | `browser.py` | browser Selenium autonomo (Chrome remote-debugging, porta 9223) |
@@ -53,7 +137,7 @@ Gli errori sulla singola pratica NON fermano il giro (finiscono nella colonna
 - **Python 3.10+**
 - **Google Chrome** installato (Windows, macOS o Linux; per un percorso non
   standard impostare la variabile d'ambiente `CHROME_PATH`)
-- `pip install selenium openpyxl`
+- `pip install selenium openpyxl` (con il doppio clic li installa da solo)
   - senza `openpyxl` legge TSV/CSV e scrive un CSV al posto dell'Excel;
   - `selenium` serve solo per il giro vero (non per il `--dry-run` né per i test).
 
@@ -78,18 +162,31 @@ Opzioni utili:
   è lo stesso che usa MISI, in `config.py` alla voce `user_id`).
 - `--limit N` — lavora solo le prime N pratiche (per un primo test).
 
-## Uso — modalità servizio (consegna diretta alla web app)
+## Uso — modalità servizio da terminale (consegna diretta alla web app)
+
+Per chi preferisce il terminale al doppio clic (fa la stessa cosa):
 
 ```bash
 python run_giro.py --serve                       # elenco letto dal portale (best-effort)
 python run_giro.py --serve elenco.xlsx           # elenco dal file, riletto a ogni ciclo
-python run_giro.py --serve --port 8765 --interval 30 --portal prelios
+python run_giro.py --serve --port 8765 --interval 15 --portal prelios
+python run_giro.py --serve --gestionale https://gestionale.example   # solo per questa volta
+python run_giro.py --serve --senza-gestionale    # modalità manuale anche con bridge_config.json
+python avvia_bridge.py --limit 3                 # come il doppio clic, con opzioni in più
 ```
 
+- Con un gestionale configurato (`bridge_config.json` oppure
+  `--gestionale URL`, ripetibile: sostituisce l'elenco del file per quella
+  esecuzione) il bridge parte **in attesa di attivazione** e apre Chrome
+  solo dopo l'attivazione da parte di un amministratore.
+- Senza gestionale (o con `--senza-gestionale`) funziona come sempre:
+  stampa il token da incollare a mano in OptiRoute e apre subito Chrome.
+
 Giornata tipo:
-1. **Al mattino** avvii il comando: si apre il Chrome dedicato del bridge.
+1. **Al mattino** avvii il bridge: si apre il Chrome dedicato del bridge
+   (in modalità gestionale, dopo l'attivazione).
 2. Fai il **login Prelios con MFA** nella finestra (unico passaggio manuale).
-3. Da lì il bridge lavora da solo: ogni `--interval` minuti (default 30)
+3. Da lì il bridge lavora da solo: ogni `--interval` minuti (default **15**)
    rilegge l'elenco e recupera il telefono **solo delle pratiche nuove**.
    La web app OptiRoute legge i dati dal bridge senza bisogno di trascinare
    l'Excel.
@@ -116,18 +213,37 @@ portale (telefoni vuoti, cache non scritta): utile per provare la web app.
 
 ### Token
 
-Al primo avvio il bridge genera un token casuale, lo salva in
-`bridge_token.txt` (cartella del bridge, escluso da git) e lo stampa nel
-terminale: **incollalo una volta** nelle impostazioni di OptiRoute. Il token
-viene stampato all'avvio e non compare in nessun altro log. Per revocarlo:
-cancella `bridge_token.txt` e riavvia (ne verrà generato uno nuovo).
+Al primo avvio il bridge genera un token casuale e lo salva in
+`bridge_token.txt` (cartella del bridge, escluso da git).
+- **Modalità manuale**: il token viene stampato nel terminale: **incollalo
+  una volta** nelle impostazioni di OptiRoute.
+- **Modalità gestionale**: il token NON viene stampato; la pagina del
+  gestionale lo riceve da sola quando un amministratore attiva il bridge.
+
+Il token non compare in nessun log. Per revocarlo: cancella
+`bridge_token.txt` e riavvia (ne verrà generato uno nuovo).
 
 ### Contratto HTTP v1 (solo `127.0.0.1`)
 
-- `GET /v1/health` → `200 {"bridge":"optiroute-bridge","version":1}` (senza token)
+- `GET /v1/health` (senza token, senza dati personali) → `200`
+  `{"bridge":"optiroute-bridge","version":1,"attivazione":…,"portali":[{id,status,lastSync}],"pratiche":<numero>,"intervalloMinuti":15}`
+  con `attivazione` fra `non_richiesta` (modalità manuale), `in_attesa`,
+  `attivo`. Qui `portali` non contiene mai `message`.
+- `POST /v1/attiva` (solo modalità gestionale) con header `Origin` (lo
+  mette il browser) e `Authorization: Bearer <accesso del gestionale>`,
+  corpo vuoto. Controlli, nell'ordine: modalità manuale →
+  `409 {"error":"non_configurato"}`; indirizzo non autorizzato →
+  `403 {"error":"origine"}`; accesso mancante, scaduto, email non
+  verificata o rifiutato dal gestionale → `401 {"error":"token"}`;
+  gestionale non raggiungibile → `502 {"error":"verifica"}`; utente non
+  amministratore → `403 {"error":"ruolo"}`. Se tutto va bene →
+  `200 {"attivo":true,"token":"<token del bridge>","utente":{"nome","ruolo"}}`.
+  Ripetere l'attivazione è innocuo; con lo stesso accesso entro 5 minuti il
+  gestionale non viene interrogato di nuovo.
 - `GET /v1/pratiche` con header `X-Bridge-Token` (o `?token=`) → `200`
   `{bridge, version, generatedAt, portals[], pratiche[]}`; token mancante o
-  errato → `401 {"error":"token"}`.
+  errato → `401 {"error":"token"}`; in modalità gestionale prima
+  dell'attivazione → `409 {"error":"non_attivo"}`.
   - `portals[]`: `{id, status, lastSync, message}`, con `status` fra
     `starting | login_required | running | ok | error`;
   - `pratiche[]`: `{portal, codice, intestatario, via, civico, comune,
@@ -154,7 +270,20 @@ Verificato (test automatici, senza portale):
 - server HTTP: health, 401, token in header e in query, formato della
   risposta, CORS e preflight;
 - anonimizzazione delle catture;
-- il giro classico `--dry-run` produce lo stesso output di prima.
+- il giro classico `--dry-run` produce lo stesso output di prima;
+- collegamento col gestionale: indirizzi ammessi/rifiutati, controllo
+  amministratore con un gestionale simulato (admin, tecnico, email non
+  verificata, accesso scaduto, progetto o emittente sbagliati, errori di
+  rete), attivazione via HTTP, attesa dell'attivazione prima di aprire il
+  browser, `Ctrl+C` durante l'attesa;
+- avvio dal pulsante con argomenti ostili (indirizzi con `&`, opzioni
+  aggiunte prima o dopo `--da-gestionale`): vengono tutti ignorati;
+- installazione e lanciatore con registro di Windows e pip simulati.
+
+**NON verificato su un PC reale**: i file `.bat` e `.command` (scritti il
+più semplici possibile; tutta la logica sta nei file Python, che sono
+testati), il collegamento `optiroute-bridge://` aperto da un browser vero e
+la lettura del gestionale reale.
 
 **NON verificato sul portale reale** (nessun accesso durante lo sviluppo):
 - **lettura automatica dell'elenco** (`--serve` senza file): si assume che
@@ -217,7 +346,12 @@ Apre quella perizia e scrive tutti i campi + i candidati telefono in `campi.json
   nella colonna **Note** dell'output, così arriva fino all'operatore AI in
   chiamata dentro OptiRoute.
 - File con dati personali o segreti, tutti esclusi da git: `bridge_cache.json`,
-  `bridge_token.txt`, `captures/`, `elenco_dump*.json`, `campi_*.json`.
+  `bridge_token.txt`, `captures/`, `elenco_dump*.json`, `campi_*.json`;
+  escluso da git anche `bridge_config.json` (indirizzi del gestionale di
+  quel PC).
+- I file `.bat` devono restare con le fine riga di Windows: il file
+  `.gitattributes` alla radice del repository impedisce a git di
+  convertirli.
 
 ## Formato di output per OptiRoute (giro classico)
 
@@ -238,9 +372,16 @@ python test_bridge_cache.py
 python test_servizio.py
 python test_bridge_server.py
 python test_anonimizza.py
+python test_bridge_config.py
+python test_verifica_gestionale.py
+python test_bridge_attivazione.py
+python test_avvia_bridge.py
+python test_installa_bridge.py
 ```
-Test puri (niente portale, niente dati reali, niente pytest): filtro FULL -
-Acquisto, estrazione campi, parsing telefono dalle note, anti falsi-positivi,
-lettura griglia, cache, ciclo del servizio, server HTTP locale (porta
-effimera su 127.0.0.1), anonimizzazione. `test_servizio.py` stampa di
+Test puri (niente portale, niente dati reali, niente rete esterna, niente
+pytest): filtro FULL - Acquisto, estrazione campi, parsing telefono dalle
+note, anti falsi-positivi, lettura griglia, cache, ciclo del servizio,
+server HTTP locale (porta effimera su 127.0.0.1), anonimizzazione,
+collegamento col gestionale (gestionale simulato), lanciatore e
+installazione (registro di Windows simulato). `test_servizio.py` stampa di
 proposito il traceback di una sessione scaduta simulata.

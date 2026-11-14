@@ -1,6 +1,7 @@
 import type { Appointment, Coordinates, Technician, TechnicianUnavailability } from '../types';
 import { calculateDistance } from '../utils/geo';
 import { provinceMatches } from '../utils/provinces';
+import { safeLocalStorage } from './safeStorage';
 
 // Palette per i tecnici (scelta nel form della scheda)
 export const TECHNICIAN_COLORS = [
@@ -57,7 +58,7 @@ const safeParse = <T>(raw: string | null): T | null => {
 };
 
 export const loadTechnicians = (): Technician[] => {
-  const data = safeParse<Technician[]>(localStorage.getItem(TECHNICIANS_KEY));
+  const data = safeParse<Technician[]>(safeLocalStorage.getItem(TECHNICIANS_KEY));
   if (!Array.isArray(data) || data.length === 0) return defaultTechnicians();
   return data
     .filter(t => t && t.id && t.name)
@@ -74,7 +75,7 @@ export const loadTechnicians = (): Technician[] => {
 
 export const saveTechnicians = (technicians: Technician[]): void => {
   try {
-    localStorage.setItem(TECHNICIANS_KEY, JSON.stringify(technicians));
+    safeLocalStorage.setItem(TECHNICIANS_KEY, JSON.stringify(technicians));
   } catch (e) {
     console.warn('Impossibile salvare i tecnici in locale', e);
   }

@@ -3,6 +3,7 @@ import type { Appointment } from '../types';
 import {
   diffBridgeSnapshot,
   fetchBridgeSnapshot,
+  type BridgeFetchResult,
   type BridgePortal,
   type BridgeSettings,
 } from '../services/bridgeService';
@@ -23,6 +24,7 @@ export type BridgeChipKind =
   | 'follower'       // gli automatismi girano in un'altra scheda
   | 'checking'       // scaricamento in corso
   | 'offline'        // non raggiungibile
+  | 'inactive'       // (gestionale) bridge avviato ma non attivato
   | 'token'          // token errato
   | 'invalid'        // risposta inattesa
   | 'login'          // un portale chiede l'accesso (MFA)
@@ -53,6 +55,9 @@ interface UseBridgeInboxOptions {
   isImportBusy: () => boolean;
   // Testo del chip quando gli automatismi girano altrove (default: altra scheda)
   followerMessage?: string;
+  // Dentro il gestionale: le pratiche arrivano tramite la pagina del
+  // gestionale (indirizzo e token del bridge nelle impostazioni non si usano)
+  source?: () => Promise<BridgeFetchResult>;
 }
 
 const hhmm = (d: Date) => d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
@@ -67,26 +72,29 @@ export const describeImport = (o: BridgeImportOutcome, at: Date): string => {
   return parts.length > 0 ? `${parts.join(', ')} alle ${hhmm(at)}` : `nessuna novità alle ${hhmm(at)}`;
 };
 
-const initialStatus = (settings: BridgeSettings): BridgeInboxStatus => ({
-  kind: !settings.enabled ? 'disabled' : !settings.token ? 'unconfigured' : 'checking',
-  message: !settings.enabled ? 'Bridge spento' : !settings.token ? 'Bridge non configurato' : 'Bridge: collegamento...',
-  lastCheckAt: null,
-  portals: [],
-});
+const initialStatus = (settings: BridgeSettings, viaParent = false): BridgeInboxStatus => (viaParent
+  ? { kind: 'checking', message: 'Bridge: collegamento...', lastCheckAt: null, portals: [] }
+  : {
+      kind: !settings.enabled ? 'disabled' : !settings.token ? 'unconfigured' : 'checking',
+      message: !settings.enabled ? 'Bridge spento' : !settings.token ? 'Bridge non configurato' : 'Bridge: collegamento...',
+      lastCheckAt: null,
+      portals: [],
+    });
 
-export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBridge, isImportBusy, followerMessage }: UseBridgeInboxOptions) => {
-  const [status, setStatus] = useState<BridgeInboxStatus>(() => initialStatus(settings));
+export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBridge, isImportBusy, followerMessage, source }: UseBridgeInboxOptions) => {
+  const viaParent = !!source;
+  const [status, setStatus] = useState<BridgeInboxStatus>(() => initialStatus(settings, viaParent));
   const runningRef = useRef(false);
   const lastResultRef = useRef<string | undefined>(undefined);
 
-  const latest = useRef({ settings, importBridge, isImportBusy });
-  latest.current = { settings, importBridge, isImportBusy };
+  const latest = useRef({ settings, importBridge, isImportBusy, source });
+  latest.current = { settings, importBridge, isImportBusy, source };
 
-  const configured = settings.enabled && !!settings.token.trim();
+  const configured = viaParent || (settings.enabled && !!settings.token.trim());
 
   const syncNow = useCallback(async (): Promise<void> => {
-    const { settings: s, importBridge: doImport, isImportBusy: busy } = latest.current;
-    if (!s.enabled || !s.token.trim()) return;
+    const { settings: s, importBridge: doImport, isImportBusy: busy, source: src } = latest.current;
+    if (!src && (!s.enabled || !s.token.trim())) return;
     if (runningRef.current) return;
     if (busy()) {
       // Un altro import è in corso: si riprova fra poco
@@ -96,14 +104,22 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
     runningRef.current = true;
     setStatus(st => ({ ...st, kind: st.kind === 'ok' ? 'ok' : 'checking', message: st.kind === 'ok' ? st.message : 'Bridge: collegamento...' }));
     try {
-      const result = await fetchBridgeSnapshot(s);
+      const result = src ? await src() : await fetchBridgeSnapshot(s);
       const at = new Date();
       if (!result.ok) {
-        const map = {
-          offline: { kind: 'offline' as const, message: 'Bridge non raggiungibile: avvia il bridge sul PC' },
-          token: { kind: 'token' as const, message: 'Bridge: token errato (controlla le impostazioni)' },
-          invalid: { kind: 'invalid' as const, message: 'Bridge: risposta inattesa' },
-        }[result.error];
+        const map = src
+          ? {
+              offline: { kind: 'offline' as const, message: 'Bridge non avviato: avvialo dalla barra del gestionale' },
+              inactive: { kind: 'inactive' as const, message: 'Bridge non attivo: attivalo dalla barra del gestionale' },
+              token: { kind: 'token' as const, message: 'Bridge: accesso rifiutato (riattivalo dalla barra del gestionale)' },
+              invalid: { kind: 'invalid' as const, message: 'Bridge: risposta inattesa' },
+            }[result.error]
+          : {
+              offline: { kind: 'offline' as const, message: 'Bridge non raggiungibile: avvia il bridge sul PC' },
+              inactive: { kind: 'offline' as const, message: 'Bridge non raggiungibile: avvia il bridge sul PC' },
+              token: { kind: 'token' as const, message: 'Bridge: token errato (controlla le impostazioni)' },
+              invalid: { kind: 'invalid' as const, message: 'Bridge: risposta inattesa' },
+            }[result.error];
         setStatus({ ...map, detail: result.message, lastCheckAt: at, lastResult: lastResultRef.current, portals: [] });
         return;
       }
@@ -165,12 +181,12 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
 
   // Stato del chip quando cambiano le impostazioni o il lock
   useEffect(() => {
-    if (!settings.enabled) { setStatus(st => ({ ...initialStatus(settings), lastResult: st.lastResult })); return; }
-    if (!settings.token.trim()) { setStatus(st => ({ ...initialStatus(settings), lastResult: st.lastResult })); return; }
+    if (!viaParent && !settings.enabled) { setStatus(st => ({ ...initialStatus(settings), lastResult: st.lastResult })); return; }
+    if (!viaParent && !settings.token.trim()) { setStatus(st => ({ ...initialStatus(settings), lastResult: st.lastResult })); return; }
     if (!isLeader) {
       setStatus(st => ({ ...st, kind: 'follower', message: followerMessage || 'Bridge: gestito dall\'altra scheda' }));
     }
-  }, [settings, isLeader, followerMessage]);
+  }, [settings, isLeader, followerMessage, viaParent]);
 
   // Avvio + ogni 5 minuti (solo nella scheda che ha il lock)
   useEffect(() => {
@@ -178,7 +194,7 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
     void syncNow();
     const timer = setInterval(() => { void syncNow(); }, BRIDGE_POLL_MS);
     return () => clearInterval(timer);
-  }, [configured, isLeader, settings.url, settings.token, syncNow]);
+  }, [configured, isLeader, viaParent, viaParent ? '' : settings.url, viaParent ? '' : settings.token, syncNow]);
 
   return { status, syncNow };
 };

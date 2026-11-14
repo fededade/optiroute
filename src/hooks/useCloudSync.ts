@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Appointment } from '../types';
 import type { CloudConfig } from '../services/cloudProtocol';
+import type { CloudCredential } from '../services/cloudSync';
 import { CloudSyncEngine, type CloudSyncState } from '../services/cloudSyncCore';
 
 // Pilota in cloud, lato browser: con il cloud attivo (e solo nella scheda
@@ -15,6 +16,9 @@ import { CloudSyncEngine, type CloudSyncState } from '../services/cloudSyncCore'
 interface UseCloudSyncOptions {
   active: boolean;                 // cloud acceso, chiave presente, scheda principale
   cloudKey: string;
+  // Dentro il gestionale, al posto della chiave: biglietto di sessione letto a
+  // ogni richiesta (un rinnovo NON fa ripartire la sincronizzazione)
+  credential?: CloudCredential;
   deviceId: string;
   appointments: Appointment[];     // per accorgersi delle modifiche
   configDeps: unknown[];           // tecnici, impostazioni del pilota, orari, base
@@ -25,7 +29,7 @@ interface UseCloudSyncOptions {
 }
 
 export const useCloudSync = ({
-  active, cloudKey, deviceId, appointments, configDeps, appointmentsRef, setAppointments, getConfig, applyConfig,
+  active, cloudKey, credential, deviceId, appointments, configDeps, appointmentsRef, setAppointments, getConfig, applyConfig,
 }: UseCloudSyncOptions): { state: CloudSyncState | null; engineRef: React.MutableRefObject<CloudSyncEngine | null> } => {
   const [state, setState] = useState<CloudSyncState | null>(null);
   const engineRef = useRef<CloudSyncEngine | null>(null);
@@ -33,9 +37,10 @@ export const useCloudSync = ({
   latest.current = { setAppointments, getConfig, applyConfig };
 
   useEffect(() => {
-    if (!active || !cloudKey) { setState(null); return; }
+    if (!active || (!cloudKey && !credential)) { setState(null); return; }
     const engine = new CloudSyncEngine({
       key: cloudKey,
+      credential,
       deviceId,
       host: {
         getAppointments: () => appointmentsRef.current,
@@ -65,7 +70,7 @@ export const useCloudSync = ({
       engine.destroy();
       if (engineRef.current === engine) engineRef.current = null;
     };
-  }, [active, cloudKey, deviceId, appointmentsRef]);
+  }, [active, cloudKey, credential, deviceId, appointmentsRef]);
 
   // Modifiche locali (o adottate dal server: in quel caso non parte nulla)
   useEffect(() => {

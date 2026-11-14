@@ -1,6 +1,7 @@
 import type { Appointment, Coordinates } from '../types';
 import { CALL_OUTCOME_MAX_AGE_MS, DEFAULT_AUTOPILOT_SETTINGS, type AutopilotSettings } from './autopilotService';
 import { DEFAULT_BRIDGE_SETTINGS, type BridgeSettings } from './bridgeService';
+import { safeLocalStorage } from './safeStorage';
 
 // Simple localStorage persistence so the planning survives page reloads.
 
@@ -38,7 +39,7 @@ const safeParse = <T>(raw: string | null): T | null => {
 };
 
 export const loadAppointments = (): Appointment[] => {
-  const data = safeParse<Appointment[]>(localStorage.getItem(APPOINTMENTS_KEY));
+  const data = safeParse<Appointment[]>(safeLocalStorage.getItem(APPOINTMENTS_KEY));
   if (!Array.isArray(data)) return [];
   return data
     .filter(a => a && a.id && a.coords)
@@ -77,23 +78,23 @@ export const recoverInterruptedCall = (a: Appointment, now: Date): Appointment =
 
 export const saveAppointments = (appointments: Appointment[]): void => {
   try {
-    localStorage.setItem(APPOINTMENTS_KEY, JSON.stringify(appointments));
+    safeLocalStorage.setItem(APPOINTMENTS_KEY, JSON.stringify(appointments));
   } catch (e) {
     console.warn('Impossibile salvare gli appuntamenti in locale', e);
   }
 };
 
 export const loadBase = (): StoredBase | null => {
-  const data = safeParse<StoredBase>(localStorage.getItem(BASE_KEY));
+  const data = safeParse<StoredBase>(safeLocalStorage.getItem(BASE_KEY));
   return data && data.coords ? data : null;
 };
 
 export const saveBase = (base: StoredBase | null): void => {
   try {
     if (base) {
-      localStorage.setItem(BASE_KEY, JSON.stringify(base));
+      safeLocalStorage.setItem(BASE_KEY, JSON.stringify(base));
     } else {
-      localStorage.removeItem(BASE_KEY);
+      safeLocalStorage.removeItem(BASE_KEY);
     }
   } catch (e) {
     console.warn('Impossibile salvare la base in locale', e);
@@ -101,7 +102,7 @@ export const saveBase = (base: StoredBase | null): void => {
 };
 
 export const loadSettings = (): StoredSettings | null => {
-  return safeParse<StoredSettings>(localStorage.getItem(SETTINGS_KEY));
+  return safeParse<StoredSettings>(safeLocalStorage.getItem(SETTINGS_KEY));
 };
 
 // Impostazioni del pilota fuse con i default: i campi aggiunti in seguito
@@ -118,7 +119,7 @@ export const loadBridgeSettings = (): BridgeSettings => ({
 
 export const saveSettings = (settings: StoredSettings): void => {
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    safeLocalStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch (e) {
     console.warn('Impossibile salvare le impostazioni in locale', e);
   }

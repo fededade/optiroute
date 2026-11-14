@@ -112,7 +112,7 @@ const activateCloud = async page => {
   // --- preparazione: archivio vuoto, orologio del motore fissato ---
   assert.equal((await api('POST', '/__test/reset')).status, 200);
   assert.equal((await api('POST', '/__test/now', { now: T0 })).status, 200);
-  assert.deepEqual((await api('GET', '/api/cloud?op=ping')).json, { protocol: 1, secretConfigured: true, storeConfigured: true });
+  assert.deepEqual((await api('GET', '/api/cloud?op=ping')).json, { protocol: 1, secretConfigured: true, storeConfigured: true, gestionale: { enabled: false, parentAllowed: false } });
   assert.equal((await api('GET', '/api/cloud?op=status')).status, 401, 'senza chiave: 401');
   assert.equal((await api('GET', '/api/cloud?op=status', undefined, { Authorization: 'Bearer sbagliata' })).status, 401);
 

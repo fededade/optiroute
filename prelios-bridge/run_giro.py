@@ -15,7 +15,12 @@ USO:
 MODALITÀ SERVIZIO (consegna diretta alla web app, vedi servizio.py):
     python run_giro.py --serve                          # elenco letto dal portale
     python run_giro.py --serve elenco.xlsx              # elenco dal file
-    python run_giro.py --serve --port 8765 --interval 30 --portal prelios
+    python run_giro.py --serve --port 8765 --interval 15 --portal prelios
+    python run_giro.py --serve --gestionale https://gestionale.example
+                                       # attivazione dal gestionale (solo admin)
+    python run_giro.py --serve --senza-gestionale   # token incollato a mano
+
+Per l'avvio con un doppio clic vedi avvia_bridge.py e README.md.
 """
 
 from __future__ import annotations
@@ -30,6 +35,9 @@ from excel_pratiche import Pratica, load_pratiche
 
 # User ID Prelios di default (per mouseClickObj). Sovrascrivibile da --user-id.
 DEFAULT_USER_ID = "8468"
+
+# Minuti fra due controlli del portale in modalità servizio (--interval).
+INTERVALLO_DEFAULT_MIN = 15
 
 COLONNE_OUTPUT = [
     "Intestatario", "Indirizzo", "N.Civ.", "Comune", "Prov.",
@@ -99,7 +107,7 @@ def processa_pratica(browser, pratica: Pratica, user_id: str) -> tuple[str, str,
     return PreliosAdapter(user_id=user_id).enrich(browser, pratica)
 
 
-def main(argv: list[str] | None = None) -> int:
+def crea_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Arricchisce l'elenco pratiche (FULL - Acquisto) con i "
                     "telefoni da Prelios e produce l'Excel per OptiRoute."
@@ -126,11 +134,27 @@ def main(argv: list[str] | None = None) -> int:
                                "app OptiRoute via HTTP locale (127.0.0.1)")
     servizio.add_argument("--port", type=int, default=8765,
                           help="Porta HTTP locale (default: %(default)s)")
-    servizio.add_argument("--interval", type=float, default=30,
-                          help="Minuti fra due cicli (default: %(default)s)")
+    servizio.add_argument("--interval", type=float, default=INTERVALLO_DEFAULT_MIN,
+                          help="Minuti fra due controlli del portale "
+                               "(default: %(default)s)")
     servizio.add_argument("--portal", default="prelios",
                           help="Portale: prelios | cerved (default: %(default)s)")
+    servizio.add_argument("--gestionale", action="append", metavar="URL", default=None,
+                          help="Indirizzo del gestionale che può attivare il "
+                               "bridge (ripetibile). Per questa esecuzione "
+                               "sostituisce l'elenco di bridge_config.json")
+    servizio.add_argument("--senza-gestionale", action="store_true",
+                          help="Modalità manuale (token incollato a mano) anche "
+                               "se bridge_config.json è presente")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = crea_parser()
     args = parser.parse_args(argv)
+
+    if args.gestionale and args.senza_gestionale:
+        parser.error("--gestionale e --senza-gestionale non si possono usare insieme")
 
     if args.serve:
         from servizio import esegui_servizio

@@ -68,7 +68,13 @@ def test_server() -> None:
         # --- health: senza token ---
         st, h, body = _richiesta(port, "GET", "/v1/health")
         assert st == 200, st
-        assert _json(body) == {"bridge": "optiroute-bridge", "version": 1}
+        # modalità manuale: attivazione non richiesta; nessun `message`
+        assert _json(body) == {"bridge": "optiroute-bridge", "version": 1,
+                               "attivazione": "non_richiesta",
+                               "portali": [{"id": "prelios", "status": "ok",
+                                            "lastSync": "2026-11-11T09:29:41Z"}],
+                               "pratiche": 1, "intervalloMinuti": 15}, body
+        assert b"ROSSI" not in body and b"+39" not in body
         assert h["access-control-allow-origin"] == "*", h
         assert h["vary"] == "Origin"
         assert h["content-type"].startswith("application/json")
@@ -114,8 +120,8 @@ def test_server() -> None:
         assert body == b""
         assert h["access-control-allow-origin"] == origin
         assert h["vary"] == "Origin"
-        assert h["access-control-allow-methods"] == "GET, OPTIONS"
-        assert h["access-control-allow-headers"] == "X-Bridge-Token, Content-Type"
+        assert h["access-control-allow-methods"] == "GET, POST, OPTIONS"
+        assert h["access-control-allow-headers"] == "X-Bridge-Token, Content-Type, Authorization"
         assert h["access-control-allow-private-network"] == "true"
         assert h["access-control-max-age"] == "600"
 
@@ -131,6 +137,14 @@ def test_server() -> None:
         assert st == 404
         st, _h, _b = _richiesta(port, "POST", "/v1/pratiche", {"X-Bridge-Token": TOKEN})
         assert st == 405
+
+        # --- modalità manuale: /v1/attiva non configurato ---
+        st, _h, body = _richiesta(port, "POST", "/v1/attiva",
+                                  {"Origin": origin, "Authorization": "Bearer x.y.z"})
+        assert st == 409 and _json(body) == {"error": "non_configurato"}, (st, body)
+        # e /v1/pratiche resta accessibile col token come prima
+        st, _h, _b = _richiesta(port, "GET", "/v1/pratiche", {"X-Bridge-Token": TOKEN})
+        assert st == 200
     finally:
         server.shutdown()
         server.server_close()

@@ -1,4 +1,5 @@
 import type { Appointment } from '../types';
+import { codeKey, praticaKey } from './praticaCode';
 
 // Client del bridge locale dei portali (prelios-bridge, contratto v1):
 // un programma sul PC dell'operatore legge le pratiche dai portali e le
@@ -50,8 +51,9 @@ export interface BridgeSnapshot {
   pratiche: BridgePratica[];
 }
 
-// offline = bridge non raggiungibile (rete), token = 401, invalid = risposta inattesa
-export type BridgeErrorKind = 'offline' | 'token' | 'invalid';
+// offline = bridge non raggiungibile (rete), token = 401, invalid = risposta inattesa,
+// inactive = (dentro il gestionale) bridge avviato ma non ancora attivato
+export type BridgeErrorKind = 'offline' | 'token' | 'invalid' | 'inactive';
 
 export type BridgeFetchResult =
   | { ok: true; snapshot: BridgeSnapshot }
@@ -117,12 +119,61 @@ export const parseBridgeSnapshot = (data: unknown): BridgeSnapshot | null => {
   };
 };
 
+// --- Accesso alla rete locale (Chrome, "Local Network Access") ---
+// Una pagina https che chiama un programma su questo computer (il bridge su
+// 127.0.0.1) deve dichiararlo, altrimenti le versioni recenti di Chrome
+// bloccano la richiesta anche dopo il permesso dell'utente. Il nome del
+// valore è cambiato nel tempo ('loopback' oggi, 'local' prima); un valore
+// sconosciuto fa fallire la richiesta, mentre i browser che non conoscono
+// l'opzione la ignorano. Si prova quale valore accetta questo browser
+// costruendo una Request (nessuna rete).
+
+// L'opzione non è ancora nei tipi del DOM
+type LocalNetworkInit = RequestInit & { targetAddressSpace?: string };
+type RequestCtor = new (input: string, init?: LocalNetworkInit) => unknown;
+
+export const loopbackAddressSpace = (RequestImpl: RequestCtor | undefined): string => {
+  if (typeof RequestImpl !== 'function') return '';
+  for (const value of ['loopback', 'local']) {
+    try {
+      new RequestImpl('http://127.0.0.1/', { targetAddressSpace: value });
+      return value;
+    } catch {
+      // valore non accettato: si prova il successivo
+    }
+  }
+  return '';
+};
+
+let addressSpaceCache: string | null = null;
+const browserLoopbackSpace = (): string => {
+  if (addressSpaceCache === null) {
+    addressSpaceCache = loopbackAddressSpace(typeof Request === 'undefined' ? undefined : (Request as unknown as RequestCtor));
+  }
+  return addressSpaceCache;
+};
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+export const isLoopbackUrl = (url: string): boolean => {
+  try {
+    return LOOPBACK_HOSTS.has(new URL(url).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+};
+
+// Opzioni della richiesta al bridge: la dichiarazione di rete locale solo per
+// un indirizzo di questo computer e solo se il browser la accetta
+export const bridgeRequestInit = (url: string, init: RequestInit, space: string = browserLoopbackSpace()): LocalNetworkInit =>
+  space && isLoopbackUrl(url) ? { ...init, targetAddressSpace: space } : init;
+
 // fetch con timeout (AbortController)
 const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs: number): Promise<Response> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal, cache: 'no-store' });
+    return await fetch(url, bridgeRequestInit(url, { ...init, signal: controller.signal, cache: 'no-store' }));
   } finally {
     clearTimeout(timer);
   }
@@ -164,6 +215,31 @@ export const fetchBridgeSnapshot = async (
   return { ok: true, snapshot };
 };
 
+// Dentro il gestionale le pratiche del bridge arrivano TRAMITE la pagina del
+// gestionale (che parla con il bridge sul PC): richiesta "bridge.snapshot".
+export const fetchBridgeSnapshotViaParent = async (
+  request: (method: string, params: Record<string, unknown>, opts: { timeoutMs?: number }) => Promise<Record<string, unknown>>,
+  timeoutMs = 20000
+): Promise<BridgeFetchResult> => {
+  let r: Record<string, unknown>;
+  try {
+    r = await request('bridge.snapshot', {}, { timeoutMs });
+  } catch {
+    return { ok: false, error: 'offline', message: 'Il gestionale non ha risposto' };
+  }
+  const message = typeof r.message === 'string' && r.message ? r.message : '';
+  if (r.status === 'ok') {
+    const snapshot = parseBridgeSnapshot(r.snapshot);
+    return snapshot
+      ? { ok: true, snapshot }
+      : { ok: false, error: 'invalid', message: 'Risposta inattesa: non sembra il bridge di OptiRoute' };
+  }
+  if (r.status === 'offline') return { ok: false, error: 'offline', message: message || 'Bridge non avviato' };
+  if (r.status === 'inactive') return { ok: false, error: 'inactive', message: message || 'Bridge non attivato' };
+  if (r.status === 'token') return { ok: false, error: 'token', message: message || 'Token del bridge errato' };
+  return { ok: false, error: 'invalid', message: message || 'Risposta inattesa dal gestionale' };
+};
+
 // Verifica che all'indirizzo risponda il bridge (senza token)
 export const checkBridgeHealth = async (
   url: string,
@@ -199,9 +275,12 @@ export interface BridgeDiff {
 // ha un telefono. Un telefono già presente non si sovrascrive mai (potrebbe
 // averlo corretto l'operatore).
 export const diffBridgeSnapshot = (snapshot: Pick<BridgeSnapshot, 'pratiche'>, appointments: Appointment[]): BridgeDiff => {
+  // Confronto per chiave del codice: "845326" del bridge = "845.326" salvato
+  // o "Rif: ISP 845.326" in testa alle note (import da My Maps)
   const byCode = new Map<string, Appointment>();
   for (const a of appointments) {
-    if (a.periziaCode && !byCode.has(a.periziaCode)) byCode.set(a.periziaCode, a);
+    const key = praticaKey(a);
+    if (key && !byCode.has(key)) byCode.set(key, a);
   }
 
   const nuove: BridgePratica[] = [];
@@ -210,10 +289,11 @@ export const diffBridgeSnapshot = (snapshot: Pick<BridgeSnapshot, 'pratiche'>, a
 
   for (const p of snapshot.pratiche) {
     const codice = p.codice?.trim();
-    if (!codice || seen.has(codice)) continue;
-    seen.add(codice);
+    const key = codeKey(codice);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
 
-    const existing = byCode.get(codice);
+    const existing = byCode.get(key);
     if (!existing) {
       nuove.push(p);
       continue;

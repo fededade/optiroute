@@ -4,6 +4,7 @@ import { checkBridgeHealth, fetchBridgeSnapshot, type BridgeSettings } from '../
 import type { Appointment } from '../types';
 import type { CloudConfig } from '../services/cloudProtocol';
 import type { CloudSettings } from '../services/cloudSettings';
+import type { CloudCredential } from '../services/cloudSync';
 import CloudSection from './CloudSection';
 import {
   Activity, CalendarRange, CircleAlert, CircleCheck, CircleX, Cloud, Phone, Plug, Settings2, TriangleAlert, type LucideIcon,
@@ -27,6 +28,8 @@ interface AutopilotSettingsModalProps {
   onCloudActivate: (key: string) => void;   // attiva il cloud su questo browser
   onCloudDisconnect: () => void;            // scollega (pilota locale spento)
   onCloudKeySave: (key: string) => void;    // salva solo la chiave
+  // Dentro il gestionale: accesso e bridge li gestisce il gestionale
+  gestionale?: { user: { name: string; role: string }; credential: CloudCredential } | null;
 }
 
 const clampInt = (raw: string, min: number, max: number, fallback: number): number => {
@@ -36,8 +39,12 @@ const clampInt = (raw: string, min: number, max: number, fallback: number): numb
 };
 
 const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
-  autopilot, bridge, onSave, onClose, cloud, getLocalCloudData, onCloudActivate, onCloudDisconnect, onCloudKeySave,
+  autopilot, bridge, onSave, onClose, cloud, getLocalCloudData, onCloudActivate, onCloudDisconnect, onCloudKeySave, gestionale,
 }) => {
+  const embedded = !!gestionale;
+  // Dentro il gestionale i campi manuali del bridge restano visibili ma spenti
+  const wrapBridgeFields = (fields: React.ReactNode) =>
+    embedded ? <fieldset disabled className="min-w-0 space-y-4 opacity-60">{fields}</fieldset> : fields;
   const [cloudKeyDraft, setCloudKeyDraft] = useState(cloud.key);
   const [ap, setAp] = useState<AutopilotSettings>(autopilot);
   const [br, setBr] = useState<BridgeSettings>(bridge);
@@ -97,9 +104,10 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
       minLeadHours: clampInt(nums.minLeadHours, 0, 72, autopilot.minLeadHours),
       dispatchHorizonDays: clampInt(nums.dispatchHorizonDays, 1, 60, autopilot.dispatchHorizonDays),
     };
-    onSave(next, { ...br, url: br.url.trim() || bridge.url, token: br.token.trim() });
+    // Dentro il gestionale bridge e chiave non si toccano (restano quelle salvate)
+    onSave(next, embedded ? bridge : { ...br, url: br.url.trim() || bridge.url, token: br.token.trim() });
     // La chiave serve anche alle chiamate manuali: si salva pure a cloud spento
-    if (cloudKeyDraft.trim() !== cloud.key) onCloudKeySave(cloudKeyDraft.trim());
+    if (!embedded && cloudKeyDraft.trim() !== cloud.key) onCloudKeySave(cloudKeyDraft.trim());
     onClose();
   };
 
@@ -265,9 +273,19 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
                   Il programma sul PC che legge le pratiche dai portali: con il bridge acceso le pratiche arrivano da sole (ogni 5 minuti).
                 </p>
               </div>
+              {embedded && (
+                <div data-testid="bridge-gestionale-note" className="callout callout-success">
+                  <Plug {...ic} className="mt-0.5 shrink-0 text-emerald-600" />
+                  <p className="leading-5">
+                    Il bridge è gestito dalla pagina del gestionale: si avvia e si attiva dalla barra in alto del gestionale e le pratiche arrivano da sole.
+                    Indirizzo e token qui sotto non servono.
+                  </p>
+                </div>
+              )}
+              {wrapBridgeFields(<>
               <SettingGroup>
                 <SettingRow asLabel label="Bridge acceso">
-                  <Switch checked={br.enabled} onChange={e => setBr(b => ({ ...b, enabled: e.target.checked }))} />
+                  <Switch checked={embedded ? true : br.enabled} onChange={e => setBr(b => ({ ...b, enabled: e.target.checked }))} />
                 </SettingRow>
               </SettingGroup>
               <div className="grid gap-4 sm:grid-cols-2">
@@ -286,11 +304,12 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
                   />
                 </Field>
               </div>
+              </>)}
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
                   onClick={handleTest}
-                  disabled={test.state === 'running'}
+                  disabled={embedded || test.state === 'running'}
                   className="btn btn-secondary btn-sm"
                 >
                   {test.state === 'running' ? <Spinner size={14} /> : <Activity {...ic} size={14} />}
@@ -321,6 +340,7 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
               onKeySave={onCloudKeySave}
               keyDraft={cloudKeyDraft}
               setKeyDraft={setCloudKeyDraft}
+              gestionale={gestionale}
             />
           ))}
     </ModalShell>

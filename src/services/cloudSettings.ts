@@ -1,6 +1,10 @@
+import { safeLocalStorage } from './safeStorage';
+
 // Impostazioni del collegamento al cloud, per QUESTO browser (localStorage).
 // La chiave è la stessa impostata sul server (variabile CRON_SECRET): non
 // viaggia mai negli URL, solo nell'intestazione Authorization.
+// (Dentro il gestionale queste impostazioni non si usano né si modificano:
+// l'accesso arriva dal gestionale, vedi services/gestionaleSession.)
 
 const CLOUD_KEY = 'optiroute_cloud_v1';
 
@@ -15,13 +19,13 @@ const newDeviceId = (): string => {
   return `dev-${Date.now().toString(36)}-${rnd()}${rnd()}`;
 };
 
-const hasStorage = (): boolean => typeof localStorage !== 'undefined';
+const hasStorage = (): boolean => safeLocalStorage.mode() !== 'absent';
 
 export const loadCloudSettings = (): CloudSettings => {
   const fallback: CloudSettings = { enabled: false, key: '', deviceId: '' };
   if (!hasStorage()) return fallback; // lato server / test
   try {
-    const raw = localStorage.getItem(CLOUD_KEY);
+    const raw = safeLocalStorage.getItem(CLOUD_KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<CloudSettings>) : {};
     const settings: CloudSettings = {
       enabled: parsed.enabled === true,
@@ -38,7 +42,7 @@ export const loadCloudSettings = (): CloudSettings => {
 export const saveCloudSettings = (settings: CloudSettings): void => {
   if (!hasStorage()) return;
   try {
-    localStorage.setItem(CLOUD_KEY, JSON.stringify(settings));
+    safeLocalStorage.setItem(CLOUD_KEY, JSON.stringify(settings));
   } catch (e) {
     console.warn('Impossibile salvare le impostazioni del cloud', e);
   }

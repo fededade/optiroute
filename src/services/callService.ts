@@ -1,15 +1,32 @@
 import type { AlternativeLabel, AlternativeSlot, Appointment, CallOutcome } from '../types';
 import { loadCloudSettings } from './cloudSettings';
+import type { CloudCredential } from './cloudSync';
 
 // Client for the /api/retell-call serverless endpoint (Retell AI outbound call)
 // e per /api/call-status (esito della conversazione via polling).
+
+// Dentro il gestionale: biglietto di sessione (letto a ogni richiesta, con un
+// rinnovo e un nuovo tentativo se il server risponde 401). Fuori: null.
+let callCredential: CloudCredential | null = null;
+export const setCallCredential = (credential: CloudCredential | null): void => {
+  callCredential = credential;
+};
 
 // Chiave di accesso del cloud (se l'operatore l'ha inserita nelle
 // impostazioni): quando sul server è configurata, le API delle chiamate la
 // richiedono, così nessun altro può far partire telefonate.
 const cloudAuthHeaders = (): Record<string, string> => {
-  const key = loadCloudSettings().key;
+  const key = callCredential ? callCredential.get() : loadCloudSettings().key;
   return key ? { Authorization: `Bearer ${key}` } : {};
+};
+
+// fetch con l'accesso attuale; con un 401 e il biglietto del gestionale: un
+// rinnovo e un solo nuovo tentativo
+const fetchWithAuth = async (url: string, init: RequestInit = {}): Promise<Response> => {
+  const run = () => fetch(url, { ...init, headers: { ...(init.headers as Record<string, string> | undefined), ...cloudAuthHeaders() } });
+  const response = await run();
+  if (response.status !== 401 || !callCredential?.refresh) return response;
+  return (await callCredential.refresh()) === 'ok' ? run() : response;
 };
 
 export interface CallResult {
@@ -31,9 +48,9 @@ export const startConfirmationCall = async (
   }
 
   try {
-    const response = await fetch('/api/retell-call', {
+    const response = await fetchWithAuth('/api/retell-call', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...cloudAuthHeaders() },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         phone: appointment.phone,
         clientName: appointment.title,
@@ -58,7 +75,12 @@ export const startConfirmationCall = async (
     const data = await response.json().catch(() => ({}));
 
     if (response.status === 401) {
-      return { ok: false, error: 'Chiave di accesso mancante o errata: inseriscila nelle impostazioni del pilota (⚙ → Cloud).' };
+      return {
+        ok: false,
+        error: callCredential
+          ? 'Accesso dal gestionale scaduto: ricarica la pagina del gestionale e riprova.'
+          : 'Chiave di accesso mancante o errata: inseriscila nelle impostazioni del pilota (⚙ → Cloud).',
+      };
     }
     if (!response.ok) {
       return { ok: false, error: data?.error || `Errore server (${response.status})` };
@@ -123,9 +145,7 @@ export const parseFollowUpDate = (raw: string): string | undefined => {
 // massima lo decide il chiamante.
 export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll> => {
   try {
-    const response = await fetch(`/api/call-status?callId=${encodeURIComponent(callId)}`, {
-      headers: cloudAuthHeaders(),
-    });
+    const response = await fetchWithAuth(`/api/call-status?callId=${encodeURIComponent(callId)}`);
 
     if (!response.ok) {
       return { pending: true, error: `HTTP ${response.status}` };

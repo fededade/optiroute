@@ -11,8 +11,19 @@ import {
   type CloudStatus,
   type TickSource,
 } from '../src/services/cloudProtocol';
+import { buildSopralluoghiExport } from '../src/services/gestionaleExport';
 import { retellEnv } from '../api/retell-call';
-import { headerValue, isAuthorized, isValidWebhookToken, webhookToken } from './auth';
+import { bearerToken, headerValue, isAuthorized, isValidWebhookToken, mintSessionToken, webhookToken } from './auth';
+import {
+  GestionaleAuthError,
+  GestionaleUnreachableError,
+  createGestionaleService,
+  gestionaleSettings,
+  isAllowedOrigin,
+  normalizeOrigin,
+  type GestionaleDeps,
+  type GestionaleService,
+} from './gestionale';
 import { ConflictError, StoreError, commit, storeFromEnv, type Store } from './store';
 import { runTick, type EngineDeps } from './engine';
 import { httpRetellClient, type RetellClient } from './retell';
@@ -48,6 +59,9 @@ export interface HandlerDeps {
   retell: RetellClient;
   sleep?: (ms: number) => Promise<void>;
   timezone: () => TimezoneStatus;
+  // Collegamento con il gestionale: rete, verifica dei biglietti e indirizzo
+  // di Firestore sostituibili (test e server locale, mai Google dal vivo)
+  gestionale?: GestionaleDeps;
 }
 
 export const LEASE_TTL_MS = 90_000;
@@ -71,6 +85,7 @@ export const defaultDeps = (overrides: Partial<HandlerDeps> = {}): HandlerDeps =
     retell: overrides.retell || httpRetellClient,
     sleep: overrides.sleep,
     timezone: overrides.timezone || timezoneStatus,
+    gestionale: overrides.gestionale,
   };
 };
 
@@ -206,11 +221,35 @@ const requireStore = (d: HandlerDeps): Store => {
   return d.store;
 };
 
+// Chiave (CRON_SECRET) oppure biglietto di sessione valido
 const authenticate = (req: ApiRequest, d: HandlerDeps): Store => {
   const secret = requireSecret(d);
-  if (!isAuthorized(req.headers, secret)) throw new HttpError(401, 'auth');
+  if (!isAuthorized(req.headers, secret, d.clock())) throw new HttpError(401, 'auth');
   return requireStore(d);
 };
+
+// --- Gestionale ---
+
+// Biglietto di Firebase -> persona del personale (o errore HTTP)
+const identifyStaff = async (token: string, d: HandlerDeps, service: GestionaleService) => {
+  const settings = gestionaleSettings(d.env);
+  if (!settings.enabled) throw new HttpError(503, 'gestionale_not_configured');
+  if (!token) throw new HttpError(401, 'auth');
+  try {
+    return await service.identify(token, settings.projects, d.clock());
+  } catch (err) {
+    if (err instanceof GestionaleAuthError) throw new HttpError(401, 'auth');
+    if (err instanceof GestionaleUnreachableError) {
+      console.error('cloud: gestionale non raggiungibile');
+      throw new HttpError(502, 'gestionale_unreachable');
+    }
+    throw err;
+  }
+};
+
+// Data di oggi in Italia (YYYY-MM-DD)
+const romeToday = (at: Date): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
 
 // --- Operazioni ---
 
@@ -222,6 +261,8 @@ const OPS: Record<string, string> = {
   init: 'POST',
   tick: 'POST',
   webhook: 'POST',
+  session: 'POST',
+  sopralluoghi: 'GET',
 };
 
 const intParam = (raw: string): number => (/^\d+$/.test(raw) ? parseInt(raw, 10) : -1);
@@ -229,14 +270,47 @@ const intParam = (raw: string): number => (/^\d+$/.test(raw) ? parseInt(raw, 10)
 const runAndSummarize = async (d: HandlerDeps, store: Store, source: TickSource) =>
   runTick(engineDeps(d, store), source);
 
-const handleOp = async (op: string, req: ApiRequest, res: ApiResponse, d: HandlerDeps): Promise<void> => {
+const handleOp = async (op: string, req: ApiRequest, res: ApiResponse, d: HandlerDeps, service: GestionaleService): Promise<void> => {
   switch (op) {
     case 'ping': {
+      const settings = gestionaleSettings(d.env);
+      const parent = queryValue(req, 'parent');
       send(res, 200, {
         protocol: CLOUD_PROTOCOL_VERSION,
         secretConfigured: !!d.env.CRON_SECRET,
         storeConfigured: !!d.store,
+        gestionale: {
+          enabled: settings.enabled,
+          parentAllowed: settings.enabled && !!parent && isAllowedOrigin(settings, parent),
+        },
       });
+      return;
+    }
+
+    case 'session': {
+      // Biglietto di Firebase di un amministratore -> biglietto di sessione
+      const identity = await identifyStaff(bearerToken(req.headers), d, service);
+      if (!identity || !identity.admin) throw new HttpError(403, 'forbidden');
+      const session = mintSessionToken(d.env.CRON_SECRET as string, d.clock());
+      send(res, 200, { token: session.token, expiresAt: session.expiresAt, user: { name: identity.name, role: identity.role } });
+      return;
+    }
+
+    case 'sopralluoghi': {
+      // Chiave, biglietto di sessione o biglietto di Firebase di QUALUNQUE
+      // persona del personale (anche non amministratore)
+      const secret = requireSecret(d);
+      if (!isAuthorized(req.headers, secret, d.clock())) {
+        const token = bearerToken(req.headers);
+        if (!token || token.split('.').length !== 3) throw new HttpError(401, 'auth');
+        const identity = await identifyStaff(token, d, service);
+        if (!identity) throw new HttpError(403, 'forbidden');
+      }
+      const store = requireStore(d);
+      const [{ appointments }, { config }] = await Promise.all([store.readAppointments(), store.readConfig()]);
+      const now = d.now();
+      const list = buildSopralluoghiExport(appointments || [], config?.technicians || []);
+      send(res, 200, { v: 1, generatedAt: now.toISOString(), today: romeToday(now), ...list });
       return;
     }
 
@@ -352,18 +426,42 @@ const handleOp = async (op: string, req: ApiRequest, res: ApiResponse, d: Handle
   }
 };
 
-export const createCloudHandler = (overrides: Partial<HandlerDeps> = {}) =>
-  async function cloudHandler(req: ApiRequest, res: ApiResponse): Promise<void> {
+// CORS: solo per le pagine del gestionale (GESTIONALE_ORIGINS), mai "*".
+// Restituisce true se la richiesta era un preflight (già risposto).
+const applyCors = (req: ApiRequest, res: ApiResponse, env: Record<string, string | undefined>): boolean => {
+  const origin = headerValue(req.headers, 'origin');
+  const allowed = !!origin && isAllowedOrigin(gestionaleSettings(env), origin);
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', normalizeOrigin(origin));
+    res.setHeader('Vary', 'Origin');
+  }
+  if ((req.method || 'GET').toUpperCase() !== 'OPTIONS') return false;
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Max-Age', '600');
+  }
+  res.status(204).end();
+  return true;
+};
+
+export const createCloudHandler = (overrides: Partial<HandlerDeps> = {}) => {
+  // Cache delle chiavi di Google e del personale: vive con la funzione
+  const service = createGestionaleService(overrides.gestionale);
+  return async function cloudHandler(req: ApiRequest, res: ApiResponse): Promise<void> {
     const op = queryValue(req, 'op');
     try {
+      const d = defaultDeps(overrides);
+      if (applyCors(req, res, d.env)) return;
       const method = OPS[op];
       if (!method) throw new HttpError(400, 'bad_request');
       if ((req.method || 'GET').toUpperCase() !== method) throw new HttpError(405, 'bad_request', 'Metodo non ammesso');
-      await handleOp(op, req, res, defaultDeps(overrides));
+      await handleOp(op, req, res, d, service);
     } catch (err) {
       fail(res, err, op || '?');
     }
   };
+};
 
 // /api/cloud-tick: passaggio completo dello scheduler di Vercel (GET o POST,
 // Authorization: Bearer <CRON_SECRET> inviata da Vercel stessa)

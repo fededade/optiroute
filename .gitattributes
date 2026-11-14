@@ -1,0 +1,4 @@
+# I file .bat devono restare con fine riga Windows (CRLF): git non li converte
+*.bat -text
+# Script di avvio macOS/Linux: sempre fine riga Unix
+*.command text eol=lf

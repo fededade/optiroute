@@ -344,6 +344,55 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       }
     });
 
+    // 2c) Controllo incrociato (contratto §5): il gestionale indica le pratiche
+    //     del portale già concordate/fatte/chiuse; quelle già in OptiRoute
+    //     escono dal lavoro, le confermate no
+    await step('bridge: pratiche escluse dal gestionale tolte dal lavoro', async () => {
+      await api('POST', '/__test/reset');
+      await seedServer([
+        { id: 'x1', title: 'Cliente Già Concordato', address: 'Via Esclusa 1, Milano', coords: P.milano, status: 'pending',
+          technicianId: 'tech-1', province: 'MI', comune: 'Milano', periziaCode: '846.759', notes: 'Citofono interno 4' },
+        { id: 'x2', title: 'Cliente Confermato', address: 'Via Esclusa 2, Milano', coords: P.milano, status: 'confirmed', date: D,
+          startTime: '09:00', endTime: '09:20', technicianId: 'tech-1', province: 'MI', comune: 'Milano', periziaCode: '846760', sequenceOrder: 1 },
+      ]);
+      const G = await newPage(browser, { localSeed: { optiroute_technicians_v1: [TECH], optiroute_cloud_v1: DEVICE_SEED } });
+      await G.app.locator('[data-testid="autopilot-bar"]').waitFor({ timeout: 30000 });
+      const chip = G.app.getByTestId('bridge-chip');
+      await waitFor(async () => /avvialo dalla barra del gestionale/.test(await chip.innerText()), 'chip bridge offline', 30000);
+      await parentEval(G.page, () => {
+        window.__bridge = { status: 'ok', portalCount: 4,
+          snapshot: { bridge: 'optiroute-bridge', version: 1, generatedAt: new Date().toISOString(),
+            portals: [{ id: 'prelios', status: 'ok', lastSync: new Date().toISOString() }],
+            pratiche: [{ portal: 'prelios', codice: 'ISP-E1', intestatario: 'Gialli Gina', via: 'Via Nuova', civico: '5', comune: 'Milano', provincia: 'MI', telefono: '+390233330005', note: '', progetto: '', tipologia: '', esito: '', aggiornatoIl: '' }] },
+          excluded: [
+            { codice: '846759', reason: 'concordata' },
+            { codice: '846760', reason: 'concordata' },
+            { codice: '846761', reason: 'chiusa' },
+            { codice: '', reason: 'chiusa' },
+          ] };
+        window.__emit('bridge.updated');
+      });
+      const list = await waitFor(async () => {
+        const l = await serverList();
+        return l.find(a => a.id === 'x1')?.status === 'cancelled' && l.some(a => a.periziaCode === 'ISP-E1') ? l : null;
+      }, 'pratica esclusa annullata sul server', 30000);
+      const x1 = list.find(a => a.id === 'x1');
+      assert.equal(x1.notes, 'Citofono interno 4\nTolta dal giro: nel gestionale il sopralluogo risulta già concordato.');
+      const x2 = list.find(a => a.id === 'x2');
+      assert.equal(x2.status, 'confirmed', 'la confermata non si tocca');
+      assert.equal(x2.date, D);
+      assert.equal(x2.notes, undefined);
+      await waitFor(async () => /1 nuova pratica, 1 tolta perché già nel gestionale/.test(await chip.innerText()), 'chip con le pratiche tolte', 15000)
+        .catch(async err => { log('chip:', await chip.textContent().catch(() => '?')); throw err; });
+      // stesso elenco di nuovo: niente cambia
+      const before = JSON.stringify((await serverList()).find(a => a.id === 'x1'));
+      await parentEval(G.page, () => window.__emit('bridge.updated'));
+      await sleep(3000);
+      assert.equal(JSON.stringify((await serverList()).find(a => a.id === 'x1')), before, 'secondo scaricamento: nessuna modifica');
+      await G.page.screenshot({ path: path.join(OUT, '2c-bridge-esclusioni.png') });
+      await G.ctx.close();
+    });
+
     // 3) Conferma -> "changed" -> il gestionale legge i sopralluoghi confermati
     await step('conferma: changed al gestionale e sopralluogo in ?op=sopralluoghi con CORS', async () => {
       await api('POST', '/__test/reset');

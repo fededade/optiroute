@@ -286,6 +286,11 @@ pagina). Chi entra nel gestionale non deve fare altro: niente chiave da digitare
 - Il **bridge dei portali** si avvia e si attiva dalla barra del gestionale: le pratiche
   arrivano da sole tramite la pagina del gestionale. Indirizzo e token del bridge nelle
   impostazioni di OptiRoute non servono (restano visibili ma spenti).
+- **Controllo incrociato con il gestionale**: è il gestionale a decidere quali pratiche del
+  portale vanno programmate, e a OptiRoute arrivano come nuove solo quelle. Le pratiche già
+  presenti in OptiRoute che nel gestionale risultano già concordate, già fatte o chiuse escono
+  dal lavoro (vanno fra le annullate, con una riga nelle note che spiega il perché, e il chip
+  del bridge lo dice; se l'operatore poi la ripristina, resta ripristinata); le pratiche confermate e quelle con una chiamata in corso non si toccano mai.
 - Nelle impostazioni (scheda Cloud) al posto della chiave c'è la riga "Accesso dal
   gestionale come …"; in fondo alla navigazione a sinistra si vede chi è collegato.
 - Se OptiRoute viene messa dentro una pagina che **non** è del gestionale, si vede solo
@@ -327,7 +332,8 @@ risponde alle chiamate da altri siti solo per le pagine indicate in `GESTIONALE_
 
 **Per chi sviluppa**: contratto dei messaggi fra le pagine in
 `src/services/gestionaleHost.ts`, accesso in `server/gestionale.ts` e `server/auth.ts`,
-regola dei confermati in `src/services/gestionaleExport.ts`. Prove senza rete:
+regola dei confermati in `src/services/gestionaleExport.ts`, pratiche escluse dal
+gestionale in `src/services/gestionaleExclusions.ts`. Prove senza rete:
 `node scripts/dev-cloud-server.mjs --gestionale-test --gestionale-origin <pagina>`
 (gestionale finto) e la serie `gestionale` di `npm run test:e2e`; per provare con gli
 emulatori di Firebase: `--gestionale-emulatori <indirizzo Firestore> --gestionale-progetto <id>`.

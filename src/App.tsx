@@ -17,6 +17,7 @@ import {
   approveForCalling,
   attentionItems,
   autopilotStats,
+  baseFor,
   cancelAutoCalls,
   isCallInFlight,
   reduceCallLaunchResult,
@@ -36,6 +37,7 @@ import type { CloudConfig } from './services/cloudProtocol';
 import { prepareEmbeddedCloud } from './services/cloudSyncCore';
 import { bridgeInboxHere, turnAutomationsHere } from './services/automationTurn';
 import { fetchBridgeSnapshotViaParent } from './services/bridgeService';
+import { applyGestionaleExclusions, type ExclusionOptions, type GestionaleExclusion } from './services/gestionaleExclusions';
 import type { GestionaleContext } from './Components/GestionaleGate';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
@@ -734,6 +736,18 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     [gestionale]
   );
 
+  // Dentro il gestionale: le pratiche che il gestionale indica come già
+  // concordate, fatte o chiuse escono dal lavoro (annullate, con una riga
+  // nelle note). Arriva al server con la normale sincronizzazione.
+  const applyGestionaleExcluded = useCallback((excluded: GestionaleExclusion[]): number => {
+    const ctx = getPlanningContext();
+    const opts: ExclusionOptions = { now: ctx.now, dayBase: (technicianId, date) => baseFor(ctx, technicianId, date) };
+    const { removed } = applyGestionaleExclusions(appointmentsRef.current, excluded, opts);
+    if (removed.length === 0) return 0;
+    setAllAppointments(prev => applyGestionaleExclusions(prev, excluded, opts).list);
+    return removed.length;
+  }, [getPlanningContext, setAllAppointments]);
+
   const bridgeInbox = useBridgeInbox({
     settings: bridgeSettings,
     isLeader: bridgeHere,
@@ -742,6 +756,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     isImportBusy: isImportOrDispatchBusy,
     followerMessage: cloudActive && isAutomationTab ? 'Bridge: gestito da un altro dispositivo collegato al cloud' : undefined,
     source: bridgeViaParent,
+    applyExcluded: gestionale ? applyGestionaleExcluded : undefined,
   });
 
   // Il gestionale avvisa che il bridge ha novità: si scarica subito

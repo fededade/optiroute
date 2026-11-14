@@ -38,6 +38,8 @@ from portals import PortaleNonConfigurato, get_adapter
 BRIDGE_DIR = Path(__file__).resolve().parent
 CACHE_PATH = BRIDGE_DIR / "bridge_cache.json"
 TOKEN_PATH = BRIDGE_DIR / "bridge_token.txt"
+# Descrizione anonima dell'elenco del portale (riscritta a ogni lettura)
+STRUTTURA_PATH = BRIDGE_DIR / "elenco_struttura.json"
 
 # Ogni quanto, durante l'attesa fra due cicli, si verifica che la sessione
 # del portale sia ancora attiva (secondi).
@@ -107,6 +109,7 @@ class _Servizio:
         self.state = state
         self.browser = None
         self._crea_browser = crea_browser or _crea_browser_predefinito
+        self.percorso_struttura = STRUTTURA_PATH
 
     # --- pubblicazione verso l'HTTP ---
 
@@ -128,6 +131,34 @@ class _Servizio:
         if self.args.elenco:
             return load_pratiche(self.args.elenco)
         return self.adapter.list_assigned(self.browser, log=_log)
+
+    def salva_struttura(self, pratiche) -> None:
+        """Scrive elenco_struttura.json (com'è fatto l'elenco del portale,
+        senza dati dei clienti) e stampa una riga di riepilogo. Qualunque
+        errore viene solo segnalato: il ciclo prosegue."""
+        n = len(pratiche)
+        try:
+            struttura = self.adapter.descrizione_elenco()
+            if not struttura:
+                _log(f"Elenco letto: {n} pratiche FULL - Acquisto (descrizione "
+                     "dell'elenco non disponibile).")
+                return
+            from struttura_elenco import scrivi_struttura, valori_pratiche
+            telefoni = [r.get("telefono", "") for r in self.cache.snapshot(self.pid)]
+            vietati = valori_pratiche(pratiche, telefoni) | self.adapter.valori_da_nascondere()
+            righe = struttura.get("conteggi", {}).get("righe_lette", "?")
+            problemi = scrivi_struttura(self.percorso_struttura, struttura, vietati)
+            if problemi:
+                _log(f"Elenco letto: {n} pratiche FULL - Acquisto su {righe} righe. "
+                     f"ATTENZIONE: descrizione dell'elenco NON salvata, il controllo "
+                     f"finale ha trovato possibili dati dei clienti ({problemi[0]}).")
+                return
+            _log(f"Elenco letto: {n} pratiche FULL - Acquisto su {righe} righe "
+                 f"(descrizione dell'elenco salvata in {Path(self.percorso_struttura).name}, "
+                 "senza dati dei clienti)")
+        except Exception as e:  # noqa: BLE001 — mai bloccante
+            _log(f"Elenco letto: {n} pratiche FULL - Acquisto. ATTENZIONE: "
+                 f"descrizione dell'elenco non salvata ({e}).")
 
     # --- browser e login ---
 
@@ -194,6 +225,9 @@ class _Servizio:
                 return "login"
             self.stato("error", f"Lettura elenco non riuscita: {e}"[:300])
             return "errore"
+
+        if not self.args.elenco:
+            self.salva_struttura(pratiche)
 
         if not pratiche and not self.args.elenco and self.cache.elenco(self.pid):
             # Probabile lettura griglia fallita: non si svuota l'elenco noto.

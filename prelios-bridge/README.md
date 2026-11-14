@@ -129,6 +129,7 @@ Gli errori sulla singola pratica NON fermano il giro (finiscono nella colonna
 | `anonimizza.py` | anonimizzazione delle catture (lettere→x, cifre→9) |
 | `dump_perizia_fields.py` | diagnostico (mappa i campi di una perizia) |
 | `dump_elenco.py` | diagnostico (struttura grezza della griglia Elenco Perizie) |
+| `struttura_elenco.py` | descrizione anonima dell'elenco del portale (`elenco_struttura.json`) |
 | `capture_portal.py` | cattura guidata e anonimizzata delle pagine di un portale |
 | `test_*.py` | test puri (niente portale, niente rete) |
 
@@ -270,6 +271,9 @@ Verificato (test automatici, senza portale):
 - server HTTP: health, 401, token in header e in query, formato della
   risposta, CORS e preflight;
 - anonimizzazione delle catture;
+- descrizione anonima dell'elenco (`elenco_struttura.json`): categorie,
+  intestazioni, filtri e controllo finale su griglie e pagine simulate
+  (nessun nome, indirizzo, telefono, codice, data o nota nel file);
 - il giro classico `--dry-run` produce lo stesso output di prima;
 - collegamento col gestionale: indirizzi ammessi/rifiutati, controllo
   amministratore con un gestionale simulato (admin, tecnico, email non
@@ -289,6 +293,8 @@ la lettura del gestionale reale.
 - **lettura automatica dell'elenco** (`--serve` senza file): si assume che
   l'Elenco Perizie con il filtro Cod. Immobile vuoto mostri le pratiche
   assegnate e che le colonne della griglia siano quelle dell'export Excel;
+- **descrizione dell'elenco** (`elenco_struttura.json`): la lettura di
+  filtri e intestazioni della pagina è provata solo su pagine simulate;
 - **paginazione**: il bridge segue un controllo "pagina successiva" solo se
   ne trova esattamente uno inequivocabile (max 20 pagine), altrimenti legge
   la prima pagina e lo scrive nel log;
@@ -305,6 +311,43 @@ Confronta il numero di pratiche nel log con quelle che vedi nel portale. Se
 non tornano, usa il giro con file (`--serve elenco.xlsx`), che resta
 pienamente supportato, e manda `elenco_dump_anon.json` per correggere la
 mappatura.
+
+## Com'è fatto l'elenco del portale (file elenco_struttura.json)
+
+Ogni volta che il bridge legge l'elenco delle pratiche dal portale scrive
+anche, nella sua cartella, il file **`elenco_struttura.json`** (riscritto a
+ogni lettura, non serve fare niente). È una **descrizione della pagina**,
+non dei clienti:
+
+- quando è stato letto e quante righe, quante con una tipologia, quante
+  pratiche FULL - Acquisto, quante pagine;
+- i **filtri** della pagina (nome del campo, se è vuoto o no, per i menu a
+  tendina le voci e quella scelta, per le caselle se sono spuntate) — mai
+  quello che c'è scritto dentro un campo;
+- i **titoli delle colonne**, se il bridge li riconosce con sicurezza;
+- per ogni **colonna**: quanti valori diversi, quanti vuoti, la lunghezza
+  massima e la "forma" dei valori (lettere → `x`, cifre → `9`: un nome
+  diventa `xxxxx xxxxx`, una data `99/99/9999`);
+- per le sole colonne di **stato/categoria** (pochi valori brevi e
+  ripetuti, senza numeri lunghi né date) i valori in chiaro con quante
+  pratiche ne hanno ciascuno: è da qui che si capisce, per esempio, quali
+  pratiche hanno già il sopralluogo fissato o fatto.
+
+**Non contiene dati dei clienti**: nomi, indirizzi, comuni, telefoni,
+email, codici, date e note non vengono mai scritti in chiaro. Prima di
+salvare, il bridge ricontrolla il file e, se trovasse anche solo una
+chiocciola, un numero di 6 o più cifre o un nome/indirizzo/telefono delle
+pratiche, **non lo salva** e lo scrive nella finestra del bridge.
+
+Nella finestra del bridge, dopo ogni lettura, compare una riga come:
+`Elenco letto: 15 pratiche FULL - Acquisto su 42 righe (descrizione
+dell'elenco salvata in elenco_struttura.json, senza dati dei clienti)`.
+
+**Quando mandarlo**: se l'elenco che arriva in OptiRoute non è quello che ti
+aspetti (pratiche in più o in meno, pratiche già chiuse), manda allo
+sviluppatore il file `elenco_struttura.json` che trovi nella cartella del
+bridge: serve a capire quali filtri e quali stati usa il portale. Il file
+non va nel repository (escluso da git).
 
 ## Cerved
 
@@ -347,6 +390,8 @@ Apre quella perizia e scrive tutti i campi + i candidati telefono in `campi.json
   chiamata dentro OptiRoute.
 - File con dati personali o segreti, tutti esclusi da git: `bridge_cache.json`,
   `bridge_token.txt`, `captures/`, `elenco_dump*.json`, `campi_*.json`;
+  escluso da git anche `elenco_struttura.json` (non ha dati dei clienti,
+  ma è un file del singolo PC);
   escluso da git anche `bridge_config.json` (indirizzi del gestionale di
   quel PC).
 - I file `.bat` devono restare con le fine riga di Windows: il file
@@ -368,6 +413,7 @@ ignora le colonne che non conosce.
 python test_excel_pratiche.py
 python test_contact_parse.py
 python test_elenco_griglia.py
+python test_struttura_elenco.py
 python test_bridge_cache.py
 python test_servizio.py
 python test_bridge_server.py

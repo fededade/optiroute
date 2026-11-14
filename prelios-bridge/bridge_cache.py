@@ -10,6 +10,12 @@ telefono, così:
 Ricorda anche l'ultimo elenco letto per portale, così dopo un riavvio la web
 app riceve subito gli ultimi dati noti (mentre si attende il login).
 
+Stato sul portale (stato_portale.py): le pratiche con il sopralluogo già
+fissato, già fatto o chiuse NON vengono aperte (non verranno programmate);
+per quelle sospese si legge anche la nota di sospensione, riletta quando
+cambia la data di sospensione o dopo 24 ore. Il formato del file resta la
+versione 1: i record scritti prima non hanno i campi nuovi e restano validi.
+
 Modulo PURO (solo libreria standard + excel_pratiche): testabile senza
 Selenium e senza portale. Contiene dati personali (nomi, telefoni): il file
 è nel .gitignore e resta sulla macchina dell'operatore.
@@ -25,8 +31,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from excel_pratiche import Pratica
+from stato_portale import FASI_DA_NON_APRIRE, SOSPESA, fase_con_nota
 
+# Versione del formato: i campi nuovi (stato sul portale, nota di
+# sospensione) sono facoltativi, quindi resta 1 e i file vecchi si caricano.
 CACHE_VERSION = 1
+
+# Nota di sospensione: si rilegge dopo così tante ore (o se cambia la data
+# di sospensione); al massimo tante riletture per ciclo (le altre al ciclo dopo).
+ORE_RILETTURA_SOSPENSIONE = 24
+MAX_RILETTURE_SOSPENSIONE = 10
 
 # Le pratiche non più viste in nessun elenco da così tanti giorni vengono
 # eliminate dalla cache (pulizia dei dati personali non più necessari).
@@ -150,6 +164,8 @@ class BridgeCache:
                 rec["aggiornatoIl"] = ora
             rec["pratica"] = anagrafica
             rec["vistaIl"] = ora
+            if p.fase != SOSPESA:
+                rec.pop("sospensione", None)  # non più sospesa: nota non più valida
         self.data["elenco"][portal] = codici
         self._pulizia(adesso)
 
@@ -169,14 +185,16 @@ class BridgeCache:
         for c in self.data["elenco"].get(portal, []):
             rec = self.data["pratiche"].get(self.chiave(portal, c))
             if rec and isinstance(rec.get("pratica"), dict):
-                out.append(Pratica(**rec["pratica"]))
+                out.append(Pratica.da_dict(rec["pratica"]))
         return out
 
     # --- cosa lavorare ---
 
     def da_lavorare(self, portal: str, pratiche: list[Pratica],
                     adesso: datetime | None = None) -> list[Pratica]:
-        """Pratiche da aprire sul portale in questo ciclo:
+        """Pratiche da aprire sul portale in questo ciclo per il telefono:
+        - sopralluogo fissato, già fatto o perizia chiusa → no (non verranno
+          programmate; se tornano da fissare o sospese si aprono allora);
         - mai tentate → sì;
         - già risolte con telefono → no;
         - senza telefono → sì solo se l'ultimo tentativo NON è di oggi."""
@@ -184,6 +202,8 @@ class BridgeCache:
         out: list[Pratica] = []
         for p in pratiche:
             rec = self.data["pratiche"].get(self.chiave(portal, p.codice))
+            if self._fase(rec, p)[0] in FASI_DA_NON_APRIRE:
+                continue
             if rec is None or not rec.get("ultimoTentativoGiorno"):
                 out.append(p)
             elif rec.get("telefono"):
@@ -209,6 +229,61 @@ class BridgeCache:
         rec["aggiornatoIl"] = iso_utc(adesso)
         rec.setdefault("vistaIl", iso_utc(adesso))
 
+    def sospensioni_da_rileggere(self, portal: str, pratiche: list[Pratica],
+                                 escludi: set[str] = frozenset(),
+                                 adesso: datetime | None = None,
+                                 massimo: int = MAX_RILETTURE_SOSPENSIONE) -> list[Pratica]:
+        """Pratiche sospese da riaprire SOLO per la nota di sospensione:
+        mai lette, data di sospensione cambiata dall'ultima lettura, o ultima
+        lettura più vecchia di 24 ore. Prima le mai lette, poi quelle con la
+        data cambiata, poi le più vecchie; al massimo `massimo`. `escludi`:
+        codici già aperti in questo ciclo per il telefono."""
+        adesso = adesso or datetime.now(timezone.utc)
+        limite = adesso - timedelta(hours=ORE_RILETTURA_SOSPENSIONE)
+        candidati: list[tuple[int, str, Pratica]] = []
+        for p in pratiche:
+            if p.fase != SOSPESA or p.codice in escludi:
+                continue
+            rec = self.data["pratiche"].get(self.chiave(portal, p.codice)) or {}
+            sosp = rec.get("sospensione") if isinstance(rec.get("sospensione"), dict) else {}
+            tentata = _parse_iso(sosp.get("tentataIl"))
+            if tentata is None:
+                candidati.append((0, "", p))
+            elif (sosp.get("dal") or "") != p.data_sospensione:
+                candidati.append((1, sosp.get("tentataIl", ""), p))
+            elif tentata < limite:
+                candidati.append((2, sosp.get("tentataIl", ""), p))
+        candidati.sort(key=lambda c: (c[0], c[1]))
+        return [p for _o, _t, p in candidati[:max(0, massimo)]]
+
+    def registra_sospensione(self, portal: str, pratica: Pratica, nota: str,
+                             letta: bool, data_nota: str = "",
+                             adesso: datetime | None = None) -> None:
+        """Salva il tentativo di lettura della nota di sospensione (pagina
+        «Sospesi»; data_nota = data della riga letta, AAAA-MM-GG). Se la
+        pagina non è stata letta resta la nota precedente, ma il tentativo
+        conta (si riprova dopo 24 ore o se cambia la data di sospensione)."""
+        adesso = adesso or datetime.now(timezone.utc)
+        k = self.chiave(portal, pratica.codice)
+        rec = self.data["pratiche"].setdefault(k, {"portal": portal})
+        prima = rec.get("sospensione") if isinstance(rec.get("sospensione"), dict) else {}
+        rec["sospensione"] = {
+            "nota": nota if letta else prima.get("nota", ""),
+            "dataNota": data_nota if letta else prima.get("dataNota", ""),
+            "dal": pratica.data_sospensione,
+            "tentataIl": iso_utc(adesso),
+            "letta": bool(letta),
+        }
+
+    @staticmethod
+    def _fase(rec: dict | None, p: Pratica) -> tuple[str, str, str]:
+        """(fase, stato, dataSopralluogo) finali: quelle dell'elenco, salvo
+        una sospesa la cui nota dice «sopralluogo fissato» con una data."""
+        sosp = (rec or {}).get("sospensione")
+        nota = str(sosp.get("nota") or "") if isinstance(sosp, dict) else ""
+        fase, stato, data = fase_con_nota(p.fase, p.data_sopralluogo, nota)
+        return fase, stato or p.stato, data
+
     # --- sync ---
 
     def set_last_sync(self, portal: str, adesso: datetime | None = None) -> str:
@@ -223,14 +298,16 @@ class BridgeCache:
 
     def snapshot(self, portal: str) -> list[dict]:
         """Pratiche dell'ultimo elenco del portale nel formato del contratto
-        HTTP v1 (campo `pratiche[]`)."""
+        HTTP v1 (campo `pratiche[]`). I campi dello stato sul portale
+        (contratto §6: stato, fase, dataSopralluogo, sospensione) ci sono
+        solo quando noti."""
         out = []
         for c in self.data["elenco"].get(portal, []):
             rec = self.data["pratiche"].get(self.chiave(portal, c))
             if not rec or not isinstance(rec.get("pratica"), dict):
                 continue
-            p = Pratica(**rec["pratica"])
-            out.append({
+            p = Pratica.da_dict(rec["pratica"])
+            riga = {
                 "portal": portal,
                 "codice": p.codice,
                 "intestatario": p.intestatario,
@@ -244,8 +321,35 @@ class BridgeCache:
                 "tipologia": TIPOLOGIA_DEFAULT,
                 "esito": rec.get("esito", "") or ESITO_IN_ATTESA,
                 "aggiornatoIl": rec.get("aggiornatoIl") or iso_utc(),
-            })
+            }
+            fase, stato, data_sopralluogo = self._fase(rec, p)
+            if stato:
+                riga["stato"] = stato
+            if fase:
+                riga["fase"] = fase
+            if data_sopralluogo:
+                riga["dataSopralluogo"] = data_sopralluogo
+            if fase == SOSPESA:
+                sosp = rec.get("sospensione") if isinstance(rec.get("sospensione"), dict) else {}
+                riga["sospensione"] = {"nota": str(sosp.get("nota") or "")}
+                dal = str(sosp.get("dataNota") or "") or p.data_sospensione
+                if dal:
+                    riga["sospensione"]["dal"] = dal
+            out.append(riga)
         return out
+
+    def testi_letti(self, portal: str) -> list[str]:
+        """Note di contatto e di sospensione lette dal portale (per il
+        controllo finale di elenco_struttura.json: non devono comparirvi)."""
+        out: list[str] = []
+        for rec in self.data["pratiche"].values():
+            if rec.get("portal") != portal:
+                continue
+            out.append(str(rec.get("notaContatto") or ""))
+            sosp = rec.get("sospensione")
+            if isinstance(sosp, dict):
+                out.append(str(sosp.get("nota") or ""))
+        return [t for t in out if t]
 
     def conteggi(self, portal: str) -> tuple[int, int]:
         """(pratiche nell'elenco, di cui con telefono)."""

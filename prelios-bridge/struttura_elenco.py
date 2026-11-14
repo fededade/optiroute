@@ -13,8 +13,18 @@ allo sviluppatore: NON contiene dati dei clienti, per costruzione:
   categoria (pochi valori diversi e ripetuti, corti, senza numeri lunghi) e
   mai per le colonne di intestatario e indirizzo;
 - prima di scrivere, un controllo finale rifiuta il file se trova una
-  chiocciola (email), un numero di 6 o più cifre o un valore uguale a un
-  nome, indirizzo, nota o telefono delle pratiche appena lette.
+  chiocciola (email), un numero di 6 o più cifre, una data o un valore
+  uguale a un nome, indirizzo, nota o telefono delle pratiche appena lette.
+
+Parti aggiunte dopo il secondo giro sul portale vero:
+- per ogni colonna, cosa contengono le celle oltre al testo (immagini,
+  caselle, link, altri campi, title/classi/sfondo), con i nomi delle
+  immagini in chiaro solo se pochi, corti e senza numeri lunghi;
+- per i menu di STATO dei filtri le voci in chiaro (fino a 60, corte, senza
+  cifre); i numeri di «Trovati» e «Max Righe» se sono solo cifre;
+- sezione "perizia": com'è fatta la pagina Anagrafica di UNA perizia
+  (campi senza valori, campi con «sosp» con la sola lunghezza del valore,
+  comandi del menu).
 
 Modulo PURO (solo libreria standard, niente browser): testabile.
 """
@@ -43,6 +53,19 @@ CATEGORIE_MAX_LUNGHEZZA = 30
 # Regole per mostrare in chiaro le voci di un menu a tendina dei filtri
 OPZIONI_MAX = 12
 OPZIONI_MAX_LUNGHEZZA = 30
+# Menu di STATO (id, name o etichetta con «stato»): voci in chiaro fino a
+# tante, ognuna al massimo così lunga e senza cifre
+OPZIONI_STATO_MAX = 60
+OPZIONI_STATO_MAX_LUNGHEZZA = 40
+# Campi del modulo dell'elenco di cui si scrive il numero (solo cifre)
+CAMPI_NUMERICI = ("numRecord", "PageSize")
+# Contenuto delle celle (immagini, classi...): in chiaro fino a tante voci
+CONTENUTO_MAX_VOCI = 8
+CONTENUTO_MAX_LUNGHEZZA = 40
+# Pagina della perizia: limiti sulle quantità scritte
+MAX_CAMPI_PERIZIA = 300
+MAX_VOCI_MENU = 120
+VOCE_MENU_MAX = 40
 # Etichette e intestazioni più lunghe di così non sono considerate etichette
 ETICHETTA_MAX = 40
 # Lunghezza massima di una "forma" (oltre si tronca con …)
@@ -59,6 +82,14 @@ OFFSET_DATI_CLIENTE = {_OFFSET_INTESTATARIO, _OFFSET_VIA, _OFFSET_CIVICO,
 _RE_4_CIFRE = re.compile(r"\d{4,}")
 _RE_6_CIFRE = re.compile(r"\d{6,}")
 _RE_DATA = re.compile(r"\d{1,2}\s*[/.\-]\s*\d{1,2}")
+# Date complete (gg/mm/aaaa, gg.mm.aa, aaaa-mm-gg): vietate nel file, tranne
+# nel campo "quando" (ora di scrittura del file)
+_RE_DATA_COMPLETA = re.compile(r"\b\d{1,2}\s*[/.\-]\s*\d{1,2}\s*[/.\-]\s*\d{2,4}\b|"
+                               r"\b\d{4}-\d{1,2}-\d{1,2}\b")
+CHIAVI_CON_DATA = {"quando"}
+# Etichetta tutta maiuscola di più parole ("ROSSI MARIO"): nella pagina della
+# perizia potrebbe essere un valore mostrato come testo, non un'etichetta
+_RE_MAIUSCOLO = re.compile(r"[A-ZÀ-Ý'’]+(?:\s+[A-ZÀ-Ý'’]+)+")
 # Nomi di menu/campi che di solito elencano PERSONE (periti, utenti...)
 _RE_PERSONE = re.compile(r"perit|utent|user|tecnic|gestor|client|nominat|intestat|"
                          r"operat|referent|mutuat|richied|nome|cognom|agent|assegnat",
@@ -69,7 +100,7 @@ _RE_FORMA_VALIDA = re.compile(r"[x9 \-/.,:;()'+_?…]*")
 # Campi del file che contengono SOLO forme (controllate a parte: le forme
 # usano il 9 al posto delle cifre, quindi "9999999999" è lecito lì)
 CHIAVI_FORMA = {"forma_prevalente", "forma", "forme_opzioni", "forma_selezionata",
-                "forma_etichetta"}
+                "forma_etichetta", "forme", "forma_testo"}
 
 
 # === FORME E REGOLE ===
@@ -106,6 +137,12 @@ def testo_sicuro(testo: object, vietati: set[str] = frozenset(),
     s = "" if testo is None else str(testo).strip()
     return (len(s) <= massimo and not _RE_4_CIFRE.search(s) and "@" not in s
             and _norm(s) not in vietati)
+
+
+def forma_se_serve(testo: object, vietati: set[str] = frozenset(), massimo: int = 200) -> str:
+    """Il testo (messaggi del bridge) se è sicuro, altrimenti la sua forma."""
+    s = re.sub(r"\s+", " ", "" if testo is None else str(testo)).strip()[:massimo]
+    return s if testo_sicuro(s, vietati, massimo) and not _RE_DATA_COMPLETA.search(s) else forma(s)
 
 
 def _id_sicuro(testo: object) -> str:
@@ -158,9 +195,98 @@ def _e_categoria(valori: list[str], offset: int, vietati: set[str]) -> tuple[boo
     return True, ""
 
 
-def descrivi_colonne(rows: Iterable[Sequence], vietati: set[str] = frozenset()) -> dict:
+_CONTEGGI_CONTENUTO = ("righe", "immagini", "caselle", "caselle_spuntate", "link",
+                       "altri_campi", "sfondo_immagine")
+_CATEGORIE_CONTENUTO = ("img_file", "img_alt", "img_title", "title", "classi",
+                        "colore_sfondo")
+CHIAMATA_MAX = 200
+_RE_DATA_IN_CHIAMATA = re.compile(r"\d{1,2}\s*[/.\-]\s*\d{1,2}\s*[/.\-]\s*\d{2,4}|"
+                                  r"\d{4}-\d{1,2}-\d{1,2}")
+
+
+def maschera_chiamata(testo: object) -> str:
+    """Chiamata di un comando (onclick/href) scritta per intero, con le
+    sequenze di 6 o più cifre → '#' e le date → 'gg/mm/aaaa'."""
+    s = re.sub(r"\s+", " ", "" if testo is None else str(testo)).strip()
+    s = _RE_DATA_IN_CHIAMATA.sub("gg/mm/aaaa", s)
+    s = _RE_6_CIFRE.sub("#", s).replace("@", "?")
+    return s[:CHIAMATA_MAX]
+
+
+def _chiamata_sicura(chiamata: str, vietati: set[str]) -> bool:
+    n = _norm(chiamata)
+    return not any(len(v) >= 8 and v in n for v in vietati) and not any(
+        len(v) >= 6 and re.search(r"['\"]" + re.escape(v) + r"['\"]", n) for v in vietati)
+
+
+def _chiamate_contenuto(valori: object, vietati: set[str]) -> dict | None:
+    """Chiamate onclick/href delle celle: mascherate; le 8 più frequenti in
+    chiaro (se non contengono dati delle pratiche) e quante sono in tutto."""
+    if not isinstance(valori, dict) or not valori:
+        return None
+    conta: Counter = Counter()
+    for k, v in valori.items():
+        if k == "…altri":
+            continue
+        conta[maschera_chiamata(k)] += int(v) if isinstance(v, (int, float)) else 0
+    if not conta:
+        return None
+    sicure = {k: n for k, n in conta.most_common() if _chiamata_sicura(k, vietati)}
+    return {"valori_diversi": len(conta) if "…altri" not in valori else f"più di {len(conta)}",
+            "piu_frequenti": dict(list(sicure.items())[:CONTENUTO_MAX_VOCI]),
+            "forme": sorted({forma(k) for k in conta if k not in sicure})[:CONTENUTO_MAX_VOCI]}
+
+
+def _categorie_contenuto(valori: object, vietati: set[str]) -> dict | None:
+    """Voci in chiaro (con i conteggi) solo se poche, corte, senza numeri
+    lunghi né dati delle pratiche; altrimenti solo quante e le forme."""
+    if not isinstance(valori, dict) or not valori:
+        return None
+    voci = {str(k): v for k, v in valori.items()}
+    troppe = "…altri" in voci or len(voci) > CONTENUTO_MAX_VOCI
+    sicure = all(testo_sicuro(k, vietati, CONTENUTO_MAX_LUNGHEZZA)
+                 and not _RE_DATA_COMPLETA.search(k) for k in voci)
+    if not troppe and sicure:
+        return {k: int(v) if isinstance(v, (int, float)) else 0 for k, v in voci.items()}
+    altri = "…altri" in voci
+    return {"valori_diversi": f"più di {len(voci) - 1}" if altri else len(voci),
+            "forme": sorted({forma(k) for k in voci if k != "…altri"})[:CONTENUTO_MAX_VOCI]}
+
+
+def descrivi_contenuto(celle: dict | None, vietati: set[str] = frozenset()) -> dict:
+    """Contenuto delle celle oltre al testo, per colonna (chiave = posizione
+    rispetto alla Tipologia, come in prelios._JS_STRUTTURA_PAGINA)."""
+    out: dict[int, dict] = {}
+    for k, s in (celle or {}).items():
+        try:
+            off = int(k)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(s, dict):
+            continue
+        voce: dict = {}
+        for n in _CONTEGGI_CONTENUTO:
+            try:
+                voce[n] = int(s.get(n) or 0)
+            except (TypeError, ValueError):
+                voce[n] = 0
+        for n in _CATEGORIE_CONTENUTO:
+            cat = _categorie_contenuto(s.get(n), vietati)
+            if cat:
+                voce[n] = cat
+        chiamate = _chiamate_contenuto(s.get("chiamate"), vietati)
+        if chiamate:
+            voce["chiamate"] = chiamate
+        out[off] = voce
+    return out
+
+
+def descrivi_colonne(rows: Iterable[Sequence], vietati: set[str] = frozenset(),
+                     celle: dict | None = None) -> dict:
     """Statistiche per posizione di colonna, con le righe dati allineate
-    sulla colonna Tipologia."""
+    sulla colonna Tipologia. `celle`: contenuto delle celle oltre al testo
+    letto dalla pagina (vedi descrivi_contenuto), aggiunto come "contenuto"."""
+    contenuto = descrivi_contenuto(celle, vietati)
     dati = _righe_dati(rows)
     if not dati:
         return {"righe_dati": 0, "colonna_tipologia": None, "colonne": []}
@@ -196,6 +322,8 @@ def descrivi_colonne(rows: Iterable[Sequence], vietati: set[str] = frozenset()) 
         else:
             voce["categorie"] = None
             voce["perche_non_in_chiaro"] = motivo
+        if off in contenuto:
+            voce["contenuto"] = contenuto[off]
         colonne.append(voce)
     return {"righe_dati": len(dati), "colonna_tipologia": t_tipica, "colonne": colonne}
 
@@ -242,10 +370,40 @@ def trova_intestazioni(rows: Iterable[Sequence], candidati_th: list[dict] | None
 
 # === FILTRI ===
 
-def descrivi_filtri(controlli: list[dict], vietati: set[str] = frozenset()) -> list[dict]:
-    """Campi del modulo della pagina, senza MAI i valori scritti."""
+def _e_menu_di_stato(c: dict) -> bool:
+    """Menu di STATO: id, name o etichetta contengono «stato»
+    (es. Imm_StatoValutazione, «Stato Perizia»)."""
+    return "stato" in " ".join(str(c.get(k) or "") for k in ("id", "name", "etichetta")).lower()
+
+
+def _etichetta_sicura(etichetta: str, vietati: set[str], perizia: bool) -> bool:
+    """Nella pagina della perizia l'etichetta presa dalla cella precedente
+    potrebbe essere un valore mostrato come testo: lì niente cifre e niente
+    testi tutti maiuscoli di più parole (come i nomi sul portale)."""
+    if not testo_sicuro(etichetta, vietati):
+        return False
+    if perizia:
+        if re.search(r"\d", etichetta) or _RE_MAIUSCOLO.fullmatch(etichetta.strip()):
+            return False
+        # parte di una nota o di un nome letti dal portale (es. un referente)
+        n = _norm(etichetta)
+        if len(n) >= 6 and any(n in v for v in vietati):
+            return False
+    return not _RE_DATA_COMPLETA.search(etichetta)
+
+
+def descrivi_filtri(controlli: list[dict], vietati: set[str] = frozenset(),
+                    perizia: bool = False, massimo: int = MAX_FILTRI) -> list[dict]:
+    """Campi del modulo della pagina, senza MAI i valori scritti.
+
+    Menu a tendina in chiaro: quelli di STATO fino a 60 voci corte e senza
+    cifre; gli altri fino a 12 voci corte, senza numeri lunghi (con
+    `perizia` senza cifre) e che non elencano persone. Per numRecord e
+    PageSize (solo nell'elenco) il numero, se è fatto di sole cifre.
+    `perizia`: campi della pagina di una perizia (regole più strette sulle
+    etichette, "vuoto" anche per i menu)."""
     out: list[dict] = []
-    for c in controlli[:MAX_FILTRI]:
+    for c in controlli[:massimo]:
         if not isinstance(c, dict):
             continue
         tipo = str(c.get("tipo") or "").lower()[:20]
@@ -254,7 +412,7 @@ def descrivi_filtri(controlli: list[dict], vietati: set[str] = frozenset()) -> l
                       "tipo": tipo, "visibile": bool(c.get("visibile"))}
         etichetta = str(c.get("etichetta") or "").strip()
         if etichetta:
-            if testo_sicuro(etichetta, vietati):
+            if _etichetta_sicura(etichetta, vietati, perizia):
                 voce["etichetta"] = etichetta
             else:
                 voce["forma_etichetta"] = forma(etichetta)
@@ -262,15 +420,25 @@ def descrivi_filtri(controlli: list[dict], vietati: set[str] = frozenset()) -> l
             voce["selezionato"] = bool(c.get("selezionato"))
         elif tipo.startswith("select"):
             opzioni = [str(o or "").strip() for o in (c.get("opzioni") or [])]
-            n = int(c.get("n_opzioni") or len(opzioni))
+            try:
+                n = int(c.get("n_opzioni") or len(opzioni))
+            except (TypeError, ValueError):
+                n = len(opzioni)
             sel = c.get("indice_selezionato")
             sel = sel if isinstance(sel, int) and 0 <= sel < len(opzioni) else None
             voce["n_opzioni"] = n
             persone = bool(_RE_PERSONE.search(" ".join(
                 str(c.get(k) or "") for k in ("id", "name", "etichetta"))))
-            in_chiaro = (not persone and n <= OPZIONI_MAX and len(opzioni) == n
-                         and all(testo_sicuro(o, vietati, OPZIONI_MAX_LUNGHEZZA)
-                                 for o in opzioni))
+            di_stato = _e_menu_di_stato(c)
+            if di_stato and not persone:
+                in_chiaro = (n <= OPZIONI_STATO_MAX and len(opzioni) == n
+                             and all(testo_sicuro(o, vietati, OPZIONI_STATO_MAX_LUNGHEZZA)
+                                     and not re.search(r"\d", o) for o in opzioni))
+            else:
+                in_chiaro = (not persone and n <= OPZIONI_MAX and len(opzioni) == n
+                             and all(testo_sicuro(o, vietati, OPZIONI_MAX_LUNGHEZZA)
+                                     and not (perizia and re.search(r"\d", o))
+                                     for o in opzioni))
             if in_chiaro:
                 voce["opzioni"] = opzioni
                 voce["selezionata"] = opzioni[sel] if sel is not None else None
@@ -281,10 +449,108 @@ def descrivi_filtri(controlli: list[dict], vietati: set[str] = frozenset()) -> l
                     "menu che sembra elencare persone" if persone else
                     "troppe voci, voci lunghe o con numeri")
             voce["indice_selezionato"] = sel
+            if perizia and "vuoto" in c:
+                voce["vuoto"] = bool(c.get("vuoto"))
         else:
             voce["vuoto"] = bool(c.get("vuoto"))
+            numero = c.get("numero")
+            if (not perizia and (c.get("name") in CAMPI_NUMERICI or c.get("id") in CAMPI_NUMERICI)
+                    and isinstance(numero, int) and not isinstance(numero, bool)
+                    and 0 <= numero < 1_000_000):
+                voce["numero"] = numero
         out.append(voce)
     return out
+
+
+def _numero_campo(controlli: list[dict], nome: str) -> int | None:
+    """Numero letto nel campo numRecord/PageSize (None se non c'è)."""
+    for c in controlli or []:
+        if isinstance(c, dict) and nome in (c.get("name"), c.get("id")):
+            n = c.get("numero")
+            if isinstance(n, int) and not isinstance(n, bool) and 0 <= n < 1_000_000:
+                return n
+    return None
+
+
+def trovati_sul_portale(pagina: dict) -> tuple[int | None, int | None]:
+    """(«Trovati:», «Max Righe:») letti nella pagina dell'elenco."""
+    controlli = (pagina or {}).get("controlli") or []
+    return _numero_campo(controlli, "numRecord"), _numero_campo(controlli, "PageSize")
+
+
+# === PAGINA DELLA PERIZIA ===
+
+def descrivi_perizia(grezza: dict | None, vietati: set[str] = frozenset()) -> dict:
+    """Descrizione anonima della pagina Anagrafica di UNA perizia (da
+    prelios.read_perizia_structure): campi senza valori, campi con «sosp»
+    (id, name, etichetta, tipo, vuoto, lunghezza: MAI il valore), comandi
+    del menu (testo mascherato se ha cifre o @, primo argomento della
+    chiamata)."""
+    grezza = grezza or {}
+    campi_grezzi = [c for c in (grezza.get("campi") or []) if isinstance(c, dict)]
+    campi = descrivi_filtri(campi_grezzi, vietati, perizia=True, massimo=MAX_CAMPI_PERIZIA)
+    sosp = []
+    for c in campi_grezzi[:MAX_CAMPI_PERIZIA]:
+        if not c.get("sosp"):
+            continue
+        voce = {"origine": str(c.get("origine") or "")[:20], "id": _id_sicuro(c.get("id")),
+                "name": _id_sicuro(c.get("name")), "tipo": str(c.get("tipo") or "").lower()[:20],
+                "vuoto": bool(c.get("vuoto"))}
+        etichetta = str(c.get("etichetta") or "").strip()
+        if etichetta:
+            if _etichetta_sicura(etichetta, vietati, True):
+                voce["etichetta"] = etichetta
+            else:
+                voce["forma_etichetta"] = forma(etichetta)
+        lung = c.get("lunghezza")
+        if isinstance(lung, int) and not isinstance(lung, bool):
+            voce["lunghezza"] = lung
+        sosp.append(voce)
+    voci = []
+    viste: set[tuple] = set()
+    for v in grezza.get("voci_menu") or []:
+        if not isinstance(v, dict):
+            continue
+        testo = re.sub(r"\s+", " ", str(v.get("testo") or "")).strip()[:VOCE_MENU_MAX]
+        chiamata = maschera_chiamata(v.get("chiamata"))
+        if not _chiamata_sicura(chiamata, vietati):
+            chiamata = forma(chiamata)
+        voce = {"tag": str(v.get("tag") or "")[:12], "chiamata": chiamata}
+        if testo:
+            if (re.search(r"\d", testo) or not testo_sicuro(testo, vietati, VOCE_MENU_MAX)):
+                voce["forma_testo"] = forma(testo)
+            else:
+                voce["testo"] = testo
+        firma = tuple(sorted(voce.items()))
+        if firma in viste:
+            continue
+        viste.add(firma)
+        voci.append(voce)
+        if len(voci) >= MAX_VOCI_MENU:
+            break
+    intestazioni = []
+    for r in (grezza.get("intestazioni") or [])[:10]:
+        if not isinstance(r, list):
+            continue
+        celle = []
+        for c in r[:40]:
+            c = re.sub(r"\s+", " ", str(c or "")).strip()
+            celle.append(c if (not c or _etichetta_sicura(c, vietati, True)) else forma(c))
+        intestazioni.append(celle)
+    note = []
+    if not sosp:
+        note.append("Nessun campo con «sosp» nell'id, nel name o nell'etichetta.")
+    return {
+        "descrizione": ("Com'è fatta una pagina della perizia (campi, intestazioni delle "
+                        "tabelle e comandi, MAI i valori). Non contiene dati dei clienti."),
+        "origini": int(grezza.get("origini") or 0),
+        "n_campi": len(campi_grezzi),
+        "campi": campi,
+        "sospensione_trovata": sosp,
+        "intestazioni_tabelle": intestazioni,
+        "voci_menu": voci,
+        "note": note,
+    }
 
 
 # === DESCRIZIONE COMPLETA ===
@@ -302,14 +568,16 @@ def valori_vietati(rows: Iterable[Sequence]) -> set[str]:
 
 
 def descrivi_elenco(righe: list[Sequence], stats: dict | None = None,
-                    info: dict | None = None) -> dict:
+                    info: dict | None = None, fasi: Iterable[str] | None = None) -> dict:
     """Descrizione anonima dell'elenco appena letto.
 
     Args:
         righe: righe GREZZE lette dalla griglia (liste di testi delle celle).
         stats: contatori di excel_pratiche.parse_grid_rows.
         info: dati raccolti da prelios.list_assigned (pagine lette, controlli
-            di paginazione, struttura della pagina: <th> e campi del modulo).
+            di paginazione, struttura della pagina: <th>, campi del modulo,
+            contenuto delle celle).
+        fasi: fase di ogni pratica FULL - Acquisto (solo per i conteggi).
     """
     stats = stats or {}
     info = info or {}
@@ -319,7 +587,7 @@ def descrivi_elenco(righe: list[Sequence], stats: dict | None = None,
     note: list[str] = []
 
     intestazioni, come = trova_intestazioni(righe, pagina.get("th") or [], vietati)
-    colonne = descrivi_colonne(righe, vietati)
+    colonne = descrivi_colonne(righe, vietati, pagina.get("celle"))
     if intestazioni and len(intestazioni) == len(colonne["colonne"]) \
             and colonne["colonna_tipologia"] is not None:
         for voce in colonne["colonne"]:
@@ -343,6 +611,47 @@ def descrivi_elenco(righe: list[Sequence], stats: dict | None = None,
                           "testo": testo if testo_sicuro(testo, vietati, 30) else forma(testo),
                           "origine": str(c.get("origine") or "")[:20]})
 
+    trovati, max_righe = trovati_sul_portale(pagina)
+    con_tipologia = int(stats.get("con_tipologia", 0))
+    if trovati is not None and trovati > con_tipologia:
+        note.append(f"Il portale dice {trovati} perizie («Trovati») ma ne sono state "
+                    f"lette {con_tipologia}: forse ci sono più pagine.")
+
+    fasi = [f for f in (fasi or []) if f]
+    motivo_stato = stats.get("colonne_stato")
+    stato_portale = {
+        "colonne_trovate": motivo_stato == "",
+        "conteggi_fasi": dict(Counter(fasi)),
+        "senza_stato": int(stats.get("senza_stato", 0)),
+    }
+    if motivo_stato:
+        stato_portale["motivo"] = str(motivo_stato)[:200]
+    info_sosp = stats.get("stato_info") if isinstance(stats.get("stato_info"), dict) else {}
+    if info_sosp:
+        stato_portale["sospese_come"] = (
+            "ricerca del portale con «Stato Perizia» = sospesa"
+            if info_sosp.get("strada") == "ricerca_sospese" else
+            "ripiego: colonna «Sospensione» non vuota (la ricerca delle sospese non è riuscita)")
+        for k in ("sospese_trovate", "sospese_aggiunte"):
+            if isinstance(info_sosp.get(k), int):
+                stato_portale[k] = info_sosp[k]
+        if info_sosp.get("motivo_ricerca"):
+            stato_portale["motivo_ricerca"] = forma_se_serve(info_sosp["motivo_ricerca"], vietati)
+
+    link_pagina = []
+    for c in pagina.get("link_pagina") or []:
+        if not isinstance(c, dict):
+            continue
+        testo = str(c.get("testo") or "").strip()
+        voce = {"tag": str(c.get("tag") or "")[:12],
+                "testo": testo if testo_sicuro(testo, vietati, 10) else forma(testo),
+                "chiamata": maschera_chiamata(c.get("chiamata")),
+                "origine": str(c.get("origine") or "")[:20]}
+        if not _chiamata_sicura(voce["chiamata"], vietati):
+            voce["chiamata"] = forma(voce["chiamata"])
+        if voce not in link_pagina:
+            link_pagina.append(voce)
+
     return {
         "descrizione": ("Com'è fatto l'elenco del portale (filtri, colonne, valori "
                         "delle colonne di stato). Non contiene dati dei clienti."),
@@ -353,8 +662,13 @@ def descrivi_elenco(righe: list[Sequence], stats: dict | None = None,
             "altre_tipologie": int(stats.get("altre_tipologie", 0)),
             "pratiche_full_acquisto": int(stats.get("pratiche", 0)),
             "pagine_lette": int(info.get("pagine", 1) or 1),
+            "trovati_sul_portale": trovati,
+            "max_righe": max_righe,
         },
-        "paginazione": {"controlli_riconosciuti": controlli},
+        "stato_portale": stato_portale,
+        "paginazione": {"controlli_riconosciuti": controlli,
+                        "link_pagina": link_pagina[:40],
+                        "nota": "I numeri di pagina sono solo descritti: il bridge non li clicca."},
         "intestazioni": intestazioni,
         "intestazioni_come": come,
         "colonna_tipologia": colonne["colonna_tipologia"],
@@ -380,9 +694,11 @@ def _stringhe(obj, chiave: str = ""):
         yield chiave, obj
 
 
-def valori_pratiche(pratiche: Iterable, telefoni: Iterable[str] = ()) -> set[str]:
+def valori_pratiche(pratiche: Iterable, telefoni: Iterable[str] = (),
+                    testi: Iterable[str] = ()) -> set[str]:
     """Intestatari, vie, note e telefoni delle pratiche (normalizzati), con i
-    numeri trovati nelle note in più formati."""
+    numeri trovati nelle note in più formati. `testi`: altri testi da non
+    scrivere mai (note di contatto e di sospensione lette dal portale)."""
     from contact_parse import estrai_telefoni
     out: set[str] = set()
 
@@ -401,14 +717,19 @@ def valori_pratiche(pratiche: Iterable, telefoni: Iterable[str] = ()) -> set[str
         aggiungi(t)
         if t and str(t).startswith("+39"):
             aggiungi(str(t)[3:])
+    for testo in testi:
+        aggiungi(testo)
+        for parte in re.split(r"\s+·\s+|\s+\|\s+", str(testo or "")):
+            aggiungi(parte)
     return out
 
 
 def controllo_sicurezza(struttura: dict, vietati: set[str] = frozenset()) -> list[str]:
     """Problemi che impediscono di scrivere il file (lista vuota = ok):
-    chiocciola, 6+ cifre di fila, valori uguali (o contenenti, se lunghi) a
-    dati delle pratiche. Le forme sono ammesse solo se fatte di x, 9 e
-    punteggiatura."""
+    chiocciola, 6+ cifre di fila, date (tranne l'ora di scrittura nel campo
+    "quando"), valori uguali (o contenenti, se lunghi) a dati delle
+    pratiche. Vale per tutte le parti del file, compresa la sezione
+    "perizia". Le forme sono ammesse solo se fatte di x, 9 e punteggiatura."""
     problemi: list[str] = []
     for chiave, s in _stringhe(struttura):
         if "@" in s:
@@ -420,6 +741,9 @@ def controllo_sicurezza(struttura: dict, vietati: set[str] = frozenset()) -> lis
             continue
         if _RE_6_CIFRE.search(s):
             problemi.append(f"numero di 6 o più cifre nel campo '{chiave}'")
+            continue
+        if chiave not in CHIAVI_CON_DATA and _RE_DATA_COMPLETA.search(s):
+            problemi.append(f"data nel campo '{chiave}'")
             continue
         n = _norm(s)
         if n and (n in vietati or any(len(v) >= 8 and v in n for v in vietati)):

@@ -137,6 +137,10 @@ def crea_parser() -> argparse.ArgumentParser:
     servizio.add_argument("--interval", type=float, default=INTERVALLO_DEFAULT_MIN,
                           help="Minuti fra due controlli del portale "
                                "(default: %(default)s)")
+    servizio.add_argument("--max-righe", type=int, default=200,
+                          help="Valore del campo «Max Righe» dell'Elenco Perizie "
+                               "impostato prima della ricerca (0 = non toccarlo; "
+                               "default: %(default)s)")
     servizio.add_argument("--portal", default="prelios",
                           help="Portale: prelios | cerved (default: %(default)s)")
     servizio.add_argument("--gestionale", action="append", metavar="URL", default=None,

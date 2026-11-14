@@ -15,13 +15,19 @@ Individuazione colonne:
 
 Vengono restituite SOLO le pratiche con tipologia "FULL - Acquisto"
 (confronto case-insensitive, spazi collassati), salvo diversa indicazione.
+
+Stato sul portale (stato_portale.py): se fra le intestazioni ci sono le
+colonne di data dell'Elenco Perizie (Conclusa, Sopralluogo, Valutata,
+Sospesa, Revoca, Sospensione, Inoltrata Perizia), ogni pratica riceve fase,
+stato e date; altrimenti quei campi restano vuoti (comportamento di prima).
 """
 
 from __future__ import annotations
 
 import csv
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from datetime import date
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -31,6 +37,8 @@ try:
 except ImportError:  # pragma: no cover - dipende dall'ambiente
     openpyxl = None  # type: ignore
     HAS_OPENPYXL = False
+
+from stato_portale import mappa_colonne_stato, stato_da_riga, trova_intestazioni_stato
 
 # Tipologia da tenere (forma normalizzata: maiuscolo, spazi collassati)
 TIPOLOGIA_TARGET = "FULL - ACQUISTO"
@@ -82,6 +90,27 @@ class Pratica:
     provincia: str
     progetto: str
     note_gestore: str = ""
+    # Stato sul portale (vuoti = non noto): vedi stato_portale.py
+    fase: str = ""
+    stato: str = ""
+    data_sopralluogo: str = ""   # AAAA-MM-GG
+    data_sospensione: str = ""   # AAAA-MM-GG, solo con fase "sospesa"
+
+    @classmethod
+    def da_dict(cls, dati: dict) -> "Pratica":
+        """Pratica da un dizionario (cache): le chiavi sconosciute sono
+        ignorate, quelle mancanti prendono il valore predefinito (così si
+        caricano anche i record scritti dalle versioni precedenti)."""
+        nomi = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in dati.items() if k in nomi})
+
+    def con_stato(self, stato: dict) -> "Pratica":
+        """Copia nella pratica i campi di stato_portale.stato_perizia."""
+        self.fase = stato.get("fase", "")
+        self.stato = stato.get("stato", "")
+        self.data_sopralluogo = stato.get("data_sopralluogo", "")
+        self.data_sospensione = stato.get("data_sospensione", "")
+        return self
 
 
 # === NORMALIZZAZIONE ===
@@ -232,13 +261,17 @@ def _pratica_da_riga_header(row: Sequence, mappa: dict[str, int],
 
 
 def parse_rows(rows: Iterable[Sequence],
-               solo_tipologia: str | None = TIPOLOGIA_TARGET) -> list[Pratica]:
+               solo_tipologia: str | None = TIPOLOGIA_TARGET,
+               stats: dict | None = None, oggi: date | None = None) -> list[Pratica]:
     """Trasforma righe grezze (liste di celle) in pratiche filtrate.
 
     Args:
         rows: righe come sequenze di celle (str/int/float/None).
         solo_tipologia: tipologia normalizzata da tenere (default
             'FULL - ACQUISTO'); None per non filtrare.
+        stats: se passato, riceve "colonne_stato" ('' se le colonne di
+            stato ci sono, altrimenti il motivo).
+        oggi: data di riferimento per la fase (default: oggi).
 
     Returns:
         Lista di Pratica nell'ordine di ingresso.
@@ -247,10 +280,13 @@ def parse_rows(rows: Iterable[Sequence],
     header_idx = _trova_header(righe)
 
     pratiche: list[Pratica] = []
+    oggi = oggi or date.today()
+    mappa_stato, motivo_stato = None, "nessuna riga di intestazioni nel file"
 
     if header_idx >= 0:
         mappa = _mappa_colonne(righe[header_idx])
         col_t = mappa["tipologia"]  # garantita da _trova_header
+        mappa_stato, motivo_stato = mappa_colonne_stato(righe[header_idx])
         dati = righe[header_idx + 1:]
         for row in dati:
             if not any(_cell_str(c) for c in row):
@@ -260,7 +296,10 @@ def parse_rows(rows: Iterable[Sequence],
                 continue  # riga spuria (totali, separatori, ...)
             if solo_tipologia and tipologia != normalizza_tipologia(solo_tipologia):
                 continue
-            pratiche.append(_pratica_da_riga_header(row, mappa, col_t))
+            pratica = _pratica_da_riga_header(row, mappa, col_t)
+            if mappa_stato is not None:
+                pratica.con_stato(stato_da_riga(row, mappa_stato, oggi))
+            pratiche.append(pratica)
     else:
         for row in righe:
             if not any(_cell_str(c) for c in row):
@@ -273,12 +312,17 @@ def parse_rows(rows: Iterable[Sequence],
                 continue
             pratiche.append(_pratica_da_riga_euristica(row, col_t))
 
+    if stats is not None:
+        stats["colonne_stato"] = "" if mappa_stato is not None else motivo_stato
     return pratiche
 
 
 def parse_grid_rows(rows: Iterable[Sequence],
                     solo_tipologia: str | None = TIPOLOGIA_TARGET,
-                    stats: dict | None = None) -> list[Pratica]:
+                    stats: dict | None = None,
+                    intestazioni: Iterable[Sequence] = (),
+                    oggi: date | None = None,
+                    sospese: set[str] | None = None) -> list[Pratica]:
     """Parsa righe gia' in memoria lette dalla GRIGLIA del portale (non da file).
 
     Usa SEMPRE l'euristica ancorata alla cella Tipologia (stessi offset e
@@ -292,17 +336,31 @@ def parse_grid_rows(rows: Iterable[Sequence],
 
     `load_pratiche`/`parse_rows` NON cambiano comportamento.
 
+    Stato sul portale: la riga delle intestazioni è cercata PER NOME (prima
+    fra le righe di celle <th> passate in `intestazioni`, poi fra le righe);
+    deve contenere «Tipo Perizia» e tutte le colonne di stato. Una riga dati
+    riceve lo stato solo se è allineata alle intestazioni (stesso numero di
+    celle e Tipologia nella stessa colonna).
+
     Args:
         rows: righe come liste di testi delle celle.
         solo_tipologia: tipologia normalizzata da tenere; None per non filtrare.
         stats: se passato, viene riempito con i contatori (righe, con_tipologia,
-            altre_tipologie, senza_codice, duplicate, pratiche).
+            altre_tipologie, senza_codice, duplicate, pratiche, senza_stato) e
+            con "colonne_stato" ('' se trovate, altrimenti il motivo).
+        intestazioni: righe di celle <th> lette dalla pagina (facoltative).
+        oggi: data di riferimento per la fase (default: oggi).
+        sospese: codici trovati dalla ricerca delle sospese del portale
+            (None = ricerca non fatta: ripiego sulla colonna Sospensione).
     """
     contatori = {"righe": 0, "con_tipologia": 0, "altre_tipologie": 0,
-                 "senza_codice": 0, "duplicate": 0, "pratiche": 0}
+                 "senza_codice": 0, "duplicate": 0, "pratiche": 0, "senza_stato": 0}
     target = normalizza_tipologia(solo_tipologia) if solo_tipologia else None
     visti: set[str] = set()
     pratiche: list[Pratica] = []
+    rows = [list(r) for r in rows]
+    oggi = oggi or date.today()
+    header, mappa_stato, motivo_stato = trova_intestazioni_stato(rows, intestazioni)
 
     for row in rows:
         row = list(row)
@@ -325,11 +383,18 @@ def parse_grid_rows(rows: Iterable[Sequence],
             contatori["duplicate"] += 1
             continue
         visti.add(pratica.codice)
+        if mappa_stato is not None:
+            if len(row) == len(header) and col_t == mappa_stato["tipologia"]:
+                ora = None if sospese is None else pratica.codice in sospese
+                pratica.con_stato(stato_da_riga(row, mappa_stato, oggi, ora))
+            else:
+                contatori["senza_stato"] += 1
         pratiche.append(pratica)
 
     contatori["pratiche"] = len(pratiche)
     if stats is not None:
         stats.update(contatori)
+        stats["colonne_stato"] = "" if mappa_stato is not None else motivo_stato
     return pratiche
 
 
@@ -384,13 +449,15 @@ def _leggi_testo(path: Path) -> list[list[object]]:
 
 
 def load_pratiche(path: str | Path,
-                  solo_tipologia: str | None = TIPOLOGIA_TARGET) -> list[Pratica]:
+                  solo_tipologia: str | None = TIPOLOGIA_TARGET,
+                  stats: dict | None = None) -> list[Pratica]:
     """Carica l'elenco pratiche da file Excel (.xlsx) o testuale (TSV/CSV).
 
     Args:
         path: percorso del file elenco.
         solo_tipologia: tipologia da tenere (default 'FULL - ACQUISTO');
             None per non filtrare.
+        stats: se passato, riceve "colonne_stato" (vedi parse_rows).
 
     Returns:
         Lista di Pratica filtrate.
@@ -408,4 +475,4 @@ def load_pratiche(path: str | Path,
     else:
         rows = _leggi_testo(path)
 
-    return parse_rows(rows, solo_tipologia=solo_tipologia)
+    return parse_rows(rows, solo_tipologia=solo_tipologia, stats=stats)

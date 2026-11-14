@@ -77,7 +77,8 @@ export const mergeExclusions = (...lists: GestionaleExclusion[][]): GestionaleEx
 
 // Elenco "excluded" della risposta del gestionale: si tengono solo le voci
 // con un codice non vuoto e uno dei tre motivi; il resto si ignora. La fonte
-// si tiene solo se è "portale".
+// si tiene solo se è "portale"; con quella fonte si tiene anche la data del
+// sopralluogo fissato, se è una data valida (finisce nella riga delle note).
 // Mancante o non valido = elenco vuoto.
 export const parseExcluded = (raw: unknown): GestionaleExclusion[] => {
   if (!Array.isArray(raw)) return [];
@@ -87,7 +88,14 @@ export const parseExcluded = (raw: unknown): GestionaleExclusion[] => {
     const r = item as Record<string, unknown>;
     if (typeof r.codice !== 'string' || !r.codice.trim()) continue;
     if (typeof r.reason !== 'string' || !REASONS.includes(r.reason as ExclusionReason)) continue;
-    out.push({ codice: r.codice.trim(), reason: r.reason as ExclusionReason, ...(r.fonte === 'portale' ? { fonte: 'portale' as const } : {}) });
+    const portale = r.fonte === 'portale';
+    const data = portale && typeof r.data === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.data) ? r.data : undefined;
+    out.push({
+      codice: r.codice.trim(),
+      reason: r.reason as ExclusionReason,
+      ...(portale ? { fonte: 'portale' as const } : {}),
+      ...(data ? { data } : {}),
+    });
   }
   return out;
 };

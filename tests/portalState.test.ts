@@ -83,6 +83,20 @@ describe('lettura dei campi del portale', () => {
     expect(r.ok && r.snapshot.pratiche[0].sospensione).toEqual({ nota: 'cliente da richiamare' });
     expect(r.ok && r.excluded).toEqual([{ codice: '2', reason: 'concordata', fonte: 'portale' }, { codice: '3', reason: 'chiusa' }]);
     expect(parseExcluded([{ codice: '4', reason: 'chiusa', fonte: 'portale' }])).toEqual([{ codice: '4', reason: 'chiusa', fonte: 'portale' }]);
+    // la data del sopralluogo fissato arriva anche dalla pagina del gestionale
+    // (che toglie la pratica dallo snapshot): si tiene solo se valida e solo
+    // con la fonte "portale"
+    expect(parseExcluded([
+      { codice: '5', reason: 'concordata', fonte: 'portale', data: '2026-11-20' },
+      { codice: '6', reason: 'concordata', fonte: 'portale', data: '20/11/2026' },
+      { codice: '7', reason: 'concordata', data: '2026-11-20' },
+      { codice: '8', reason: 'concordata', fonte: 'portale', data: 20261120 },
+    ])).toEqual([
+      { codice: '5', reason: 'concordata', fonte: 'portale', data: '2026-11-20' },
+      { codice: '6', reason: 'concordata', fonte: 'portale' },
+      { codice: '7', reason: 'concordata' },
+      { codice: '8', reason: 'concordata', fonte: 'portale' },
+    ]);
   });
 });
 

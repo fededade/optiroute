@@ -103,6 +103,10 @@ export interface CloudSyncState {
   lastActivity: CloudLastTick | null;  // ultimo passaggio che ha avviato chiamate o applicato esiti
   rev: number;
   configRev: number;
+  // Primo scaricamento completo applicato (elenco e configurazione del
+  // server già in uso qui). Falso finché non arriva; un motore nuovo
+  // riparte da falso.
+  loaded: boolean;
 }
 
 export interface CloudSyncOptions {
@@ -174,7 +178,7 @@ export class CloudSyncEngine {
     this.base = opts.host.getAppointments();
     this.state = {
       phase: 'starting', lastSyncAt: null, pending: false, retryAt: null, error: null,
-      lease: null, status: null, lastTick: null, lastActivity: null, rev: -1, configRev: -1,
+      lease: null, status: null, lastTick: null, lastActivity: null, rev: -1, configRev: -1, loaded: false,
     };
   }
 
@@ -465,7 +469,12 @@ export class CloudSyncEngine {
       this.configRev = snap.configRev;
     }
 
-    if (ctx.initial) this.started = true;
+    if (ctx.initial) {
+      this.started = true;
+      // Elenco e configurazione sono già passati dall'host: da qui in poi
+      // chi aspettava i dati del cloud (es. l'inbox del bridge) può partire
+      patch.loaded = true;
+    }
     patch.rev = this.rev;
     patch.configRev = this.configRev;
     this.updateState(patch);

@@ -54,8 +54,10 @@ const parentHtml = `<!doctype html>
   const appOrigin = new URL(APP).origin;
   const user = { name: q.get('name') || 'Anna Admin', email: q.get('email') || 'anna@example.com', role: q.get('role') || 'Amministratore' };
   window.__received = [];
+  window.__receivedAt = [];
   window.__changed = 0;
-  window.__bridge = { status: 'offline', message: 'Bridge non avviato' };
+  // stato iniziale del bridge: quello preparato dal test, se c'è
+  window.__bridge = window.__bridgeStart || { status: 'offline', message: 'Bridge non avviato' };
   window.__idToken = async (over) => {
     const body = Object.assign({ email: user.email, role: q.get('norecord') ? null : user.role, name: user.name }, over || {});
     const r = await fetch(CLOUD + '/__test/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -67,6 +69,7 @@ const parentHtml = `<!doctype html>
     const m = ev.data;
     if (!m || m.channel !== 'optiroute-gestionale' || m.v !== 1 || typeof m.id !== 'string') return;
     window.__received.push(m.method);
+    window.__receivedAt.push([m.method, Date.now()]);
     const reply = (body) => frame.contentWindow.postMessage(Object.assign({ channel: 'optiroute-gestionale', v: 1, id: m.id }, body), appOrigin);
     try {
       if (m.method === 'hello') return reply({ ok: true, result: { user, environment: 'collaudo' } });
@@ -119,10 +122,14 @@ async function waitFor(fn, what, timeout = 30000) {
 }
 
 // --- Browser ---
-const newPage = async (browser, { parent = PARENT, user = {}, localSeed = null, blockStorage = false, direct = false } = {}) => {
+// bridgeStart: stato del bridge nella pagina del gestionale fin dall'apertura
+// delayFirstPullMs: ritarda la risposta del primo op=pull (ordine deterministico)
+// watchBridgeChip: registra ogni testo del chip del bridge (window.__chipTexts)
+const newPage = async (browser, { parent = PARENT, user = {}, localSeed = null, blockStorage = false, direct = false,
+  bridgeStart = null, delayFirstPullMs = 0, watchBridgeChip = false } = {}) => {
   const ctx = await browser.newContext({ timezoneId: 'Europe/Rome', locale: 'it-IT', viewport: { width: 1440, height: 1000 } });
   const page = await ctx.newPage();
-  const seen = { pingParents: [], sessions: 0, cloudOps: [] };
+  const seen = { pingParents: [], sessions: 0, cloudOps: [], firstPullDoneAt: null };
   // tutto ciò che non è nostro: niente rete
   await page.route('**/*', r => {
     const u = r.request().url();
@@ -148,9 +155,30 @@ const newPage = async (browser, { parent = PARENT, user = {}, localSeed = null, 
     seen.cloudOps.push(op);
     if (op === 'ping' && u.searchParams.get('parent')) seen.pingParents.push(u.searchParams.get('parent'));
     if (op === 'session') seen.sessions += 1;
+    const firstPull = op === 'pull' && !seen.pullSeen;
+    if (op === 'pull') seen.pullSeen = true;
     const response = await r.fetch({ url: CLOUD + u.pathname + u.search });
-    return r.fulfill({ response });
+    if (firstPull && delayFirstPullMs > 0) await sleep(delayFirstPullMs);
+    await r.fulfill({ response });
+    if (firstPull) seen.firstPullDoneAt = Date.now();
   });
+  if (bridgeStart) {
+    await page.addInitScript(([parentOrigin, bridge]) => {
+      if (location.origin !== parentOrigin) return;
+      window.__bridgeStart = bridge;
+    }, [new URL(parent).origin, bridgeStart]);
+  }
+  if (watchBridgeChip) {
+    await page.addInitScript(appOrigin => {
+      if (location.origin !== appOrigin) return;
+      window.__chipTexts = [];
+      setInterval(() => {
+        const el = document.querySelector('[data-testid="bridge-chip"]');
+        const t = el ? el.textContent.trim() : '';
+        if (t && window.__chipTexts[window.__chipTexts.length - 1] !== t) window.__chipTexts.push(t);
+      }, 50);
+    }, APP);
+  }
   if (blockStorage) {
     // memoria del browser BLOCCATA dentro l'iframe: già leggerla dà errore
     await page.addInitScript(appOrigin => {
@@ -390,6 +418,63 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       await sleep(3000);
       assert.equal(JSON.stringify((await serverList()).find(a => a.id === 'x1')), before, 'secondo scaricamento: nessuna modifica');
       await G.page.screenshot({ path: path.join(OUT, '2c-bridge-esclusioni.png') });
+      await G.ctx.close();
+    });
+
+    // 2d) Browser nuovo (niente pratiche né tecnici salvati), cloud con pratiche
+    //     e tecnici suoi, bridge con pratiche pronte: l'inbox aspetta il primo
+    //     scaricamento dal cloud (niente doppioni, tecnico del cloud) e lo
+    //     smistamento automatico propone la pratica nuova
+    await step('browser nuovo: il bridge aspetta i dati del cloud (niente doppioni, tecnico del cloud)', async () => {
+      await api('POST', '/__test/reset');
+      const CLOUD_TECH = { ...TECH, id: 'tech-del-cloud', name: 'Tecnico del Cloud' };
+      const DEFAULT_TECH_IDS = ['tech-omar', 'tech-federica']; // tecnici predefiniti dell'app
+      const cloudConfig = { technicians: [CLOUD_TECH], autopilot: { enabled: true, autoDispatch: true }, fallback: CONFIG.fallback };
+      const init = await api('POST', '/api/cloud?op=init', { body: { device: DEVICE, replace: true, config: cloudConfig, appointments: [
+        { id: 'cx', title: 'Cliente Già nel Cloud', address: 'Via Cloud 1, Milano', coords: P.milano, status: 'pending',
+          technicianId: CLOUD_TECH.id, province: 'MI', comune: 'Milano', periziaCode: '845.326', phone: '+390233340001' },
+      ] }, headers: auth });
+      assert.equal(init.status, 200);
+      const pratica = (codice, intestatario, via, telefono) => ({ portal: 'prelios', codice, intestatario, via, civico: '7', comune: 'Milano', provincia: 'MI',
+        telefono, note: '', progetto: '', tipologia: '', esito: '', aggiornatoIl: '' });
+      const bridgeStart = { status: 'ok', snapshot: { bridge: 'optiroute-bridge', version: 1, generatedAt: new Date().toISOString(),
+        portals: [{ id: 'prelios', status: 'ok', lastSync: new Date().toISOString() }],
+        pratiche: [pratica('845326', 'Cliente Già nel Cloud', 'Via Cloud', '+390233340001'), pratica('845400', 'Rossi Nuova', 'Via Nuova', '+390233340002')] } };
+      // memoria del browser vuota: solo l'id del dispositivo (quello che ha il turno)
+      const G = await newPage(browser, { localSeed: { optiroute_cloud_v1: DEVICE_SEED }, bridgeStart, delayFirstPullMs: 1500, watchBridgeChip: true });
+      await G.app.locator('[data-testid="autopilot-bar"]').waitFor({ timeout: 30000 });
+      const digits = c => String(c || '').replace(/\D/g, '');
+      const list = await waitFor(async () => {
+        const l = await serverList();
+        const y = l.find(a => digits(a.periziaCode) === '845400');
+        return y && y.status === 'proposed' ? l : null;
+      }, 'pratica nuova importata e proposta dallo smistamento automatico', 60000).catch(async err => {
+        log('server:', JSON.stringify((await serverList()).map(a => [a.id, a.periziaCode, a.status, a.technicianId])));
+        log('chip:', JSON.stringify(await G.frame.evaluate(() => window.__chipTexts).catch(() => null)));
+        throw err;
+      });
+      await sleep(3000); // eventuali invii ritardati
+      const final = await serverList();
+      log('server:', JSON.stringify(final.map(a => [a.id, a.periziaCode, a.status, a.technicianId])));
+      assert.equal(final.filter(a => digits(a.periziaCode) === '845326').length, 1, 'una sola pratica con il codice già nel cloud');
+      const ys = final.filter(a => digits(a.periziaCode) === '845400');
+      assert.equal(ys.length, 1, 'la pratica nuova importata una sola volta');
+      assert.equal(ys[0].technicianId, CLOUD_TECH.id, 'con il tecnico del cloud');
+      assert.ok(final.every(a => !DEFAULT_TECH_IDS.includes(a.technicianId)), 'nessun tecnico predefinito dell\'app');
+      assert.equal(list.find(a => digits(a.periziaCode) === '845400').status, 'proposed', 'proposta dallo smistamento automatico');
+      // l'inbox ha chiesto le pratiche solo dopo il primo scaricamento dal cloud
+      const asked = await parentEval(G.page, () => window.__receivedAt.filter(([m]) => m === 'bridge.snapshot').map(([, t]) => t));
+      assert.ok(G.seen.firstPullDoneAt && asked.length >= 1, 'scaricamento e richiesta al bridge avvenuti');
+      assert.ok(asked.every(t => t >= G.seen.firstPullDoneAt), 'nessuna richiesta al bridge prima dei dati del cloud');
+      // durante l'attesa il chip lo dice (e da lì in poi mai "gestito
+      // dall'altra scheda"; prima, per un attimo, la scheda non sa ancora di
+      // essere la principale)
+      const chips = await G.frame.evaluate(() => window.__chipTexts);
+      log('chip:', JSON.stringify(chips));
+      const waitingAt = chips.findIndex(t => /Bridge: in attesa dei dati dal cloud/.test(t));
+      assert.ok(waitingAt >= 0, 'chip "in attesa dei dati dal cloud"');
+      assert.ok(chips.slice(waitingAt).every(t => !/gestito dall'altra scheda/.test(t)), 'nell\'attesa mai "gestito dall\'altra scheda"');
+      await G.page.screenshot({ path: path.join(OUT, '2d-bridge-dopo-il-cloud.png') });
       await G.ctx.close();
     });
 

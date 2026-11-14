@@ -106,7 +106,9 @@ liberati anche con il PC spento, e gli stessi dati si vedono da più computer.
   protetta: una pratica non può essere chiamata due volte e una modifica dell'operatore
   arrivata nel mezzo non va persa.
 - Restano nel browser lo smistamento automatico e l'arrivo delle pratiche dal bridge
-  (girano su un solo dispositivo alla volta).
+  (girano su un solo dispositivo alla volta). Lo smistamento automatico non perde pratiche:
+  se ne arrivano mentre calcola, o una ha un tecnico che non esiste più, ricalcola subito
+  (con un limite ai ricalcoli che non collocano nulla).
 - "Pausa" ferma i lanci anche sul cloud. "Scollega questo browser" riporta quel browser ai
   soli dati locali, con il pilota locale spento: il motore sul cloud continua.
 
@@ -286,6 +288,9 @@ pagina). Chi entra nel gestionale non deve fare altro: niente chiave da digitare
 - Il **bridge dei portali** si avvia e si attiva dalla barra del gestionale: le pratiche
   arrivano da sole tramite la pagina del gestionale. Indirizzo e token del bridge nelle
   impostazioni di OptiRoute non servono (restano visibili ma spenti).
+  Le pratiche del bridge si scaricano solo dopo che sono arrivati i dati del cloud
+  (pratiche e tecnici; il chip dice "Bridge: in attesa dei dati dal cloud"), così anche un
+  browser nuovo non le importa due volte né le assegna a tecnici che non esistono.
 - **Controllo incrociato con il gestionale**: è il gestionale a decidere quali pratiche del
   portale vanno programmate, e a OptiRoute arrivano come nuove solo quelle. Le pratiche già
   presenti in OptiRoute che nel gestionale risultano già concordate, già fatte o chiuse escono

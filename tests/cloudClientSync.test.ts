@@ -246,6 +246,60 @@ describe('CloudSyncEngine', () => {
     expect(engine.getState().phase).toBe('synced');
   });
 
+  it('primo scaricamento: "loaded" diventa vero solo con elenco e configurazione già applicati', async () => {
+    const clock = new FakeClock();
+    const cloud = new FakeCloud();
+    cloud.appointments = seed();
+    cloud.config = makeConfig({ technicians: [tech({ id: 'tech-cloud' })] });
+    const host = new FakeHost([], makeConfig({ technicians: [tech({ id: 'tech-locale' })] }));
+    const release = hold(cloud, 'pull');
+    const seen: { loaded: boolean; ids: string[]; techs: string[] }[] = [];
+    const engine = new CloudSyncEngine({
+      key: KEY, deviceId: 'dev-a', host, fetch: cloud.fetch, clock, timers: { tick: false, status: false },
+      onState: st => seen.push({ loaded: st.loaded, ids: host.list.map(a => a.id).sort(), techs: host.config.technicians.map(t => t.id) }),
+    });
+    host.engine = engine; engines.push(engine);
+    expect(engine.getState().loaded).toBe(false);
+    engine.start();
+    await clock.advance(0);
+    // primo pull in volo: ancora falso
+    expect(engine.getState().loaded).toBe(false);
+    expect(seen.every(x => !x.loaded)).toBe(true);
+    release();
+    await clock.advance(0);
+    expect(engine.getState().loaded).toBe(true);
+    // la prima notifica con loaded vero vede già i dati del server
+    const first = seen.find(x => x.loaded)!;
+    expect(first.ids).toEqual(['a', 'b', 'c']);
+    expect(first.techs).toEqual(['tech-cloud']);
+    // resta vero con i pull successivi
+    await clock.advance(PULL_VISIBLE_MS);
+    expect(cloud.ops('pull').length).toBeGreaterThanOrEqual(2);
+    expect(engine.getState().loaded).toBe(true);
+  });
+
+  it('primo scaricamento non riuscito: "loaded" resta falso finché un tentativo non riesce; un motore nuovo riparte da falso', async () => {
+    const clock = new FakeClock();
+    const cloud = new FakeCloud();
+    cloud.appointments = seed();
+    cloud.config = makeConfig();
+    cloud.mode = 'offline';
+    const host = new FakeHost([], makeConfig());
+    const engine = new CloudSyncEngine({ key: KEY, deviceId: 'dev-a', host, fetch: cloud.fetch, clock, timers: { tick: false, status: false } });
+    host.engine = engine; engines.push(engine);
+    engine.start();
+    await clock.advance(0);
+    expect(engine.getState().phase).toBe('offline');
+    expect(engine.getState().loaded).toBe(false);
+    cloud.mode = 'ok';
+    await clock.advance(RETRY_DELAYS_MS[0]);
+    expect(engine.getState().loaded).toBe(true);
+    engine.destroy();
+    const again = new CloudSyncEngine({ key: KEY, deviceId: 'dev-a', host, fetch: cloud.fetch, clock, timers: { tick: false, status: false } });
+    engines.push(again);
+    expect(again.getState().loaded).toBe(false);
+  });
+
   it('modifica locale -> dopo il debounce una push con le SOLE differenze', async () => {
     const { clock, cloud, host } = await setup({ timers: false });
     host.edit(all => all.map(a => (a.id === 'a' ? { ...a, status: 'confirmed' as const } : a)));

@@ -270,6 +270,15 @@ finestra di chiamata ("Registra esito della telefonata").
   fatto sotto supervisione. **Cerved** non è ancora collegato: il bridge ha la struttura
   per aggiungerlo e uno strumento (`capture_portal.py`) per rilevarne le pagine in forma
   anonimizzata. Vedi `prelios-bridge/README.md`.
+- **Stato della pratica sul portale** (bridge diretto e dentro il gestionale): le pratiche
+  che il portale dà con il sopralluogo già fissato, già fatto o chiuse non si importano e,
+  se già presenti e non confermate, escono dal lavoro come quelle escluse dal gestionale
+  (riga nelle note "Tolta dal giro: sul portale …"). Le pratiche **sospese** sul portale si
+  importano ma mai come lavoro normale: la nota di sospensione decide (numero errato, lavori
+  non finiti, da richiamare con la data se c'è, in attesa con la data di rientro se il
+  cliente è disponibile solo da una data; il resto va fra le problematiche "da richiamare").
+  Si applica una volta per nota (nella scheda: etichetta "Sospesa sul portale"); se la nota
+  cambia sul portale si riapplica. Il chip del bridge conta le sospese.
 - **Sopralluoghi confermati al gestionale**: non è più OptiRoute a scriverli nel
   gestionale (il vecchio invio è stato tolto a novembre 2026); è il gestionale che li legge
   dal server di OptiRoute. Vedi la sezione "Dentro il gestionale".

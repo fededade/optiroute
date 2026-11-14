@@ -89,6 +89,7 @@ export interface Appointment {
   project?: string;       // progetto/committente della pratica
   contactPerson?: string; // referente alternativo da contattare (nome + ruolo)
   referredBy?: string;    // chi ha indicato il referente (intestatario originario)
+  portalSuspension?: string; // pratica sospesa sul portale: impronta della nota già applicata ("-" se vuota)
 
   // Client & appointment details
   phone?: string;           // Client phone number for the AI confirmation call

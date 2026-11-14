@@ -25,7 +25,7 @@ import {
   reduceCallStarted,
 } from './services/autopilotService';
 import { applyPatches, localDateStr, type AppointmentPatch } from './services/slotService';
-import type { BridgeSettings } from './services/bridgeService';
+import type { BridgePratica, BridgeSettings } from './services/bridgeService';
 import { type ImportRow, applyImportResult, importRowsToAppointments, newAppointmentsToAdd, reassignUnknownTechnicians } from './hooks/importPratiche';
 import { useTabLock } from './hooks/useTabLock';
 import { useAutopilot, autopilotQueueKey } from './hooks/useAutopilot';
@@ -37,7 +37,8 @@ import type { CloudConfig } from './services/cloudProtocol';
 import { prepareEmbeddedCloud } from './services/cloudSyncCore';
 import { bridgeInboxHere, turnAutomationsHere } from './services/automationTurn';
 import { fetchBridgeSnapshotViaParent } from './services/bridgeService';
-import { applyGestionaleExclusions, type ExclusionOptions, type GestionaleExclusion } from './services/gestionaleExclusions';
+import { applyGestionaleExclusions, type ExclusionChange, type ExclusionOptions, type GestionaleExclusion } from './services/gestionaleExclusions';
+import { applyPortalSuspensions, type SuspensionOptions } from './services/portalState';
 import type { GestionaleContext } from './Components/GestionaleGate';
 import AppointmentModal from './Components/AppointmentModal';
 import CallModal from './Components/CallModal';
@@ -703,11 +704,20 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     }
   };
 
+  // Opzioni delle funzioni sullo stato del portale / sulle esclusioni
+  const portalOptions = useCallback((): SuspensionOptions & ExclusionOptions => {
+    const ctx = getPlanningContext();
+    return { now: ctx.now, dayBase: (technicianId, date) => baseFor(ctx, technicianId, date) };
+  }, [getPlanningContext]);
+
   // Import silenzioso dal bridge: nuove pratiche (nucleo comune) + telefoni
-  // arrivati sulle pratiche che non l'avevano (mai sovrascritti)
+  // arrivati sulle pratiche che non l'avevano (mai sovrascritti) + pratiche
+  // sospese sul portale, nello STESSO aggiornamento dell'elenco: lo
+  // smistamento automatico non vede mai una sospesa come pratica normale
   const importFromBridge = useCallback(async (
     rows: ImportRow[],
-    phoneUpdates: { id: string; changes: Partial<Appointment> }[]
+    phoneUpdates: { id: string; changes: Partial<Appointment> }[],
+    portal: BridgePratica[] = []
   ): Promise<BridgeImportOutcome> => {
     importBusyRef.current = true;
     setImportBusy(true);
@@ -720,24 +730,35 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
       const phoneById = new Map(phoneUpdates.map(u => [u.id, u.changes]));
       let updated = 0;
       let added = 0;
+      let suspended = 0;
+      const opts = portalOptions();
       setAllAppointments(prev => {
         // Sull'elenco e sui tecnici di ADESSO (possono essere cambiati
         // durante l'import): niente doppioni, niente tecnici inesistenti
         const fresh = reassignUnknownTechnicians(newAppointmentsToAdd(prev, result.newAppointments), techniciansRef.current);
         added = fresh.length;
-        return applyImportResult(prev, { ...result, newAppointments: fresh }).map(a => {
+        const next = applyImportResult(prev, { ...result, newAppointments: fresh }).map(a => {
           const changes = phoneById.get(a.id);
           if (!changes || a.phone?.trim()) return a;
           updated += 1;
           return { ...a, ...changes };
         });
+        const portalResult = applyPortalSuspensions(next, portal, opts);
+        suspended = portalResult.applied.length;
+        return portalResult.list;
       });
-      return { added, updated, failed: result.failures.length };
+      return { added, updated, failed: result.failures.length, ...(suspended > 0 ? { suspended } : {}) };
     } finally {
       importBusyRef.current = false;
       setImportBusy(false);
     }
-  }, [setAllAppointments]);
+  }, [setAllAppointments, portalOptions]);
+
+  // C'è qualcosa da fare per le sospensioni del portale (pratiche già presenti)?
+  const portalSuspensionsPending = useCallback((portal: BridgePratica[]): boolean => {
+    const r = applyPortalSuspensions(appointmentsRef.current, portal, portalOptions());
+    return r.applied.length > 0 || r.cleared.length > 0;
+  }, [portalOptions]);
 
   // Dentro il gestionale le pratiche del bridge arrivano tramite la sua pagina
   const bridgeViaParent = useMemo(
@@ -745,17 +766,17 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     [gestionale]
   );
 
-  // Dentro il gestionale: le pratiche che il gestionale indica come già
-  // concordate, fatte o chiuse escono dal lavoro (annullate, con una riga
-  // nelle note). Arriva al server con la normale sincronizzazione.
-  const applyGestionaleExcluded = useCallback((excluded: GestionaleExclusion[]): number => {
-    const ctx = getPlanningContext();
-    const opts: ExclusionOptions = { now: ctx.now, dayBase: (technicianId, date) => baseFor(ctx, technicianId, date) };
+  // Le pratiche che il gestionale (dentro il gestionale) o il portale (in
+  // ogni modalità) indicano come già concordate/fissate, fatte o chiuse
+  // escono dal lavoro (annullate, con una riga nelle note). Arriva al server
+  // con la normale sincronizzazione.
+  const applyGestionaleExcluded = useCallback((excluded: GestionaleExclusion[]): ExclusionChange[] => {
+    const opts = portalOptions();
     const { removed } = applyGestionaleExclusions(appointmentsRef.current, excluded, opts);
-    if (removed.length === 0) return 0;
+    if (removed.length === 0) return [];
     setAllAppointments(prev => applyGestionaleExclusions(prev, excluded, opts).list);
-    return removed.length;
-  }, [getPlanningContext, setAllAppointments]);
+    return removed;
+  }, [portalOptions, setAllAppointments]);
 
   const bridgeInbox = useBridgeInbox({
     settings: bridgeSettings,
@@ -767,7 +788,8 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
       ? 'Bridge: in attesa dei dati dal cloud'
       : cloudActive && isAutomationTab ? 'Bridge: gestito da un altro dispositivo collegato al cloud' : undefined,
     source: bridgeViaParent,
-    applyExcluded: gestionale ? applyGestionaleExcluded : undefined,
+    applyExcluded: applyGestionaleExcluded,
+    suspensionsPending: portalSuspensionsPending,
     // Dentro il gestionale niente scaricamenti prima dei dati del cloud,
     // nemmeno da "Scarica ora" o dall'avviso del gestionale
     waiting: embedded && !cloudLoaded,

@@ -51,7 +51,7 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
   // Campi numerici come testo durante la digitazione
   const [nums, setNums] = useState({
     maxAttempts: String(autopilot.maxAttempts),
-    retryMinutes: String(autopilot.retryMinutes),
+    noAnswerRetryMinutes: String(autopilot.noAnswerRetryMinutes),
     minLeadHours: String(autopilot.minLeadHours),
     dispatchHorizonDays: String(autopilot.dispatchHorizonDays),
   });
@@ -100,7 +100,7 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
     const next: AutopilotSettings = {
       ...ap,
       maxAttempts: clampInt(nums.maxAttempts, 1, 10, autopilot.maxAttempts),
-      retryMinutes: clampInt(nums.retryMinutes, 15, 24 * 60, autopilot.retryMinutes),
+      noAnswerRetryMinutes: clampInt(nums.noAnswerRetryMinutes, 5, 24 * 60, autopilot.noAnswerRetryMinutes),
       minLeadHours: clampInt(nums.minLeadHours, 0, 72, autopilot.minLeadHours),
       dispatchHorizonDays: clampInt(nums.dispatchHorizonDays, 1, 60, autopilot.dispatchHorizonDays),
     };
@@ -223,8 +223,8 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
                   <SettingRow label="Tentativi massimi se non risponde" htmlFor="ap-max-attempts">
                     <input id="ap-max-attempts" type="number" min={1} max={10} value={nums.maxAttempts} onChange={e => setNums(n => ({ ...n, maxAttempts: e.target.value }))} className={numInput} />
                   </SettingRow>
-                  <SettingRow label="Minuti fra un tentativo e l'altro" htmlFor="ap-retry-minutes">
-                    <input id="ap-retry-minutes" type="number" min={15} max={1440} value={nums.retryMinutes} onChange={e => setNums(n => ({ ...n, retryMinutes: e.target.value }))} className={numInput} />
+                  <SettingRow label="Quando il cliente non risponde, richiama dopo (minuti)" hint="Minimo 5. Se il richiamo cade fuori dalla fascia chiamate, parte all'apertura successiva." htmlFor="ap-retry-minutes">
+                    <input id="ap-retry-minutes" type="number" min={5} max={1440} value={nums.noAnswerRetryMinutes} onChange={e => setNums(n => ({ ...n, noAnswerRetryMinutes: e.target.value }))} className={numInput} />
                   </SettingRow>
                 </SettingGroup>
               </section>

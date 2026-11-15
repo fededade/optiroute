@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeChosenAlternative } from '../api/call-status';
+import { interpretRetellCall, normalizeChosenAlternative } from '../api/call-status';
 
 describe('normalizeChosenAlternative', () => {
   it.each([
@@ -40,5 +40,38 @@ describe('normalizeChosenAlternative', () => {
     expect(normalizeChosenAlternative(undefined)).toBeUndefined();
     expect(normalizeChosenAlternative(null)).toBeUndefined();
     expect(normalizeChosenAlternative(1)).toBeUndefined();
+  });
+});
+
+describe('riassunto della chiamata', () => {
+  const ended = (analysis: Record<string, unknown>) => ({ call_status: 'ended', call_analysis: analysis });
+
+  it('preso dal campo italiano quando c\'è', () => {
+    const v = interpretRetellCall(ended({
+      call_summary: 'The agent called the customer.',
+      custom_analysis_data: { esito_appuntamento: 'confermato', riassunto: 'Proposto venerdì alle 10, il cliente ha confermato.' },
+    }));
+    expect(v.outcome?.summary).toBe('Proposto venerdì alle 10, il cliente ha confermato.');
+  });
+
+  it('accetta anche gli altri nomi del campo', () => {
+    const v = interpretRetellCall(ended({
+      call_summary: 'The agent called the customer.',
+      custom_analysis_data: { esito_appuntamento: 'confermato', Sintesi: 'Confermato per venerdì.' },
+    }));
+    expect(v.outcome?.summary).toBe('Confermato per venerdì.');
+  });
+
+  it('da call_summary quando il campo italiano manca o è vuoto', () => {
+    const senza = interpretRetellCall(ended({
+      call_summary: 'The agent called the customer.',
+      custom_analysis_data: { esito_appuntamento: 'confermato' },
+    }));
+    expect(senza.outcome?.summary).toBe('The agent called the customer.');
+    const vuoto = interpretRetellCall(ended({
+      call_summary: 'The agent called the customer.',
+      custom_analysis_data: { esito_appuntamento: 'confermato', riassunto: '  ' },
+    }));
+    expect(vuoto.outcome?.summary).toBe('The agent called the customer.');
   });
 });

@@ -281,7 +281,7 @@ export const runTick = async (deps: EngineDeps, source: TickSource, opts: TickOp
         const lookup = await deps.retell.getCall(callId, Math.max(1000, Math.min(8000, remaining())));
         const now = deps.now();
         if (lookup.kind === 'done') {
-          found.push({ id: appt.id, callId, outcome: toCallOutcome(lookup.outcome, now) });
+          found.push({ id: appt.id, callId, outcome: toCallOutcome(lookup.outcome, now, { callWindowStart: planningFrom(cfg, now, deps).settings.callWindowStart }) });
           return;
         }
         if (lookup.kind === 'error' && lookup.transient) return; // si riprova al prossimo passaggio

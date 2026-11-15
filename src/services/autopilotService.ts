@@ -34,7 +34,10 @@ export interface AutopilotSettings {
   callWindowEnd: string;       // '19:30'
   callSaturday: boolean;       // false; la domenica mai (tranne in prova, vedi callEveryDay)
   maxAttempts: number;         // 3 chiamate senza risposta, poi "irreperibile"
-  retryMinutes: number;        // 120
+  // 15: chi non risponde viene richiamato dopo questi minuti. Nome nuovo al
+  // posto del vecchio `retryMinutes` (120): le impostazioni salvate prima
+  // prendono così il nuovo valore predefinito senza migrazioni.
+  noAnswerRetryMinutes: number;
   offerAlternatives: boolean;  // true
   backfill: boolean;           // true
   minLeadHours: number;        // 3: non proporre/riempire slot che iniziano entro N ore
@@ -56,7 +59,7 @@ export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
   callWindowEnd: '19:30',
   callSaturday: false,
   maxAttempts: 3,
-  retryMinutes: 120,
+  noAnswerRetryMinutes: 15,
   offerAlternatives: true,
   backfill: true,
   minLeadHours: 3,
@@ -75,9 +78,11 @@ export const effectiveAutopilotSettings = (s: AutopilotSettings, env: { testMode
 });
 
 // Impostazioni da salvare o sincronizzare: senza i campi di sola esecuzione
+// e senza il vecchio `retryMinutes` (sostituito da noAnswerRetryMinutes),
+// che può essere rimasto nelle impostazioni salvate prima
 export const storableAutopilotSettings = (s: AutopilotSettings): AutopilotSettings => {
-  if (!('callEveryDay' in s)) return s;
-  const { callEveryDay: _runtime, ...rest } = s;
+  if (!('callEveryDay' in s) && !('retryMinutes' in s)) return s;
+  const { callEveryDay: _runtime, retryMinutes: _old, ...rest } = s as AutopilotSettings & { retryMinutes?: unknown };
   return rest;
 };
 
@@ -153,6 +158,13 @@ const formatDate = (date: string): string => {
   return `${d}/${m}/${y}`;
 };
 
+// "13/11/2026 alle 10:15"
+const formatDateTime = (d: Date): string =>
+  `${formatDate(localDateStr(d))} alle ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+// Richiami chiesti di fila dal cliente: alla terza richiesta decide l'operatore
+export const MAX_CALLBACK_REQUESTS = 3;
+
 const replaceById = (all: Appointment[], updated: Appointment): Appointment[] =>
   all.map(a => (a.id === updated.id ? updated : a));
 
@@ -206,6 +218,24 @@ export const approveForCalling = (all: Appointment[], ids: string[], now: Date):
     if (a.callOutcome?.result === 'confermato') return a;
     if (slotPassed(a, now)) return a;
     return { ...a, autoCall: 'route', autoCallNotBefore: undefined, callAttempts: 0 };
+  });
+};
+
+// Smistamento AUTOMATICO: le pratiche collocate che aspettavano un richiamo
+// chiesto dal cliente vanno subito in coda (il giro era già stato approvato
+// una volta), non prima dell'orario chiesto; il campo si toglie.
+export const approveRequestedCallbacks = (all: Appointment[], ids: string[], now: Date): Appointment[] => {
+  const asked = new Map(all.filter(a => ids.includes(a.id) && a.callbackAt).map(a => [a.id, a.callbackAt as string]));
+  if (asked.size === 0) return all;
+  return approveForCalling(all, [...asked.keys()], now).map(a => {
+    const at = asked.get(a.id);
+    if (at === undefined) return a;
+    const future = new Date(at).getTime() > now.getTime();
+    return {
+      ...a,
+      callbackAt: undefined,
+      ...(a.autoCall ? { autoCallNotBefore: future ? at : undefined } : {}),
+    };
   });
 };
 
@@ -297,6 +327,7 @@ export const reduceCallStarted = (
           autoCallNotBefore: undefined,
           callOutcome: undefined,
           callSummary: undefined,
+          callbackAt: undefined, // il richiamo chiesto dal cliente è questa chiamata
           offeredAlternatives: alternatives.length > 0 ? alternatives : undefined,
         }
       : a
@@ -445,7 +476,8 @@ const ALTERNATIVE_RESULTS: CallOutcomeResult[] = ['confermato', 'riprogrammare',
 //  alternativa accettata -> spostata sullo slot scelto, Confermata
 //  confermato          -> proposta => Confermata (data/orario mantenuti)
 //  riprogrammare       -> In Attesa, preferenza del cliente nelle note
-//  da_richiamare       -> Problematica 📆 con data di rientro
+//  da_richiamare       -> Problematica 📆 con data di rientro; (pilota) con
+//                         l'orario chiesto dal cliente richiama da solo
 //  numero_errato       -> Problematica 📵
 //  lavori_non_ultimati -> Problematica 🚧 con data fine lavori
 //  annullato           -> Annullata (archivio)
@@ -485,6 +517,10 @@ export const reduceCallOutcome = (
     callOutcome: outcome,
     callSummary: outcome.summary || a.callSummary,
     callStatus: outcome.result === 'non_risposto' ? 'failed' : 'called',
+    // Un esito nuovo supera il richiamo chiesto prima; un esito diverso da
+    // "da richiamare" interrompe la serie di richiami chiesti di fila
+    ...(a.callbackAt ? { callbackAt: undefined } : {}),
+    ...(a.callbackRequests && outcome.result !== 'da_richiamare' ? { callbackRequests: undefined } : {}),
   };
   let list = replaceById(all, base);
   let liberato = false;
@@ -599,9 +635,56 @@ export const reduceCallOutcome = (
         );
         break;
       }
-      case 'da_richiamare':
-        leaveRoute({ status: 'issue', issueType: 'callback', followUpDate: outcome.followUpDate || a.followUpDate });
+      case 'da_richiamare': {
+        // Pilota acceso e orario del richiamo chiesto dal cliente: richiama da
+        // solo. Senza orario, a pilota spento o alla terza richiesta di fila
+        // decide l'operatore (fra i problemi "Da richiamare").
+        const requests = (a.callbackRequests || 0) + 1;
+        const asked = outcome.callbackAt ? new Date(outcome.callbackAt) : null;
+        if (pilot && asked && !isNaN(asked.getTime()) && requests < MAX_CALLBACK_REQUESTS) {
+          // Orario effettivo: nella fascia chiamate, mai nel passato
+          const when = nextCallWindowStart(new Date(Math.max(asked.getTime(), ctx.now.getTime())), s);
+          const nota = `Richiamo chiesto dal cliente: ${formatDateTime(asked)}`;
+          const slotStart = slotStartOf(a);
+          const keepSlot =
+            eraNelGiro &&
+            a.status === 'proposed' &&
+            !!slotStart &&
+            localDateStr(when) === localDateStr(ctx.now) &&
+            when.getTime() < slotStart.getTime() - s.minLeadHours * 3600000;
+          if (keepSlot) {
+            // Resta proposta nel giro e torna in coda all'orario chiesto
+            // (i tentativi senza risposta non aumentano)
+            list = replaceById(list, {
+              ...base,
+              autoCall: 'retry',
+              autoCallNotBefore: when.toISOString(),
+              callbackRequests: requests,
+              notes: addNote(a.notes, nota),
+            });
+          } else {
+            // Slot liberato, ma niente problema: torna in attesa per il
+            // giorno del richiamo (data dello slot NON rifiutata). Lo
+            // smistamento automatico la riapprova da sola (approveRequestedCallbacks).
+            leaveRoute({
+              status: 'pending',
+              issueType: undefined,
+              followUpDate: localDateStr(when),
+              callbackAt: asked.toISOString(),
+              callbackRequests: requests,
+              notes: addNote(a.notes, nota),
+            });
+          }
+          break;
+        }
+        leaveRoute({
+          status: 'issue',
+          issueType: 'callback',
+          followUpDate: outcome.followUpDate || a.followUpDate,
+          callbackRequests: undefined,
+        });
         break;
+      }
       case 'numero_errato':
         leaveRoute({ status: 'issue', issueType: 'wrong_phone' });
         break;
@@ -655,7 +738,7 @@ export const reduceCallOutcome = (
           list = replaceById(list, { ...base, callAttempts: attempts });
           break;
         }
-        const retryAt = nextCallWindowStart(new Date(ctx.now.getTime() + s.retryMinutes * 60000), s);
+        const retryAt = nextCallWindowStart(new Date(ctx.now.getTime() + s.noAnswerRetryMinutes * 60000), s);
         const slotStart = slotStartOf(a) as Date;
         const deadline = slotStart.getTime() - s.minLeadHours * 3600000;
         if (attempts < s.maxAttempts && retryAt.getTime() < deadline) {

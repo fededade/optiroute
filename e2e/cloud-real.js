@@ -262,7 +262,9 @@ const activateCloud = async page => {
   await B.page.screenshot({ path: path.join(OUT, '3-B-stato-ritrovato.png') });
   // la vista sul giorno del giro
   await goSection(B.page, 'agenda'); // la data dell'agenda sta nella barra della sezione Agenda
-  await B.page.locator('input[type="date"]').first().fill(D);
+  // il giorno si sceglie dal calendario della barra (stesso mese di "oggi")
+  await B.page.getByTestId('calendar-open').click();
+  await B.page.getByTestId(`calendar-day-${D}`).click();
   await B.page.getByText('Cliente Alfa').first().waitFor();
   await B.page.screenshot({ path: path.join(OUT, '4-B-giro-del-13.png') });
   assert.equal(B.seen.retell, 0);

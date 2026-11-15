@@ -334,6 +334,91 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       await G.ctx.close();
     });
 
+    // 2a) Nota del gestore: la persona da chiamare NON è il cliente (agente
+    //     immobiliare, figlia): referente dalla nota, nuova e già presente;
+    //     poi l'operatore lo toglie e lo cambia a mano dalla finestra
+    await step('bridge: chi chiamare dalla nota del gestore (agente immobiliare) e referente modificato a mano', async () => {
+      await api('POST', '/__test/reset');
+      // pratica già presente: telefono della figlia, nessun referente
+      await seedServer([{ id: 'r2', title: 'Bianchi Anna', address: 'Via Sesto 4, Sesto San Giovanni', coords: P.sesto, status: 'pending',
+        technicianId: 'tech-1', province: 'MI', comune: 'Sesto San Giovanni', periziaCode: 'ISP-R2', phone: '+393335550133' }]);
+      const G = await newPage(browser, { localSeed: { optiroute_technicians_v1: [TECH], optiroute_cloud_v1: DEVICE_SEED } });
+      await G.app.locator('[data-testid="autopilot-bar"]').waitFor({ timeout: 30000 });
+      const chip = G.app.getByTestId('bridge-chip');
+      await waitFor(async () => /avvialo dalla barra del gestionale/.test(await chip.innerText()), 'chip bridge offline', 30000);
+      await parentEval(G.page, () => {
+        const p = (codice, intestatario, via, comune, telefono, nota) => ({ portal: 'prelios', codice, intestatario, via, civico: '4', comune, provincia: 'MI',
+          telefono, note: `FULL - Acquisto | Contatto Prelios: ${nota}`, progetto: 'FULL - Acquisto', tipologia: '', esito: '', aggiornatoIl: '' });
+        window.__bridge = { status: 'ok', snapshot: { bridge: 'optiroute-bridge', version: 1, generatedAt: new Date().toISOString(),
+          portals: [{ id: 'prelios', status: 'ok', lastSync: new Date().toISOString() }],
+          pratiche: [
+            // il bridge ha scelto il primo cellulare della nota (quello del cliente)
+            p('ISP-R1', 'Rossi Mario', 'Via Bridge', 'Milano', '+393335550122',
+              'ROSSI MARIO - 00393335550122 - PER IL SOPRALLUOGO CONTATTARE AG. IMM. SIG. LUCA BIANCHI 00393335550111'),
+            p('ISP-R2', 'Bianchi Anna', 'Via Sesto', 'Sesto San Giovanni', '+393335550144', 'BIANCHI ANNA - 3335550144 - FIGLIA SARA 3335550133'),
+          ] } };
+        window.__emit('bridge.updated');
+      });
+      const r1 = await waitFor(async () => (await serverList()).find(a => a.periziaCode === 'ISP-R1' && a.contactPerson), 'pratica nuova con il referente sul server', 30000);
+      assert.equal(r1.contactPerson, 'Luca Bianchi — agente immobiliare');
+      assert.equal(r1.referredBy, 'Rossi Mario');
+      assert.equal(r1.phone, '+393335550111', 'si chiama il numero dell\'agente');
+      assert.equal(r1.title, 'Rossi Mario', 'il titolo resta l\'intestatario');
+      const r2 = await waitFor(async () => (await serverList()).find(a => a.id === 'r2' && a.contactPerson), 'pratica già presente con il referente', 20000);
+      assert.equal(r2.contactPerson, 'Sara — figlia');
+      assert.equal(r2.phone, '+393335550133', 'telefono invariato');
+      assert.ok(r2.contactNote, 'impronta della nota salvata');
+      // visibile nell'elenco delle pratiche
+      await G.app.getByTestId('nav-pratiche').click();
+      const row = G.app.locator(`[id="appt-${r1.id}"]`);
+      await row.waitFor({ timeout: 20000 });
+      assert.equal((await row.getByTestId('row-contact').innerText()).trim(), 'Luca Bianchi — agente immobiliare');
+      assert.equal(await row.getByTestId('row-contact').getAttribute('title'), 'Indicato da Rossi Mario');
+      // e nella scheda della pratica (sezione In attesa), con "per conto di"
+      await G.app.getByTestId('nav-in-attesa').click();
+      const card = G.app.locator(`[id="appt-${r1.id}"]`).getByTestId('pratica-contact');
+      await card.waitFor({ timeout: 20000 });
+      assert.equal((await card.innerText()).trim(), 'Luca Bianchi — agente immobiliare');
+      assert.equal(await card.getAttribute('title'), 'Indicato da Rossi Mario');
+      await G.page.screenshot({ path: path.join(OUT, '2a-referente-dalla-nota.png') });
+      await G.app.getByTestId('nav-pratiche').click();
+      await row.waitFor({ timeout: 20000 });
+
+      // l'operatore toglie il referente dalla finestra della pratica
+      const dlg = G.app.getByRole('dialog');
+      await row.dblclick();
+      await dlg.getByText('Modifica Appuntamento').waitFor();
+      assert.equal(await dlg.getByLabel('Da contattare (se non è l\'intestatario)').inputValue(), 'Luca Bianchi');
+      assert.equal(await dlg.getByLabel('Ruolo', { exact: true }).inputValue(), 'agente immobiliare');
+      await dlg.getByLabel('Da contattare (se non è l\'intestatario)').fill('');
+      await dlg.getByLabel('Ruolo', { exact: true }).fill('');
+      await dlg.getByRole('button', { name: 'Salva Modifiche' }).click();
+      await dlg.waitFor({ state: 'detached' });
+      await waitFor(async () => { const a = (await serverList()).find(x => x.id === r1.id); return a && !a.contactPerson && !a.referredBy; }, 'referente tolto sul server', 20000);
+      // nuovo scaricamento con la stessa nota: il referente NON torna
+      const before = await parentEval(G.page, () => window.__received.filter(m => m === 'bridge.snapshot').length);
+      await parentEval(G.page, () => window.__emit('bridge.updated'));
+      await waitFor(async () => (await parentEval(G.page, () => window.__received.filter(m => m === 'bridge.snapshot').length)) > before, 'nuovo scaricamento', 15000);
+      await sleep(1500);
+      const still = (await serverList()).find(x => x.id === r1.id);
+      assert.equal(still.contactPerson, undefined, 'la scelta dell\'operatore resta');
+      assert.equal(await row.getByTestId('row-contact').count(), 0);
+
+      // e lo scrive a mano: nome e ruolo, "per conto di" l'intestatario
+      await row.dblclick();
+      await dlg.getByText('Modifica Appuntamento').waitFor();
+      await dlg.getByLabel('Da contattare (se non è l\'intestatario)').fill('Paola Verdi');
+      await dlg.getByLabel('Ruolo', { exact: true }).fill('geometra');
+      await G.page.screenshot({ path: path.join(OUT, '2a-referente-a-mano.png') });
+      await dlg.getByRole('button', { name: 'Salva Modifiche' }).click();
+      await dlg.waitFor({ state: 'detached' });
+      const manual = await waitFor(async () => (await serverList()).find(x => x.id === r1.id && x.contactPerson), 'referente scritto a mano sul server', 20000);
+      assert.equal(manual.contactPerson, 'Paola Verdi — geometra');
+      assert.equal(manual.referredBy, 'Rossi Mario');
+      assert.equal((await row.getByTestId('row-contact').innerText()).trim(), 'Paola Verdi — geometra');
+      await G.ctx.close();
+    });
+
     // 2b) Il turno del cloud ce l'ha UN ALTRO dispositivo: il bridge sta su
     //     questo PC, quindi le sue pratiche arrivano lo stesso
     await step('bridge con il turno su un altro dispositivo: le pratiche arrivano lo stesso', async () => {

@@ -28,7 +28,9 @@ Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con 
    `--serve`) gira sul PC dell'operatore: dopo il login al portale (l'MFA resta manuale)
    legge le pratiche assegnate, recupera i telefoni e li espone all'app su
    `http://127.0.0.1:8765`. L'app le scarica ogni 5 minuti, le geocodifica e assegna il
-   tecnico. L'import da Excel resta disponibile.
+   tecnico. Dalla nota del gestore capisce chi chiamare (il cliente o, per esempio,
+   l'agente immobiliare indicato dalla banca): vedi "Chi chiamare" più sotto. L'import da
+   Excel resta disponibile.
 2. **I giri si formano da soli.** Le pratiche in attesa con telefono vengono smistate in giri
    proposti, con la **regola del rientro**: l'ultimo sopralluogo del giorno è il più vicino
    alla base del tecnico (se finisce tardi, almeno il rientro è breve). Le proposte non ancora
@@ -43,8 +45,15 @@ Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con 
    - Se **rifiuta, rimanda o risulta irreperibile**, lo slot liberato viene **riempito**
      con un'altra pratica (in attesa, o anticipata da un giorno successivo), che viene
      chiamata a sua volta.
-   - Chi **non risponde** viene richiamato (di default dopo 2 ore, fino a 3 tentativi,
-     e mai a ridosso dell'appuntamento).
+   - Chi **chiede di essere richiamato** ("sentitemi tra dieci minuti", "richiamate alle 17")
+     viene richiamato da solo a quell'ora (sempre nella fascia chiamate). Se l'orario è oggi e
+     prima della scadenza dello slot la tappa resta proposta nel giro; altrimenti lo slot si
+     libera e la pratica torna in attesa per il giorno del richiamo: quando lo smistamento
+     automatico la ricolloca, la chiamata parte da sola non prima dell'orario chiesto. Alla
+     terza richiesta di fila decide l'operatore ("Da richiamare").
+   - Chi **non risponde** viene richiamato (di default dopo 15 minuti, modificabile
+     dall'ingranaggio, fino a 3 tentativi, e mai a ridosso dell'appuntamento); se il
+     richiamo cadrebbe fuori dalla fascia chiamate, parte alla prossima apertura.
 5. **Solo le eccezioni arrivano all'operatore**, nella sezione "Da gestire": esiti non
    chiari, numeri errati, irreperibili, rifiuti, pratiche senza telefono o senza tecnico.
 
@@ -286,12 +295,25 @@ aggiungi questi campi custom:
      con la corrispondenza lettera → slot)
    - accettati anche gli alias `alternativa_accettata`, `alternativa`, `slot_scelto`,
      `chosen_alternative`; valori come "alternativa B" o "opzione c" vengono normalizzati
+7. `riassunto` — tipo *Text* — descrizione da incollare: *"Riassunto della telefonata in
+   ITALIANO, in 2-3 frasi: cosa è stato proposto, cosa ha risposto la persona, cosa è stato
+   concordato."*
+   - è il riassunto mostrato sulla pratica; **senza questo campo resta quello in inglese**
+     che Retell scrive da sé (`call_summary`)
+   - accettati anche gli alias `riassunto_chiamata`, `sintesi`, `riepilogo`
+8. `richiamo_tra_minuti` — tipo *Number*, facoltativo — descrizione da incollare: *"Se la persona
+   chiede di essere richiamata dopo un certo tempo (es. "tra dieci minuti", "tra un'ora"), il
+   numero di minuti. Altrimenti lascia vuoto."* (alias: `minuti_richiamo`, `callback_minutes`)
+9. `orario_richiamo` — tipo *Text*, facoltativo — descrizione da incollare: *"Se la persona chiede
+   di essere richiamata a un orario o in un giorno preciso, scrivilo (es. "oggi alle 17:30",
+   "domani alle 10"). Altrimenti lascia vuoto."* (alias: `quando_richiamare`, `callback_time`)
+   - con esito `da_richiamare` e il pilota acceso, OptiRoute richiama da solo all'orario chiesto
+     (vedi sotto). Senza questi due campi prova comunque a capirlo dagli altri testi
+     (`data_rientro`, `nuovo_orario_richiesto`, `note_cliente`: "tra dieci minuti", "alle 17:30",
+     "domani alle 10"...); se non ci riesce decide l'operatore, come prima
 
-Il riassunto mostrato sulla pratica viene dal campo custom `riassunto` (tipo *Text*,
-descrizione: *"Riassunto della telefonata in ITALIANO, in 2-3 frasi: cosa è stato proposto,
-cosa ha risposto la persona, cosa è stato concordato."*); se il campo manca si usa il
-*Call Summary* di Retell, che va comunque istruito a scrivere **in italiano** (altrimenti
-Retell lo scrive in inglese).
+Anche il *Call Summary* di Retell (usato quando manca `riassunto`) va istruito a scrivere
+**in italiano**: altrimenti Retell lo scrive in inglese.
 
 Lo script inviato all'agente istruisce già l'operatore a chiedere e annotare queste
 informazioni. Senza i campi custom l'automazione resta prudente: classifica solo i segnali
@@ -345,9 +367,15 @@ chiamare nessun numero che non sia stato autorizzato.
   diverso: se nessun tecnico attivo è competente si aggiunge un «Tecnico di prova», a uno
   senza base si imposta la base (Stradella o Magenta); il resto dei tecnici non si tocca.
   Ogni caricamento toglie prima le pratiche di prova presenti, in qualunque stato: si
-  ricomincia da capo. «Togli le pratiche di prova» le elimina. Le pratiche hanno nomi di
-  fantasia e casi utili all'operatore AI (un'urgente, un referente, un nome tutto
-  maiuscolo, una senza intestatario, note pratiche, una visita da 40 minuti). Con il
+  ricomincia da capo. Se ci sono altre pratiche (non di prova) la finestra le conta
+  (quante e quante confermate) e offre la casella «Parti da zero» (spenta la prima
+  volta, la scelta si ricorda in questo browser): spuntata, il caricamento elimina anche
+  quelle e restano solo le 16 nuove; sono dati della sola versione di prova, la versione
+  vera non viene toccata. «Togli le pratiche di prova» elimina solo quelle di prova. Le pratiche hanno nomi di
+  fantasia e casi utili all'operatore AI (un'urgente, un referente scritto a mano, due
+  referenti letti dalla nota del portale costruita con il numero indicato, un agente
+  immobiliare con nome e un'agenzia senza nome di persona, un nome tutto maiuscolo, una
+  senza intestatario, note pratiche, una visita da 40 minuti). Con il
   cloud attivo si sincronizzano come ogni altra modifica.
 - **Pilota automatico**: chiama **tutti i giorni, domenica compresa**, negli orari
   impostati (fuori dalla prova la domenica mai e il sabato solo se scelto). Vale nel
@@ -377,6 +405,32 @@ chiamare nessun numero che non sia stato autorizzato.
   cliente è disponibile solo da una data; il resto va fra le problematiche "da richiamare").
   Si applica una volta per nota (nella scheda: etichetta "Sospesa sul portale"); se la nota
   cambia sul portale si riapplica. Il chip del bridge conta le sospese.
+- **Chi chiamare: la nota del gestore** (`src/services/contactNote.ts`). Il telefono arriva
+  dalla nota della banca (nelle note della pratica dopo "Contatto Prelios:"), dove spesso la
+  persona da contattare non è il cliente ma, per esempio, l'agente immobiliare:
+  "ROSSI MARIO - 0039333… - PER IL SOPRALLUOGO CONTATTARE AG. IMM. SIG. LUCA BIANCHI 0039333…".
+  OptiRoute legge ogni numero della nota con la sua etichetta (il testo prima del numero, o
+  quello subito dopo se prima non c'è niente) e capisce di chi è: del cliente (cliente,
+  mutuatario, richiedente…, o il nome dell'intestatario in qualunque ordine, anche solo il
+  cognome), di un'altra persona con un ruolo (agente o agenzia immobiliare, geometra,
+  architetto, amministratore, custode, venditore, familiari, delegato…) o di un'altra
+  persona con nome e cognome. Il numero da chiamare è quello indicato in modo esplicito
+  ("contattare", "chiamare", "rivolgersi", "per il sopralluogo", "chiavi", "c/o"…; "rif." solo se
+  seguito da un ruolo o da un nome, non da un codice di pratica come "Rif: ISP 845.326");
+  dopo "ag. imm."/"agente" senza titolo, un'insegna ("AG. IMM. CASA FACILE") è il nome
+  dell'agenzia e non di una persona; un nome ha al massimo tre parole;
+  altrimenti resta quello scelto dal bridge. Se è di un'altra persona, la pratica prende il
+  **referente** ("Luca Bianchi — agente immobiliare", o "Referente indicato dal cliente —
+  agenzia immobiliare Girasole" senza un nome di persona) e "per conto di" l'intestatario:
+  la chiamata chiede del referente e spiega per conto di chi chiama. Nel dubbio non si
+  inventa niente: si chiama l'intestatario come prima. Vale per le pratiche nuove (bridge
+  ed Excel, dove senza "Contatto Prelios:" si leggono tutte le note) e, a ogni scaricamento
+  del bridge, per quelle già presenti non confermate, non annullate, senza una chiamata in
+  corso e senza referente; il loro telefono cambia solo se è vuoto o è uno dei numeri della
+  nota (un numero corretto a mano non si tocca). La nota letta resta segnata sulla pratica
+  (`contactNote`): se l'operatore toglie o cambia il referente, resta così finché la nota sul
+  portale non cambia. Il referente si scrive o si toglie a mano nella finestra della pratica
+  («Da contattare (se non è l'intestatario)» e «Ruolo»; vuoti = si chiama l'intestatario).
 - **Sopralluoghi confermati al gestionale**: non è più OptiRoute a scriverli nel
   gestionale (il vecchio invio è stato tolto a novembre 2026); è il gestionale che li legge
   dal server di OptiRoute. Vedi la sezione "Dentro il gestionale".

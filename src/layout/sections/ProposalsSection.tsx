@@ -5,6 +5,7 @@ import RouteTimeline from '../RouteTimeline';
 import { EmptyState } from '../../ui/EmptyState';
 import type { Workspace } from '../types';
 import { dayTitle, plural } from '../format';
+import { dayColor } from '../days';
 
 interface ProposalsSectionProps {
   ws: Workspace;
@@ -20,6 +21,7 @@ interface ProposalsSectionProps {
   pendingCount: number;
   onDispatch: () => void;
   onEnableAutopilot: () => void;   // stesso percorso del bottone "Attiva" della striscia
+  dayColors?: boolean;             // più giorni sulla mappa: il giorno porta il suo colore
 }
 
 const ProposalsSection: React.FC<ProposalsSectionProps> = (p) => {
@@ -94,7 +96,11 @@ const ProposalsSection: React.FC<ProposalsSectionProps> = (p) => {
                   <span className="dot" style={{ backgroundColor: color }} />
                   <span className="truncate">{tech ? tech.name : 'Senza tecnico'}</span>
                   <span className="text-ink-300">·</span>
-                  <span>{dayTitle(group.date)}</span>
+                  {p.dayColors && group.date ? (
+                    <span className="chip h-6 border-transparent text-white" style={{ backgroundColor: dayColor(group.date) }} data-testid="proposal-day" data-color={dayColor(group.date)}>{dayTitle(group.date)}</span>
+                  ) : (
+                    <span>{dayTitle(group.date)}</span>
+                  )}
                 </p>
                 <p className="text-xs text-ink-500 mt-0.5">
                   {plural(group.items.length, 'tappa', 'tappe')}{first && last ? <> · <span className="num">{first}–{last}</span></> : null}

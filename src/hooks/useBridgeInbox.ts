@@ -11,12 +11,14 @@ import {
 import { mergeExclusions, type ExclusionChange, type GestionaleExclusion } from '../services/gestionaleExclusions';
 import { isPortalExcluded, portalExclusions } from '../services/portalState';
 import { bridgePraticaToRow, type ImportRow } from './importPratiche';
+import { bridgeContactUpdates } from '../services/contactNote';
 
 // Inbox del bridge: le pratiche arrivano da sole. Se il bridge è abilitato e
 // c'è il token, all'avvio e ogni 5 minuti (più "Scarica ora") si scarica lo
 // snapshot, si importano le pratiche nuove (stesso nucleo dell'import da
 // file, ma in silenzio: il risultato compare nel chip) e si riporta il
-// telefono sulle pratiche già presenti che non l'avevano. Mai in parallelo a
+// telefono sulle pratiche già presenti che non l'avevano (e, dalla nota di
+// contatto del portale, chi chiamare: services/contactNote). Mai in parallelo a
 // un altro import. Il token non compare mai nei log.
 // Dentro il gestionale, dopo ogni scaricamento riuscito si tolgono dal
 // lavoro le pratiche che il gestionale indica come già concordate, fatte o
@@ -59,6 +61,7 @@ export interface BridgeImportOutcome {
   removedPortal?: number; // tolte perché già fissate, fatte o chiuse sul portale
   suspended?: number; // sospese sul portale (stato dato dalla nota)
   resumed?: number;   // non più sospese sul portale: tornate in attesa
+  referents?: number; // pratiche già presenti con il referente (o il numero) preso dalla nota di contatto
 }
 
 interface UseBridgeInboxOptions {
@@ -107,6 +110,7 @@ export const describeImport = (o: BridgeImportOutcome, at: Date): string => {
   }
   if (o.suspended && o.suspended > 0) parts.push(plural(o.suspended, 'sospesa sul portale', 'sospese sul portale'));
   if (o.resumed && o.resumed > 0) parts.push(plural(o.resumed, 'tornata in attesa (non più sospesa)', 'tornate in attesa (non più sospese)'));
+  if (o.referents && o.referents > 0) parts.push(plural(o.referents, 'contatto preso dalla nota del portale', 'contatti presi dalla nota del portale'));
   return parts.length > 0 ? `${parts.join(', ')} alle ${hhmm(at)}` : `nessuna novità alle ${hhmm(at)}`;
 };
 
@@ -175,7 +179,9 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
       // Le pratiche già fissate, fatte o chiuse sul portale non si importano mai
       const nuove = diff.nuove.filter(p => !isPortalExcluded(p));
       const suspensions = !!suspensionsDue && suspensionsDue(snapshot.pratiche);
-      const toImport = nuove.length > 0 || diff.aggiornamenti.length > 0 || suspensions;
+      // Pratiche già presenti: chi chiamare secondo la nota di contatto
+      const contatti = bridgeContactUpdates(snapshot.pratiche, appointmentsRef.current).length > 0;
+      const toImport = nuove.length > 0 || diff.aggiornamenti.length > 0 || suspensions || contatti;
       // Ricontrollo subito prima di importare (l'utente potrebbe aver
       // avviato un import da file durante lo scaricamento)
       if (toImport && busy()) {
@@ -196,7 +202,7 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
         outcome = { ...imported, removed: outcome.removed, removedPortal: outcome.removedPortal };
       }
       const done = new Date();
-      if (outcome.added + outcome.updated + outcome.failed + (outcome.removed || 0) + (outcome.removedPortal || 0) + (outcome.suspended || 0) + (outcome.resumed || 0) > 0 || !lastResultRef.current) {
+      if (outcome.added + outcome.updated + outcome.failed + (outcome.removed || 0) + (outcome.removedPortal || 0) + (outcome.suspended || 0) + (outcome.resumed || 0) + (outcome.referents || 0) > 0 || !lastResultRef.current) {
         lastResultRef.current = describeImport(outcome, done);
       }
 

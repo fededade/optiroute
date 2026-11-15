@@ -6,6 +6,7 @@ import RouteTimeline from '../RouteTimeline';
 import { EmptyState } from '../../ui/EmptyState';
 import type { Workspace } from '../types';
 import { cap, dayLabel, dayTitle, longDayLabel, plural } from '../format';
+import { dayColor } from '../days';
 
 interface AgendaSectionProps {
   ws: Workspace;
@@ -20,6 +21,8 @@ interface AgendaSectionProps {
   techUnavailable: boolean;
   onOpenProposals: () => void;
   proposedCount: number;
+  multiDay?: boolean;     // più giorni scelti nel calendario: elenco per giorno
+  dayColors?: boolean;    // intestazione di ogni giorno col colore del giorno (come la mappa)
 }
 
 const AgendaSection: React.FC<AgendaSectionProps> = (p) => {
@@ -29,6 +32,7 @@ const AgendaSection: React.FC<AgendaSectionProps> = (p) => {
     return (a.sequenceOrder || 0) - (b.sequenceOrder || 0);
   });
   const visible = sorted.filter(ws.matches);
+  const singleDay = ws.viewMode === 'day' && !p.multiDay;
 
   const dayChips = p.otherDays.length > 0 && (
     <div className="flex items-center gap-1.5 flex-wrap">
@@ -87,7 +91,7 @@ const AgendaSection: React.FC<AgendaSectionProps> = (p) => {
     body = (
       <EmptyState
         icon={CalendarDays}
-        title={ws.viewMode === 'day' ? `Nessun sopralluogo confermato ${longDayLabel(ws.currentDate) ? `per ${longDayLabel(ws.currentDate)}` : ''}` : 'Nessun sopralluogo confermato nel periodo'}
+        title={p.multiDay ? 'Nessun sopralluogo confermato nei giorni scelti' : ws.viewMode === 'day' ? `Nessun sopralluogo confermato ${longDayLabel(ws.currentDate) ? `per ${longDayLabel(ws.currentDate)}` : ''}` : 'Nessun sopralluogo confermato nel periodo'}
         action={p.proposedCount > 0 ? (
           <button type="button" className="btn btn-primary btn-sm" onClick={p.onOpenProposals}><Route size={15} strokeWidth={1.75} aria-hidden /> Vai alle proposte ({p.proposedCount})</button>
         ) : undefined}
@@ -97,7 +101,7 @@ const AgendaSection: React.FC<AgendaSectionProps> = (p) => {
     );
   } else if (visible.length === 0) {
     body = <p className="text-sm text-ink-500">Nessun sopralluogo corrisponde alla ricerca.</p>;
-  } else if (ws.viewMode === 'day') {
+  } else if (singleDay) {
     // Un giro per tecnico, come linea del tempo
     const groups = new Map<string, Appointment[]>();
     for (const a of visible) {
@@ -135,15 +139,18 @@ const AgendaSection: React.FC<AgendaSectionProps> = (p) => {
       );
     });
   } else {
-    // Settimana / mese: per giorno
+    // Settimana / mese / più giorni: per giorno
     const byDay = new Map<string, Appointment[]>();
     for (const a of visible) byDay.set(a.date || '', [...(byDay.get(a.date || '') || []), a]);
-    // Un blocco per giorno con un'intestazione che resta in vista mentre si scorre
+    // Un blocco per giorno con un'intestazione che resta in vista mentre si scorre;
+    // con più giorni sulla mappa l'intestazione porta il colore del giorno
     body = Array.from(byDay.entries()).map(([day, items]) => {
       const techIds = Array.from(new Set(items.map(a => a.technicianId || 'none')));
+      const color = p.dayColors ? dayColor(day) : undefined;
       return (
-        <section key={day} data-testid="agenda-day" aria-label={cap(longDayLabel(day))}>
-          <div className="day-head flex items-center gap-x-3 gap-y-1 flex-wrap">
+        <section key={day} data-testid="agenda-day" data-day={day} data-color={color} aria-label={cap(longDayLabel(day))}>
+          <div className="day-head flex items-center gap-x-3 gap-y-1 flex-wrap" style={color ? { boxShadow: `inset 4px 0 0 0 ${color}` } : undefined}>
+            {color && <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: color }} aria-hidden data-testid="agenda-day-color" />}
             <button type="button" className="text-sm font-semibold text-ink-950 hover:underline underline-offset-2" onClick={() => p.onGoDay(day)} title="Apri il giorno">
               {cap(longDayLabel(day))}
             </button>

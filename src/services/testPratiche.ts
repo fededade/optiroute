@@ -1,6 +1,7 @@
 import type { Appointment, Coordinates, Technician } from '../types';
 import { normalizePhone } from '../utils/phone';
 import { TECHNICIAN_COLORS, matchTechnician } from './technicianService';
+import { withContactFromNote } from './contactNote';
 
 // Pratiche di prova della versione di prova: 16 pratiche finte, in attesa,
 // tutte con il numero indicato da chi prova, divise in due gruppi (Oltrepò
@@ -49,6 +50,9 @@ interface TestSeed {
   shortAddress: string;
   name?: string;             // assente: pratica senza intestatario
   extra?: Partial<Appointment>;
+  // Nota di contatto nella forma del portale, costruita con il numero di chi
+  // prova: il referente nasce dalla lettura della nota (services/contactNote)
+  contatto?: (phone: string) => string;
 }
 
 // Una pratica per comune (nessun comune ripetuto: niente scarti da aggiungere)
@@ -60,13 +64,13 @@ const SEEDS: TestSeed[] = [
   { group: 'pavia', comune: 'Santa Maria della Versa', province: 'PV', coords: { lat: 44.9889, lng: 9.2997 }, shortAddress: 'Via Cavour 21' },
   { group: 'pavia', comune: 'Montù Beccaria', province: 'PV', coords: { lat: 45.0367, lng: 9.3139 }, shortAddress: 'Via Verdi 3', name: 'Anna Colombo', extra: { contactPerson: 'Paolo Ricci — geometra', referredBy: 'Anna Colombo' } },
   { group: 'pavia', comune: 'Canneto Pavese', province: 'PV', coords: { lat: 45.0510, lng: 9.2790 }, shortAddress: 'Via Dante 15', name: 'Francesca Romano', extra: { durationMinutes: 40 } },
-  { group: 'pavia', comune: 'Varzi', province: 'PV', coords: { lat: 44.8230, lng: 9.1980 }, shortAddress: 'Via Marconi 7', name: 'Giuseppe Marino' },
+  { group: 'pavia', comune: 'Varzi', province: 'PV', coords: { lat: 44.8230, lng: 9.1980 }, shortAddress: 'Via Marconi 7', name: 'Giuseppe Marino', contatto: phone => `CONTATTARE AG. IMM. SIG. ROBERTO NERI ${phone}` },
   { group: 'pavia', comune: 'Voghera', province: 'PV', coords: { lat: 44.9925, lng: 9.0094 }, shortAddress: 'Via Matteotti 30', name: 'Chiara Greco' },
   // Milano ovest e Novara
   { group: 'milano', comune: 'Magenta', province: 'MI', coords: { lat: 45.4647, lng: 8.8836 }, shortAddress: 'Via Milano 10', name: 'Marco Bruno' },
   { group: 'milano', comune: 'Abbiategrasso', province: 'MI', coords: { lat: 45.3987, lng: 8.9186 }, shortAddress: 'Via Manzoni 4', name: 'Sara Gallo' },
   { group: 'milano', comune: 'Corbetta', province: 'MI', coords: { lat: 45.4686, lng: 8.9197 }, shortAddress: 'Via Leopardi 9', name: 'Andrea Conti' },
-  { group: 'milano', comune: 'Rho', province: 'MI', coords: { lat: 45.5300, lng: 9.0400 }, shortAddress: 'Via Pascoli 18', name: 'Elena De Luca' },
+  { group: 'milano', comune: 'Rho', province: 'MI', coords: { lat: 45.5300, lng: 9.0400 }, shortAddress: 'Via Pascoli 18', name: 'Elena De Luca', contatto: phone => `AGENZIA IMMOBILIARE GIRASOLE - ${phone} - RIVOLGERSI IN AGENZIA PER LE CHIAVI` },
   { group: 'milano', comune: 'Legnano', province: 'MI', coords: { lat: 45.5949, lng: 8.9146 }, shortAddress: 'Via Carducci 6', name: 'Davide Costa' },
   { group: 'milano', comune: 'Novara', province: 'NO', coords: { lat: 45.4469, lng: 8.6220 }, shortAddress: 'Via Foscolo 22', name: 'Laura Giordano', extra: { notes: 'Scala B, interno 7' } },
   { group: 'milano', comune: 'Trecate', province: 'NO', coords: { lat: 45.4327, lng: 8.7386 }, shortAddress: 'Via Volta 11', name: 'Stefano Mancini' },
@@ -76,8 +80,9 @@ const SEEDS: TestSeed[] = [
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
 // Le 16 pratiche (in attesa) con il telefono già normalizzato e il tecnico di ogni gruppo
+// (le due con la nota di contatto: note come quelle del bridge, referente dalla nota)
 export const buildTestPratiche = (phone: string, techByGroup: Record<TestGroupId, string | undefined>): Appointment[] =>
-  SEEDS.map((s, i) => ({
+  SEEDS.map((s, i) => withContactFromNote({
     id: `${TEST_PRATICA_PREFIX}${pad2(i + 1)}`,
     // senza intestatario il titolo è via e civico, come nell'import
     title: s.name || s.shortAddress,
@@ -91,6 +96,7 @@ export const buildTestPratiche = (phone: string, techByGroup: Record<TestGroupId
     project: TEST_PROJECT,
     phone,
     technicianId: techByGroup[s.group],
+    ...(s.contatto ? { notes: `${TEST_PROJECT} | Contatto Prelios: ${s.contatto(phone)}` } : {}),
     ...(s.extra || {}),
   }));
 
@@ -154,21 +160,35 @@ export const removeTestPratiche = (all: Appointment[]): Appointment[] =>
   all.some(isTestPratica) ? all.filter(a => !isTestPratica(a)) : all;
 
 export type TestScenarioResult =
-  | { ok: true; appointments: Appointment[]; technicians: Technician[]; phone: string }
+  | { ok: true; appointments: Appointment[]; technicians: Technician[]; phone: string; removedOthers: number }
   | { ok: false; error: string };
+
+export interface TestScenarioOptions {
+  wipeAll?: boolean;   // «Parti da zero»: elimina anche le pratiche non di prova
+}
 
 export const INVALID_TEST_PHONE = 'Numero non valido: scrivilo con il prefisso, per esempio +39 333 1234567.';
 
 // Ricomincia da capo: toglie le pratiche di prova presenti (qualunque stato
-// abbiano) e aggiunge le 16 nuove in attesa, assegnate ai due tecnici
-export const loadTestScenario = (all: Appointment[], technicians: Technician[], rawPhone: string): TestScenarioResult => {
+// abbiano) e aggiunge le 16 nuove in attesa, assegnate ai due tecnici. Con
+// wipeAll restano SOLO le 16 nuove: tutte le altre pratiche vengono eliminate
+// (removedOthers dice quante non di prova).
+export const loadTestScenario = (
+  all: Appointment[],
+  technicians: Technician[],
+  rawPhone: string,
+  options: TestScenarioOptions = {}
+): TestScenarioResult => {
   const phone = normalizePhone(rawPhone || '');
   if (!phone) return { ok: false, error: INVALID_TEST_PHONE };
   const prepared = prepareTestTechnicians(technicians);
+  const kept = options.wipeAll ? [] : removeTestPratiche(all);
+  const removedOthers = options.wipeAll ? all.filter(a => !isTestPratica(a)).length : 0;
   return {
     ok: true,
     phone,
     technicians: prepared.technicians,
-    appointments: [...removeTestPratiche(all), ...buildTestPratiche(phone, prepared.techByGroup)],
+    appointments: [...kept, ...buildTestPratiche(phone, prepared.techByGroup)],
+    removedOthers,
   };
 };

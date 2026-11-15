@@ -31,6 +31,14 @@ const hhmm = (iso?: string): string => {
 const dayLabel = (iso?: string): string =>
   iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, '') : '';
 
+// "alle 10:15" oggi, "gio 12 nov alle 10:15" gli altri giorni
+export const callbackWhen = (iso: string, now: Date = new Date()): string => {
+  const d = new Date(iso);
+  const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  return `${day === today ? '' : `${dayLabel(day)} `}alle ${hhmm(iso)}`;
+};
+
 type Tone = 'success' | 'info' | 'warn' | 'danger' | 'ai' | 'neutral';
 
 export interface CallLine {
@@ -59,6 +67,14 @@ export const callLineFor = (appt: Appointment, maxAttempts: number, awaitingOutc
   const o = appt.callOutcome;
   const summaryTitle = [o?.summary || appt.callSummary, o?.clientNotes].filter(Boolean).join(' — ') || undefined;
 
+  // In coda perché il cliente ha chiesto di essere richiamato
+  if (appt.autoCall === 'retry' && o?.result === 'da_richiamare' && appt.autoCallNotBefore) {
+    return {
+      icon: CalendarClock, tone: 'info',
+      text: `Richiamo chiesto dal cliente ${callbackWhen(appt.autoCallNotBefore)}`,
+      title: 'Il cliente ha chiesto di essere richiamato: il pilota automatico lo richiamerà da solo',
+    };
+  }
   if (appt.autoCall === 'retry') {
     const n = (appt.callAttempts || 0) + 1;
     return {
@@ -84,6 +100,9 @@ export const callLineFor = (appt: Appointment, maxAttempts: number, awaitingOutc
         return { icon: CalendarClock, tone: 'warn', text: `Da riprogrammare${quando ? `: chiede ${quando}` : ''}`, title: summaryTitle };
       }
       case 'da_richiamare':
+        if (appt.callbackAt && appt.status === 'pending') {
+          return { icon: CalendarClock, tone: 'info', text: `Richiamo chiesto dal cliente ${callbackWhen(appt.callbackAt)}`, title: summaryTitle };
+        }
         return { icon: CalendarClock, tone: 'warn', text: `Da richiamare${o.followUpDate ? ` il ${dayLabel(o.followUpDate)}` : ''}`, title: summaryTitle };
       case 'numero_errato':
         return { icon: PhoneOff, tone: 'danger', text: 'Numero errato', title: summaryTitle };

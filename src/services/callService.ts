@@ -1,6 +1,7 @@
 import type { AlternativeLabel, AlternativeSlot, Appointment, CallOutcome } from '../types';
 import { loadCloudSettings } from './cloudSettings';
 import type { CloudCredential } from './cloudSync';
+import { computeCallbackAt } from './callbackTime';
 
 // Client for the /api/retell-call serverless endpoint (Retell AI outbound call)
 // e per /api/call-status (esito della conversazione via polling).
@@ -143,7 +144,7 @@ export const parseFollowUpDate = (raw: string): string | undefined => {
 // Interroga /api/call-status. Su errori transitori (rete, 429, 5xx) ritorna
 // pending: il polling riproverà; il taglio a "sconosciuto" dopo la finestra
 // massima lo decide il chiamante.
-export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll> => {
+export const fetchCallOutcome = async (callId: string, opts: ToCallOutcomeOptions = {}): Promise<CallOutcomePoll> => {
   try {
     const response = await fetchWithAuth(`/api/call-status?callId=${encodeURIComponent(callId)}`);
 
@@ -156,17 +157,21 @@ export const fetchCallOutcome = async (callId: string): Promise<CallOutcomePoll>
       return { pending: true };
     }
 
-    return { pending: false, outcome: toCallOutcome(data.outcome) };
+    return { pending: false, outcome: toCallOutcome(data.outcome, new Date(), opts) };
   } catch (error) {
     console.error('Call status polling error:', error);
     return { pending: true, error: 'network' }; // transitorio: si riprova
   }
 };
 
+export interface ToCallOutcomeOptions {
+  callWindowStart?: string; // 'HH:MM': richiamo chiesto per un giorno senza orario
+}
+
 // Esito normalizzato di /api/call-status -> CallOutcome dell'app (data di
-// rientro interpretata, alternativa scelta validata). Usata dal browser e dal
-// motore lato server.
-export const toCallOutcome = (o: any, now: Date = new Date()): CallOutcome => {
+// rientro interpretata, alternativa scelta validata, richiamo chiesto dal
+// cliente). Usata dal browser e dal motore lato server.
+export const toCallOutcome = (o: any, now: Date = new Date(), opts: ToCallOutcomeOptions = {}): CallOutcome => {
   // NB: con esito "confermato" (es. alternativa accettata) la data richiesta
   // NON diventa una data di rientro: resta solo in requestedDate
   const followUpDate =
@@ -181,12 +186,27 @@ export const toCallOutcome = (o: any, now: Date = new Date()): CallOutcome => {
       ? o.chosenAlternative
       : undefined;
 
+  // Richiamo chiesto dal cliente (solo con "da richiamare"): riferimento per
+  // "tra N minuti" la fine della chiamata, se Retell la dà, o l'arrivo dell'esito
+  const ended = typeof o.endedAt === 'string' ? new Date(o.endedAt) : null;
+  const ref = ended && !isNaN(ended.getTime()) ? ended : now;
+  const callbackAt = o.result === 'da_richiamare'
+    ? computeCallbackAt({
+        minutes: o.callbackMinutes,
+        texts: [o.callbackTimeRaw, o.followUpRaw, o.requestedTime, o.clientNotes].map(t => (typeof t === 'string' ? t : undefined)),
+        followUpDate,
+        ref,
+        callWindowStart: opts.callWindowStart,
+      })
+    : undefined;
+
   return {
     result: o.result || 'sconosciuto',
     requestedDate: o.requestedDate || undefined,
     requestedTime: o.requestedTime || undefined,
     chosenAlternative,
     followUpDate,
+    ...(callbackAt ? { callbackAt } : {}),
     clientNotes: o.clientNotes || undefined,
     newContactName: o.newContactName || undefined,
     newContactPhone: o.newContactPhone || undefined,

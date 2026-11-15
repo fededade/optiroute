@@ -3,7 +3,8 @@ import { ChevronDown, EyeOff, Layers, ListChecks, X } from 'lucide-react';
 import type { Appointment, AppointmentStatus, Coordinates, RouteSummary, Technician } from '../types';
 import MapComponent from '../Components/MapComponent';
 import type { MapLayers, ViewMode } from './types';
-import { dayLabel, dayTitle } from './format';
+import { dayLabel, dayTitle, plural } from './format';
+import { dayColor, routeDaysOf } from './days';
 
 // Riquadro della mappa: la mappa di sempre, con il controllo "Livelli"
 // (sostituisce le vecchie caselle dei filtri di stato), la legenda dei
@@ -39,6 +40,9 @@ interface MapPanelProps {
   // Tabella delle pratiche (ricerca o "Tutte le pratiche"): la mappa mostra
   // le righe in elenco, i livelli non servono e al loro posto c'è questa nota
   listNote?: string;
+  // Giorni attivi dell'agenda e colore per giorno (più giorni attivi)
+  activeDays: string[];
+  colorByDay: boolean;
 }
 
 const MapPanel: React.FC<MapPanelProps> = (p) => {
@@ -46,6 +50,12 @@ const MapPanel: React.FC<MapPanelProps> = (p) => {
   const [legendOpen, setLegendOpen] = useState(true);
   const activeTechs = p.technicians.filter(t => t.active);
   const onCount = LAYER_META.filter(l => p.layers[l.key]).length;
+  const multi = p.viewMode === 'day' && p.activeDays.length > 1;
+  const periodLabel = p.listNote ? 'Elenco'
+    : multi ? `${p.activeDays.length} giorni`
+    : p.viewMode === 'day' ? dayTitle(p.currentDate) : p.viewMode === 'week' ? 'Settimana' : 'Mese';
+  // Con più giorni: i giorni mostrati, ognuno col suo colore e il numero di sopralluoghi
+  const legendDays = p.colorByDay ? routeDaysOf(p.appointments) : [];
 
   return (
     <div data-testid="map-panel" className={`relative h-full w-full ${p.overlay ? '' : ''}`}>
@@ -59,6 +69,7 @@ const MapPanel: React.FC<MapPanelProps> = (p) => {
         onStatusChange={p.onStatusChange}
         onRequestCall={p.onRequestCall}
         selectedId={p.selectedId}
+        colorByDay={p.colorByDay}
       />
 
       {/* In alto a destra: livelli e nascondi */}
@@ -106,7 +117,7 @@ const MapPanel: React.FC<MapPanelProps> = (p) => {
             ))}
             {p.layers.confirmed && (
               <p className="px-2.5 pt-1 pb-1.5 text-xs text-ink-500">
-                Confermate: {p.viewMode === 'day' ? dayLabel(p.currentDate) : p.viewMode === 'week' ? 'settimana' : 'mese'} dell'agenda
+                Giri: {multi ? `${p.activeDays.length} giorni scelti` : p.viewMode === 'day' ? dayLabel(p.currentDate) : p.viewMode === 'week' ? 'settimana' : 'mese'} dell'agenda
               </p>
             )}
           </div>
@@ -118,17 +129,30 @@ const MapPanel: React.FC<MapPanelProps> = (p) => {
         <div className="card shadow-raised max-w-[240px] text-xs">
           <button type="button" onClick={() => setLegendOpen(o => !o)} className="w-full flex items-center gap-2 px-3 h-8 text-left" aria-expanded={legendOpen}>
             <span className="eyebrow">Legenda</span>
-            <span className="ml-auto text-ink-500 truncate">{p.listNote ? 'Elenco' : p.viewMode === 'day' ? dayTitle(p.currentDate) : p.viewMode === 'week' ? 'Settimana' : 'Mese'}</span>
+            <span className="ml-auto text-ink-500 truncate">{periodLabel}</span>
             <ChevronDown size={14} strokeWidth={1.75} className={`text-ink-400 transition-transform ${legendOpen ? '' : '-rotate-90'}`} aria-hidden />
           </button>
           {legendOpen && (
-            <div className="px-3 pb-2.5 space-y-1.5 border-t border-line pt-2">
+            <div className="px-3 pb-2.5 space-y-1.5 border-t border-line pt-2 max-h-[46vh] overflow-y-auto">
+              {legendDays.length > 0 && (
+                <ul className="space-y-1.5" data-testid="map-day-legend" aria-label="Colori dei giorni">
+                  {legendDays.map(([day, n]) => (
+                    <li key={day} className="flex items-center gap-2" data-testid={`map-day-legend-${day}`} data-color={dayColor(day)}>
+                      <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: dayColor(day) }} aria-hidden />
+                      <span className="truncate text-ink-800 font-medium">{dayTitle(day)}</span>
+                      <span className="ml-auto num text-ink-500" title={plural(n, 'sopralluogo', 'sopralluoghi')}>{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {legendDays.length > 0 && <p className="eyebrow pt-1.5 mt-1 border-t border-line">Tecnici</p>}
               {activeTechs.map(t => (
-                <p key={t.id} className={`flex items-center gap-2 ${p.selectedTech && p.selectedTech.id !== t.id ? 'opacity-40' : ''}`}>
-                  <span className="dot h-2.5 w-2.5" style={{ backgroundColor: t.color }} />
-                  <span className="truncate text-ink-800">{t.name}</span>
+                <p key={t.id} className={`flex items-center gap-2 ${p.selectedTech && p.selectedTech.id !== t.id ? 'opacity-40' : ''} ${legendDays.length > 0 ? 'text-ink-500' : ''}`}>
+                  <span className={`dot ${legendDays.length > 0 ? 'h-2 w-2 opacity-70' : 'h-2.5 w-2.5'}`} style={{ backgroundColor: t.color }} />
+                  <span className={`truncate ${legendDays.length > 0 ? 'text-ink-500' : 'text-ink-800'}`}>{t.name}</span>
                 </p>
               ))}
+              {legendDays.length > 0 && <p className="text-[11px] text-ink-400 leading-snug">Con più giorni il colore è quello del giorno: il tecnico è nel fumetto del segnaposto.</p>}
               {activeTechs.length === 0 && <p className="text-ink-500">Nessun tecnico attivo</p>}
               <div className="pt-1.5 mt-1 border-t border-line space-y-1 text-ink-500">
                 <p className="flex items-center gap-2"><span className="h-0 w-5 border-t-2 border-ink-500" /> Giro confermato</p>

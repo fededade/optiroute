@@ -73,6 +73,19 @@ const pickString = (obj: Record<string, unknown> | undefined, keys: string[]): s
   return undefined;
 };
 
+// richiamo_tra_minuti: campo Number di Retell (può arrivare anche come testo)
+const pickCallbackMinutes = (obj: Record<string, unknown> | undefined): number | string | undefined => {
+  if (!obj) return undefined;
+  for (const k of Object.keys(obj)) {
+    const key = k.toLowerCase().replace(/[\s-]+/g, '_');
+    if (key !== 'richiamo_tra_minuti' && key !== 'minuti_richiamo' && key !== 'callback_minutes') continue;
+    const v = obj[k];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+};
+
 // Alternativa accettata in chiamata: "A", "b", "alternativa B", "opzione c",
 // "Slot A" -> 'A'|'B'|'C'. "nessuna", "no", "-", vuoto o testo che non si
 // riconduce a UNA sola lettera -> undefined. Si considerano solo lettere
@@ -139,6 +152,9 @@ export interface RawCallOutcome {
   newContactRole?: string;
   summary?: string;
   sentiment?: string;
+  callbackMinutes?: number | string; // richiamo chiesto dal cliente: tra quanti minuti
+  callbackTimeRaw?: string;          // richiamo chiesto dal cliente: orario/giorno (testo)
+  endedAt?: string;                  // ISO: fine della chiamata (riferimento per "tra N minuti")
 }
 
 export interface CallStatusView {
@@ -209,10 +225,14 @@ export const interpretRetellCall = (raw: any): CallStatusView => {
       newContactName,
       newContactPhone,
       newContactRole,
-      // Riassunto in italiano dal campo custom `riassunto`; se manca, quello di Retell
-      summary: pickString(custom, ['riassunto', 'riassunto_chiamata', 'summary_it'])
-        || (typeof analysis.call_summary === 'string' ? analysis.call_summary : undefined),
+      // Riassunto in italiano (campo personalizzato), altrimenti quello in inglese di Retell
+      summary: pickString(custom, ['riassunto', 'riassunto_chiamata', 'sintesi', 'riepilogo'])
+        ?? (typeof analysis.call_summary === 'string' ? analysis.call_summary : undefined),
       sentiment: typeof analysis.user_sentiment === 'string' ? analysis.user_sentiment : undefined,
+      // Richiamo chiesto dal cliente (campi facoltativi, vedi README)
+      callbackMinutes: pickCallbackMinutes(custom),
+      callbackTimeRaw: pickString(custom, ['orario_richiamo', 'quando_richiamare', 'callback_time']),
+      endedAt: typeof data.end_timestamp === 'number' && data.end_timestamp > 0 ? new Date(data.end_timestamp).toISOString() : undefined,
     },
   };
 };

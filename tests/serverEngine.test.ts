@@ -216,14 +216,76 @@ describe('esiti', () => {
     await runTick(h.deps, 'scheduler');
     const x = await h.byId('x');
     expect(x).toMatchObject({ autoCall: 'retry', callAttempts: 1, callStatus: 'failed' });
-    expect(new Date(x.autoCallNotBefore!).getTime()).toBe(at('2026-11-11', '12:05').getTime());
+    expect(new Date(x.autoCallNotBefore!).getTime()).toBe(at('2026-11-11', '10:20').getTime());
 
-    h.clock.now = at('2026-11-11', '12:04');
+    h.clock.now = at('2026-11-11', '10:19');
     expect((await runTick(h.deps, 'scheduler')).callsLaunched).toBe(0);
-    h.clock.now = at('2026-11-11', '12:05');
+    h.clock.now = at('2026-11-11', '10:20');
     expect((await runTick(h.deps, 'scheduler')).callsLaunched).toBe(1);
     expect(h.retell.phonesCalled()).toEqual([X_PHONE, X_PHONE]);
     like(await h.byId('x'), { callId: 'call_2', callOutcome: undefined, callAttempts: 1 });
+  });
+
+  it('configurazione del cloud salvata col vecchio retryMinutes: 120 -> richiamo dopo 15 minuti', async () => {
+    const { noAnswerRetryMinutes: _nuovo, ...vecchie } = DEFAULT_AUTOPILOT_SETTINGS;
+    const cfg = { ...config(), autopilot: { ...vecchie, enabled: true, retryMinutes: 120 } } as unknown as CloudConfig;
+    const h = await setup(world(), cfg);
+    await runTick(h.deps, 'scheduler');
+    h.retell.finish(X_PHONE, { result: 'non_risposto' });
+    h.clock.now = at('2026-11-11', '10:05');
+    await runTick(h.deps, 'scheduler');
+    const x = await h.byId('x');
+    expect(x).toMatchObject({ autoCall: 'retry', callAttempts: 1 });
+    expect(new Date(x.autoCallNotBefore!).getTime()).toBe(at('2026-11-11', '10:20').getTime());
+  });
+
+  it('minuti cambiati dall\'operatore: rispettati anche dal motore in cloud', async () => {
+    const h = await setup(world(), config({ noAnswerRetryMinutes: 30 }));
+    await runTick(h.deps, 'scheduler');
+    h.retell.finish(X_PHONE, { result: 'non_risposto' });
+    h.clock.now = at('2026-11-11', '10:05');
+    await runTick(h.deps, 'scheduler');
+    expect(new Date((await h.byId('x')).autoCallNotBefore!).getTime()).toBe(at('2026-11-11', '10:35').getTime());
+  });
+
+  it('il cliente chiede di essere richiamato tra 10 minuti: slot tenuto e richiamo all\'ora giusta', async () => {
+    const h = await setup(world());
+    await runTick(h.deps, 'scheduler');
+    h.retell.finish(X_PHONE, {
+      result: 'da_richiamare',
+      callbackMinutes: 10,
+      endedAt: at('2026-11-11', '10:03').toISOString(),
+      clientNotes: 'Devo sentire l\'inquilino',
+    });
+    h.clock.now = at('2026-11-11', '10:05');
+    await runTick(h.deps, 'scheduler');
+    const x = await h.byId('x');
+    expect(x).toMatchObject({ status: 'proposed', date: D, autoCall: 'retry', callbackRequests: 1, callOutcome: { result: 'da_richiamare' } });
+    expect(x.callAttempts || 0).toBe(0);
+    expect(x.autoCallNotBefore).toBe(at('2026-11-11', '10:13').toISOString());
+    expect(x.notes).toContain('Richiamo chiesto dal cliente: 11/11/2026 alle 10:13');
+
+    h.clock.now = at('2026-11-11', '10:12');
+    expect((await runTick(h.deps, 'scheduler')).callsLaunched).toBe(0);
+    h.clock.now = at('2026-11-11', '10:13');
+    expect((await runTick(h.deps, 'scheduler')).callsLaunched).toBe(1);
+    expect(h.retell.phonesCalled()).toEqual([X_PHONE, X_PHONE]);
+
+    h.retell.finish(X_PHONE, { result: 'confermato' });
+    h.clock.now = at('2026-11-11', '10:16');
+    await runTick(h.deps, 'scheduler');
+    expect(await h.byId('x')).toMatchObject({ status: 'confirmed', date: D });
+  });
+
+  it('richiamo chiesto per un giorno senza orario: in attesa, all\'apertura della fascia di quel giorno', async () => {
+    const h = await setup(world(), config({ callWindowStart: '08:30' }));
+    await runTick(h.deps, 'scheduler');
+    h.retell.finish(X_PHONE, { result: 'da_richiamare', followUpRaw: '2026-11-12' });
+    h.clock.now = at('2026-11-11', '10:05');
+    await runTick(h.deps, 'scheduler');
+    like(await h.byId('x'), {
+      status: 'pending', followUpDate: '2026-11-12', callbackAt: at('2026-11-12', '08:30').toISOString(), date: undefined,
+    });
   });
 
   it('chiamata senza esito oltre il limite -> sconosciuto; errore transitorio -> niente', async () => {

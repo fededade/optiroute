@@ -4,8 +4,9 @@ import { geocodeAddress } from '../services/geocodingService';
 import { parseAddressInput } from '../services/geminiService';
 import { matchTechnician } from '../services/technicianService';
 import { provinceLabel } from '../utils/provinces';
-import { Building2, CalendarClock, CircleAlert, Contact, FilePen, FilePlus2, Flag, Hash, Siren, StickyNote, TriangleAlert, UserRound } from 'lucide-react';
+import { Building2, CalendarClock, CircleAlert, FilePen, FilePlus2, Flag, Hash, Siren, StickyNote, TriangleAlert, UserRound } from 'lucide-react';
 import { displayCode, prettyCode } from '../services/praticaCode';
+import { formatContactPerson, isNomeIntestatario, splitContactPerson } from '../services/contactNote';
 import ModalShell from './modal/ModalShell';
 import { Field, Section, Spinner, Switch, ic } from './modal/parts';
 
@@ -57,6 +58,10 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
       : CATEGORY_NONE
   );
   const [followUpDate, setFollowUpDate] = useState(initial?.followUpDate || '');
+  // Referente da contattare al posto dell'intestatario ("Nome — ruolo")
+  const initialRef = splitContactPerson(initial?.contactPerson);
+  const [refName, setRefName] = useState(initialRef.nome);
+  const [refRole, setRefRole] = useState(initialRef.ruolo);
 
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
@@ -115,9 +120,24 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
         technicianId = technicianChoice;
       }
 
+      const finalTitle = title.trim() || displayAddress.split(',')[0];
+      // Referente: vuoti entrambi = nessuno (si chiama l'intestatario); se
+      // non è cambiato resta scritto com'era; altrimenti "Nome — ruolo" e
+      // "per conto di" l'intestatario se mancava. L'impronta della nota del
+      // portale resta: la nota non si rilegge finché non cambia.
+      const name = refName.trim();
+      const role = refRole.trim();
+      const refUnchanged = !!initial?.contactPerson && name === initialRef.nome && role === initialRef.ruolo;
+      const contactPerson = refUnchanged ? initial!.contactPerson : formatContactPerson(name, role);
+      const referredBy = !contactPerson
+        ? undefined
+        : initial?.referredBy || (isNomeIntestatario(finalTitle) ? finalTitle : undefined);
+
       const appointment: Appointment = {
         ...(initial || { id: Date.now().toString(), status: 'pending' as const }),
-        title: title.trim() || displayAddress.split(',')[0],
+        title: finalTitle,
+        contactPerson,
+        referredBy,
         phone: trimmedPhone || undefined,
         notes: notes.trim() || undefined,
         durationMinutes: !isNaN(parsedDuration) && parsedDuration > 0 ? parsedDuration : undefined,
@@ -221,16 +241,36 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
               />
             </Field>
           </div>
-          {initial?.contactPerson && (
-            <div className="mt-4 flex items-start gap-2.5 rounded-control border border-line bg-slate-50/70 px-3 py-2.5 text-sm">
-              <Contact {...ic} className="mt-0.5 shrink-0 text-ink-400" />
-              <div className="min-w-0">
-                <span className="text-ink-500">Referente da contattare: </span>
-                <span className="font-medium text-ink-900">{initial.contactPerson}</span>
-                {initial.referredBy && <span className="block text-xs text-ink-500">indicato da {initial.referredBy}</span>}
-              </div>
-            </div>
-          )}
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <Field
+              label="Da contattare (se non è l'intestatario)"
+              htmlFor={fid('ref-name')}
+              hint={initial?.referredBy && (refName.trim() || refRole.trim())
+                ? `Indicato da ${initial.referredBy}.`
+                : 'Vuoto: l\'operatore AI chiede dell\'intestatario.'}
+            >
+              <input
+                id={fid('ref-name')}
+                type="text"
+                value={refName}
+                onChange={e => setRefName(e.target.value)}
+                placeholder="Es. Luca Bianchi"
+                className="input"
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Ruolo" htmlFor={fid('ref-role')} hint="Es. agente immobiliare, geometra, figlia.">
+              <input
+                id={fid('ref-role')}
+                type="text"
+                value={refRole}
+                onChange={e => setRefRole(e.target.value)}
+                placeholder="Es. agente immobiliare"
+                className="input"
+                autoComplete="off"
+              />
+            </Field>
+          </div>
         </Section>
 
         <Section title="Immobile" icon={Building2}>

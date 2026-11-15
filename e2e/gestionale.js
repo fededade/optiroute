@@ -487,10 +487,22 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       const itDate = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
       const richiamo = romeDay(5);
       const dispo = romeDay(60); // oltre l'orizzonte dello smistamento
+      const richiamo3 = romeDay(8);
+      const nota3 = `chiamare il ${richiamo3.slice(8, 10)}/${richiamo3.slice(5, 7)}`;
       const cloudConfig = { ...CONFIG, autopilot: { enabled: true, autoDispatch: true } };
       const init = await api('POST', '/api/cloud?op=init', { body: { device: DEVICE, replace: true, config: cloudConfig, appointments: [
         { id: 'f1', title: 'Cliente Già Fissato', address: 'Via Fissata 1, Milano', coords: P.milano, status: 'pending',
           technicianId: 'tech-1', province: 'MI', comune: 'Milano', periziaCode: '847.001', phone: '+390255500101', notes: 'Scala A' },
+        // Com'erano salvate PRIMA: sospesa dalla versione precedente dell'app
+        // (nota non ancora letta: "da richiamare" senza data, solo l'impronta)...
+        { id: 'v1', title: 'Cliente Sospeso Da Ieri', address: 'Via Ieri 1, Milano', coords: P.milano, status: 'issue', issueType: 'callback',
+          technicianId: 'tech-1', province: 'MI', comune: 'Milano', periziaCode: '847.007', phone: '+390255500107',
+          notes: 'Scala C\nSospesa sul portale (nessuna nota).', portalSuspension: '-' },
+        // ...e passata da una pagina rimasta alla versione precedente, che ha
+        // scritto la riga della nota vera senza classificarla
+        { id: 'v2', title: 'Cliente Pagina Vecchia', address: 'Via Vecchia 1, Milano', coords: P.milano, status: 'issue', issueType: 'callback',
+          technicianId: 'tech-1', province: 'MI', comune: 'Milano', periziaCode: '847.008', phone: '+390255500108',
+          notes: `Sospesa sul portale: ${nota3}`, portalSuspension: nota3 },
       ] }, headers: auth });
       assert.equal(init.status, 200);
       const pratica = (codice, intestatario, via, telefono, extra = {}) => ({ portal: 'prelios', codice, intestatario, via, civico: '9', comune: 'Milano', provincia: 'MI',
@@ -617,6 +629,41 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       assert.equal(late.notes, `Sospesa sul portale: ${nota2}`, 'una sola riga, quella nuova');
       assert.equal(late.portalSuspensionState, `issue|callback|${richiamo2}`);
       assert.ok(!seenLate.has('proposed') && !seenLate.has('pending'), 'mai in attesa né proposta');
+
+      // Pratiche GIÀ sospese prima dell'aggiornamento (v1, v2): fin qui, fuori
+      // dallo snapshot, nessuno le ha toccate; con la nota vera ricevono la
+      // data di richiamo, una volta sola
+      const prima = (await serverList()).filter(a => ['v1', 'v2'].includes(a.id));
+      assert.deepEqual(prima.map(a => [a.id, a.status, a.followUpDate, a.portalSuspensionState]),
+        [['v1', 'issue', undefined, undefined], ['v2', 'issue', undefined, undefined]]);
+      const vecchie = [
+        pratica('847007', 'Cliente Sospeso Da Ieri', 'Via Ieri', '+390255500107', { stato: 'Sospesa', fase: 'sospesa', sospensione: { nota: nota3 } }),
+        pratica('847008', 'Cliente Pagina Vecchia', 'Via Vecchia', '+390255500108', { stato: 'Sospesa', fase: 'sospesa', sospensione: { nota: nota3 } }),
+      ];
+      await deliver([...pratiche, tardiva({ sospensione: { nota: nota2 } }), ...vecchie]);
+      const dopo = await waitFor(async () => {
+        const l = (await serverList()).filter(a => ['v1', 'v2'].includes(a.id));
+        return l.length === 2 && l.every(a => a.portalSuspensionState === `issue|callback|${richiamo3}`) ? l : null;
+      }, 'sospese di prima classificate dalla nota', 30000).catch(async err => {
+        log('server:', JSON.stringify((await serverList()).filter(a => ['v1', 'v2'].includes(a.id))));
+        throw err;
+      });
+      for (const a of dopo) {
+        assert.equal(a.status, 'issue');
+        assert.equal(a.issueType, 'callback');
+        assert.equal(a.followUpDate, richiamo3, `data di richiamo applicata a ${a.id}`);
+        assert.equal(a.portalSuspension, nota3);
+      }
+      assert.equal(dopo.find(a => a.id === 'v1').notes, `Scala C\nSospesa sul portale: ${nota3}`, 'riga di prima sostituita');
+      assert.equal(dopo.find(a => a.id === 'v2').notes, `Sospesa sul portale: ${nota3}`, 'una sola riga');
+      const tutte = await serverList();
+      assert.equal(find(tutte, '847007').length, 1, 'nessun doppione');
+      assert.equal(find(tutte, '847008').length, 1, 'nessun doppione');
+      // stesso snapshot di nuovo: niente cambia
+      const fermo = JSON.stringify(tutte.filter(a => ['v1', 'v2'].includes(a.id)));
+      await deliver([...pratiche, tardiva({ sospensione: { nota: nota2 } }), ...vecchie]);
+      await sleep(3000);
+      assert.equal(JSON.stringify((await serverList()).filter(a => ['v1', 'v2'].includes(a.id))), fermo, 'seconda consegna: nessuna modifica');
       await G.page.screenshot({ path: path.join(OUT, '2e-bridge-stato-portale.png') });
       await G.ctx.close();
     });

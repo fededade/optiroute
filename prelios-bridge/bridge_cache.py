@@ -44,6 +44,13 @@ CACHE_VERSION = 1
 ORE_RILETTURA_SOSPENSIONE = 24
 MAX_RILETTURE_SOSPENSIONE = 10
 
+# Versione del MODO in cui il bridge legge la nota di sospensione: va alzata
+# ogni volta che cambia la lettura della pagina «Sospesi». Un tentativo
+# FALLITO fatto con una versione precedente (o da un bridge che non la
+# segnava: vale 1) non conta più: la nota si ritenta subito, senza aspettare
+# le 24 ore, così un bridge aggiornato legge le note già al primo giro.
+VERSIONE_LETTURA_SOSPENSIONE = 2
+
 # Le pratiche non più viste in nessun elenco da così tanti giorni vengono
 # eliminate dalla cache (pulizia dei dati personali non più necessari).
 GIORNI_CONSERVAZIONE = 30
@@ -236,9 +243,11 @@ class BridgeCache:
                                  adesso: datetime | None = None,
                                  massimo: int = MAX_RILETTURE_SOSPENSIONE) -> list[Pratica]:
         """Pratiche sospese da riaprire SOLO per la nota di sospensione:
-        mai lette, data di sospensione cambiata dall'ultima lettura, o ultima
-        lettura più vecchia di 24 ore. Prima le mai lette, poi quelle con la
-        data cambiata, poi le più vecchie; al massimo `massimo`. `escludi`:
+        mai lette (o con un tentativo fallito di una versione precedente
+        della lettura: vedi VERSIONE_LETTURA_SOSPENSIONE), data di
+        sospensione cambiata dall'ultima lettura, o ultima lettura più
+        vecchia di 24 ore. Prima le mai lette, poi quelle con la data
+        cambiata, poi le più vecchie; al massimo `massimo`. `escludi`:
         codici già aperti in questo ciclo per il telefono."""
         adesso = adesso or datetime.now(timezone.utc)
         limite = adesso - timedelta(hours=ORE_RILETTURA_SOSPENSIONE)
@@ -249,7 +258,7 @@ class BridgeCache:
             rec = self.data["pratiche"].get(self.chiave(portal, p.codice)) or {}
             sosp = rec.get("sospensione") if isinstance(rec.get("sospensione"), dict) else {}
             tentata = _parse_iso(sosp.get("tentataIl"))
-            if tentata is None:
+            if tentata is None or self._tentativo_superato(sosp):
                 candidati.append((0, "", p))
             elif (sosp.get("dal") or "") != p.data_sospensione:
                 candidati.append((1, sosp.get("tentataIl", ""), p))
@@ -258,13 +267,27 @@ class BridgeCache:
         candidati.sort(key=lambda c: (c[0], c[1]))
         return [p for _o, _t, p in candidati[:max(0, massimo)]]
 
+    @staticmethod
+    def _tentativo_superato(sosp: dict) -> bool:
+        """True se l'ultimo tentativo è FALLITO ed è stato fatto con una
+        versione precedente della lettura della nota: non conta, si ritenta
+        subito. Una nota letta resta valida qualunque versione l'abbia letta."""
+        if sosp.get("letta"):
+            return False
+        try:
+            versione = int(sosp.get("versione") or 1)
+        except (TypeError, ValueError):
+            versione = 1
+        return versione < VERSIONE_LETTURA_SOSPENSIONE
+
     def registra_sospensione(self, portal: str, pratica: Pratica, nota: str,
                              letta: bool, data_nota: str = "",
                              adesso: datetime | None = None) -> None:
         """Salva il tentativo di lettura della nota di sospensione (pagina
         «Sospesi»; data_nota = data della riga letta, AAAA-MM-GG). Se la
         pagina non è stata letta resta la nota precedente, ma il tentativo
-        conta (si riprova dopo 24 ore o se cambia la data di sospensione)."""
+        conta (si riprova dopo 24 ore, se cambia la data di sospensione o
+        quando un bridge aggiornato cambia il modo di leggere la nota)."""
         adesso = adesso or datetime.now(timezone.utc)
         k = self.chiave(portal, pratica.codice)
         rec = self.data["pratiche"].setdefault(k, {"portal": portal})
@@ -275,6 +298,7 @@ class BridgeCache:
             "dal": pratica.data_sospensione,
             "tentataIl": iso_utc(adesso),
             "letta": bool(letta),
+            "versione": VERSIONE_LETTURA_SOSPENSIONE,
         }
 
     @staticmethod

@@ -209,7 +209,9 @@ export const interpretRetellCall = (raw: any): CallStatusView => {
       newContactName,
       newContactPhone,
       newContactRole,
-      summary: typeof analysis.call_summary === 'string' ? analysis.call_summary : undefined,
+      // Riassunto in italiano dal campo custom `riassunto`; se manca, quello di Retell
+      summary: pickString(custom, ['riassunto', 'riassunto_chiamata', 'summary_it'])
+        || (typeof analysis.call_summary === 'string' ? analysis.call_summary : undefined),
       sentiment: typeof analysis.user_sentiment === 'string' ? analysis.user_sentiment : undefined,
     },
   };

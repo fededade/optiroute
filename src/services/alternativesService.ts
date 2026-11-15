@@ -163,8 +163,15 @@ export const resolveAlternative = (
 export const parseTimeText = (text: string | undefined): number | null => {
   if (!text) return null;
   const t = text.toLowerCase();
-  const hm = t.match(/\b([01]?\d|2[0-3])\s*(?:[:.,]|\s+e\s+)\s*([0-5]\d)\b/);
-  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
+  const hm = t.match(/\b([01]?\d|2[0-3])\s*(?:[:.,]\s*([0-5]\d)|\s+e\s+(5|[0-5]\d))\b/);
+  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2] ?? hm[3], 10);
+  // "9 e mezza", "9 e un quarto", "10 meno un quarto"
+  const parole = t.match(/\b([01]?\d|2[0-3])\s+(e\s+mezz[ao]|e\s+un\s+quarto|meno\s+un\s+quarto)\b/);
+  if (parole) {
+    const ora = parseInt(parole[1], 10) * 60;
+    if (parole[2].startsWith('meno')) return ora - 15;
+    return ora + (parole[2].includes('quarto') ? 15 : 30);
+  }
   const h = t.match(/\b(?:ore|alle|all[e']?)\s*([01]?\d|2[0-3])\b/) || t.match(/^\s*([01]?\d|2[0-3])\s*$/);
   if (h) return parseInt(h[1], 10) * 60;
   return null;

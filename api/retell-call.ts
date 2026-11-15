@@ -119,6 +119,80 @@ const MESI_IT = [
   'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre',
 ];
 
+// --- Numeri in lettere ---
+// La voce (ElevenLabs Flash) legge male le cifre in italiano: "16 novembre",
+// "15 e 20", "Via Leopardi 9" escono spesso storpiati. Tutto quello che
+// l'agente deve PRONUNCIARE si scrive quindi in lettere.
+const UNITA_IT = [
+  'zero', 'uno', 'due', 'tre', 'quattro', 'cinque', 'sei', 'sette', 'otto', 'nove',
+  'dieci', 'undici', 'dodici', 'tredici', 'quattordici', 'quindici', 'sedici',
+  'diciassette', 'diciotto', 'diciannove',
+];
+const DECINE_IT = ['', '', 'venti', 'trenta', 'quaranta', 'cinquanta', 'sessanta', 'settanta', 'ottanta', 'novanta'];
+
+const sottoCento = (n: number): string => {
+  if (n < 20) return UNITA_IT[n];
+  const d = Math.floor(n / 10);
+  const u = n % 10;
+  if (!u) return DECINE_IT[d];
+  // "ventuno", "trentotto" (elisione davanti a uno/otto), "ventitré"
+  const decina = u === 1 || u === 8 ? DECINE_IT[d].slice(0, -1) : DECINE_IT[d];
+  return decina + (u === 3 ? 'tré' : UNITA_IT[u]);
+};
+
+const sottoMille = (n: number): string => {
+  const c = Math.floor(n / 100);
+  const r = n % 100;
+  const centinaia = c === 0 ? '' : c === 1 ? 'cento' : `${UNITA_IT[c]}cento`;
+  if (!r) return centinaia || 'zero';
+  // "centotré" (come "ventitré"), "centotto", "duecentottanta"
+  const resto = centinaia && r === 3 ? 'tré' : sottoCento(r);
+  return centinaia && resto.startsWith('ott') ? centinaia.slice(0, -1) + resto : centinaia + resto;
+};
+
+// 0..999999 in lettere ("16" -> "sedici", "1250" -> "milleduecentocinquanta");
+// numeri più grandi restano in cifre (non capitano in date, orari e civici)
+export const numeroInLettere = (n: number): string => {
+  if (!Number.isInteger(n) || n < 0 || n > 999999) return String(n);
+  if (n < 1000) return sottoMille(n);
+  const migliaia = Math.floor(n / 1000);
+  const resto = n % 1000;
+  const testa = migliaia === 1 ? 'mille' : `${sottoMille(migliaia)}mila`;
+  if (!resto) return testa;
+  return testa + (resto === 3 ? 'tré' : sottoMille(resto));
+};
+
+// Sostituisce ogni numero di un testo da pronunciare con le sue lettere:
+// "Via Leopardi 9" -> "Via Leopardi nove", "Via Roma 10/A" -> "Via Roma dieci barra A"
+const ORDINALI_IT = ['', 'primo', 'secondo', 'terzo', 'quarto', 'quinto', 'sesto', 'settimo', 'ottavo', 'nono', 'decimo'];
+const ROMANI: Record<string, number> = { I: 1, V: 5, X: 10, L: 50 };
+const daRomano = (r: string): number => {
+  let tot = 0;
+  for (let i = 0; i < r.length; i++) {
+    const v = ROMANI[r[i]];
+    const dopo = ROMANI[r[i + 1]] || 0;
+    tot += v < dopo ? -v : v;
+  }
+  return tot;
+};
+const ROMANO_DEL_MESE = /\b([IVXL]{1,6})\s+(?=(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b)/gi;
+const PRIMO_DEL_MESE = /\b1\s+(?=(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b)/gi;
+export const numeriInLettere = (text: string): string =>
+  text
+    // "1° Maggio", "2ª traversa" -> ordinale; "Via 1 Maggio" -> "primo Maggio"
+    .replace(/\b(\d{1,2})\s*[°ºª]/g, (_m, d: string) => ORDINALI_IT[+d] || numeroInLettere(+d))
+    .replace(ROMANO_DEL_MESE, (m, r: string) => {
+      if (r !== r.toUpperCase()) return m;
+      const n = daRomano(r);
+      return n >= 1 && n <= 31 ? `${n === 1 ? 'primo' : numeroInLettere(n)} ` : m;
+    })
+    .replace(PRIMO_DEL_MESE, 'primo ')
+    .replace(/(\d)\s*\/\s*(?=[\dA-Za-z])/g, '$1 barra ')
+    // civico con lettera o bis/ter attaccati: "21A" -> "21 A", "5BIS" -> "5 bis"
+    .replace(/(\d)(bis|ter|quater)\b/gi, (_m, d: string, suf: string) => `${d} ${suf.toLowerCase()}`)
+    .replace(/(\d)(?=[A-Za-z])/g, '$1 ')
+    .replace(/\d+/g, d => (d.length > 1 && d.startsWith('0') ? d.split('').map(c => UNITA_IT[+c]).join(' ') : numeroInLettere(parseInt(d, 10))));
+
 // "2026-11-12" -> Date locale costruita dalle parti (anno, mese, giorno), senza
 // passare da UTC: il giorno della settimana è giusto qualunque sia il fuso del server.
 // undefined se la data non esiste (es. 2026-02-30).
@@ -133,12 +207,14 @@ const parseIsoDateParts = (isoDate: string): Date | undefined => {
   return date;
 };
 
-// Senza anno: al telefono si dice "martedì 7 luglio", non "... 2026"
+// Senza anno e in lettere: al telefono si dice "martedì sette luglio", non
+// "... 2026" (il primo del mese: "primo dicembre")
 export const formatDateItalian = (isoDate?: string): string => {
   if (!isoDate) return '';
   const date = parseIsoDateParts(isoDate);
   if (!date) return isoDate;
-  return `${GIORNI_IT[date.getDay()]} ${date.getDate()} ${MESI_IT[date.getMonth()]}`;
+  const giorno = date.getDate() === 1 ? 'primo' : numeroInLettere(date.getDate());
+  return `${GIORNI_IT[date.getDay()]} ${giorno} ${MESI_IT[date.getMonth()]}`;
 };
 
 // Ripulisce l'indirizzo geocodificato "lungo" (Nominatim display_name) in
@@ -169,18 +245,40 @@ const cleanDisplayName = (full: string): string => {
   return kept.join(', ');
 };
 
-// "09:00" -> "9", "09:30" -> "9 e trenta": così il TTS dice "alle nove"
-// invece di "alle ore zero nove e zero zero".
+// "09:00" -> "nove", "09:30" -> "nove e mezza", "15:20" -> "quindici e venti":
+// in lettere, così il TTS non dice "zero nove e zero zero" né storpia le cifre.
 export const oraParlata = (hhmm?: string): string => {
   if (!hhmm) return '';
   const [hStr, mStr] = hhmm.split(':');
   const h = parseInt(hStr, 10);
   const m = parseInt(mStr || '0', 10);
-  if (isNaN(h)) return hhmm;
-  if (!m) return `${h}`;
-  if (m === 30) return `${h} e mezza`;
-  return `${h} e ${m}`;
+  if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) return hhmm;
+  const ore = numeroInLettere(h);
+  if (!m) return ore;
+  if (m === 30) return `${ore} e mezza`;
+  return `${ore} e ${numeroInLettere(m)}`;
 };
+
+// Tutti gli orari HH:MM di un testo in lettere ("09:00-10:00" -> "nove-dieci")
+export const orariInLettere = (text: string): string =>
+  text.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, m => oraParlata(m));
+
+// Orario spostato di `delta` minuti ("13:05", -10 -> "12:55"); undefined se
+// esce dalla giornata
+export const spostaOrario = (hhmm: string, delta: number): string | undefined => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return undefined;
+  const tot = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + delta;
+  if (tot < 0 || tot >= 24 * 60) return undefined;
+  return `${String(Math.floor(tot / 60)).padStart(2, '0')}:${String(tot % 60).padStart(2, '0')}`;
+};
+
+// Ruolo aggiunto dall'autopilota al referente ("Luca Bianchi — agente immobiliare")
+const ruoloReferente = (contactPerson?: string): string => {
+  const parts = (typeof contactPerson === 'string' ? contactPerson : '').split(/\s+[—–]\s+/);
+  return parts.length > 1 ? parts.slice(1).join(' ').trim() : '';
+};
+const E_AGENZIA = /agen[tz]|immobiliar/i;
 
 // Nome da PRONUNCIARE: gli export dei portali scrivono i nomi tutti in
 // maiuscolo ("FERRO MATTEO", "D'ANGELO ANNA-MARIA"); li riporta a lettere
@@ -299,7 +397,7 @@ export const buildAlternativesSection = (alternatives: AlternativeSlot[]): strin
     ...spoken.map((s, i) => `  ${i + 1}) ${s}`),
     `- Di' al cliente SOLO giorno e ora (es. "Potrebbe andarle bene ${spoken[0]}?"): NON leggere MAI lettere, numeri o etichette delle alternative.`,
     `- Se ne ACCETTA una → confermala esplicitamente ripetendo giorno e ora: "Perfetto, allora le confermo il sopralluogo per <giorno> alle <ora>." Spiega al cliente che è un appuntamento FISSATO: da quel momento l'appuntamento valido è quello (non più quello proposto all'inizio). Ringrazia e saluta.`,
-    `- Se chiede un giorno o un orario DIVERSO da questi → non confermarlo e non dire che "dovrebbe essere possibile": proponi le alternative rimaste.`,
+    `- Se chiede un giorno o un orario DIVERSO da questi → non confermarlo e non dire che "dovrebbe essere possibile": proponi le alternative rimaste. (Unica eccezione: il piccolo aggiustamento di al massimo dieci minuti dell'orario proposto all'inizio, descritto nella gestione della risposta.)`,
     `- Se NESSUNA va bene → NON inventare altre disponibilità e NON promettere orari: chiedi quando preferirebbe (giorno e fascia oraria), prendine nota e di' che verrà ricontattato con una nuova proposta.`,
     ``,
   ];
@@ -336,17 +434,22 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
   // Luogo da PRONUNCIARE: solo via, civico e comune (niente CAP/provincia/
   // quartiere/regione). Preferisce i campi separati; altrimenti ripulisce
   // l'indirizzo geocodificato lungo.
-  const luogoBreve = (shortAddress || comune)
+  // Civici e numeri delle vie in lettere ("Via Leopardi nove"): la voce
+  // storpia le cifre.
+  const luogoBreve = numeriInLettere((shortAddress || comune)
     ? [shortAddress, comune].filter(Boolean).join(', ')
-    : (address ? cleanDisplayName(address) : 'indirizzo da comunicare');
+    : (address ? cleanDisplayName(address) : 'indirizzo da comunicare'));
 
   // Immobile: "di COMUNE in VIA CIVICO" presi dalla perizia
   const luogoImmobile = comune && shortAddress
-    ? `di ${comune} in ${shortAddress}`
+    ? numeriInLettere(`di ${comune} in ${shortAddress}`)
     : `in ${luogoBreve}`;
 
   const interlocutore = nomeDaChiamare(isReferral ? contactPerson : clientName, { address, shortAddress, comune });
   const chiCerchiamo = isReferral ? 'la persona di riferimento per il sopralluogo' : 'l\'intestatario della pratica';
+  // Il referente indicato dal cliente è l'agente immobiliare / l'agenzia?
+  const referenteAgenzia = isReferral && E_AGENZIA.test(ruoloReferente(contactPerson));
+  const nomeCliente = nomeDaChiamare(clientName, { address, shortAddress, comune });
 
   // MOTIVO della chiamata: chi siamo e perché chiamiamo, detto SOLO dopo che
   // l'interlocutore ha risposto (breve: la prima frase non deve durare 15 secondi)
@@ -356,15 +459,27 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
 
   // SPIEGAZIONE del motivo, per chi chiede "di cosa si tratta?" DOPO aver
   // confermato di essere la persona cercata (cita il mutuo: mai a terzi)
-  const immobileViaComune = shortAddress && comune ? `${shortAddress} a ${comune}` : luogoBreve;
+  const immobileViaComune = shortAddress && comune ? numeriInLettere(`${shortAddress} a ${comune}`) : luogoBreve;
   const spiegazioneMotivo =
     `La chiamata è relativa alla richiesta di mutuo effettuata per l'immobile di ${immobileViaComune}: ` +
     `per procedere con la lavorazione della perizia è necessario effettuare il sopralluogo interno presso l'immobile.`;
 
+  // Per l'AGENTE IMMOBILIARE che ha in gestione l'immobile: la pratica di
+  // mutuo è del suo cliente, l'immobile è quello che l'agenzia segue
+  const presentazioneBreve = `Sono ${AGENT_NAME} di ${COMPANY_NAME}, per conto di ${MANDANTE}.`;
+  const spiegazioneAgenzia =
+    `La chiamo per la pratica di mutuo ${nomeCliente ? `di ${nomeCliente}` : 'del vostro cliente'} ` +
+    `per l'immobile che avete in gestione in ${immobileViaComune}: ` +
+    `per procedere con la perizia è necessario effettuare il sopralluogo interno presso l'immobile.`;
+
   // Come si svolge il sopralluogo: da dire SOLO se lo chiedono
   const infoSopralluogo =
     `Il sopralluogo si svolge con rilievi fotografici e metrici, con misure a campione. ` +
-    `Dura circa 15 minuti se si tratta di un appartamento, circa 25 minuti se si tratta di una villa.`;
+    `Dura circa quindici minuti se si tratta di un appartamento, circa venticinque minuti se si tratta di una villa.`;
+
+  // Piccolo aggiustamento d'orario: al massimo DIECI minuti prima o dopo
+  const orarioMin = startTime ? spostaOrario(startTime, -10) : undefined;
+  const orarioMax = startTime ? spostaOrario(startTime, 10) : undefined;
 
   // APERTURA: prima si verifica la persona chiamandola per nome (chi si sente
   // chiamare per nome non riaggancia pensando a un venditore), POI ci si
@@ -377,6 +492,10 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
   const proposta = (dateSpoken && startTime)
     ? `La chiamavo per proporle la data del sopralluogo del perito: avremmo disponibilità per ${dateSpoken} alle ${oraParlata(startTime)}. Può andarle bene?`
     : `La chiamavo per concordare la data del sopralluogo del perito: prendo nota delle sue disponibilità e verrà ricontattato con la proposta di giorno e orario.`;
+
+  const propostaBreve = (dateSpoken && startTime)
+    ? `Avremmo disponibilità per ${dateSpoken} alle ${oraParlata(startTime)}. Può andarle bene?`
+    : proposta;
 
   // Gestione dello spostamento: con le alternative si passa agli slot reali;
   // senza, si consulta l'agenda e si prende nota (comportamento storico)
@@ -411,26 +530,39 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
       : null,
     ``,
     `2. PRESENTAZIONE E PROPOSTA — quando l'interlocutore conferma di essere la persona giusta, in UN'UNICA risposta:`,
-    interlocutore
+    referenteAgenzia
+      ? `   a) presentati, spiega il motivo e proponi, SENZA ripetere l'indirizzo due volte: "${presentazioneBreve} ${spiegazioneAgenzia} ${propostaBreve}" — ma se ti sei GIÀ presentata in questa chiamata (nell'apertura o perché ha chiesto chi parla), NON ripetere la presentazione: di' solo "${spiegazioneAgenzia} ${propostaBreve}"`
+      : interlocutore
       ? `   a) presentati e spiega perché chiami: "${motivoChiamata}" — ma se ti sei GIÀ presentata in questa chiamata (perché ha chiesto chi parla o per cosa), NON ripeterlo: passa direttamente al punto b).`
       : `   a) ti sei già presentata nell'apertura: NON ripetere la presentazione.`,
     isReferral
-      ? `      CONTESTO REFERENTE — NON stai chiamando l'intestatario: stai chiamando ${interlocutore || 'la persona di riferimento'}, il cui numero ti è stato indicato da ${referredBy || 'l\'intestatario della pratica'} come riferimento per il sopralluogo. Spiega in breve che l'appuntamento riguarda l'immobile dell'intestatario${clientName ? ` (${nomeParlato(clientName)})` : ''} e che sei stata indirizzata a lui/lei.`
+      ? referenteAgenzia
+        ? `      CONTESTO REFERENTE — stai chiamando l'AGENTE IMMOBILIARE che ha in gestione l'immobile, indicato ${referredBy ? `da ${referredBy}` : 'dall\'intestatario della pratica'} come riferimento per il sopralluogo. La pratica di mutuo è del suo cliente${nomeCliente ? ` (${nomeCliente})` : ''}.`
+        : `      CONTESTO REFERENTE — NON stai chiamando l'intestatario: stai chiamando ${interlocutore || 'la persona di riferimento'}, il cui numero ti è stato indicato ${referredBy ? `da ${referredBy}` : 'dall\'intestatario della pratica'} come riferimento per il sopralluogo. Spiega in breve che l'appuntamento riguarda l'immobile dell'intestatario${clientName ? ` (${nomeParlato(clientName)})` : ''} e che sei stata indirizzata a lui/lei.`
       : null,
-    `   b) PROPONI l'appuntamento con questa frase (non darlo MAI per già confermato: l'operatrice propone, il cliente conferma):`,
-    `"${proposta}"`,
+    referenteAgenzia
+      ? `   b) la proposta è già nel punto a): non darla MAI per già confermata, l'operatrice propone e l'agente conferma.`
+      : `   b) PROPONI l'appuntamento con questa frase (non darlo MAI per già confermato: l'operatrice propone, il cliente conferma):`,
+    referenteAgenzia ? null : `"${proposta}"`,
     ``,
-    `   Se PRIMA di confermare chiede "chi parla?" o "per cosa?" → rispondi presentandoti: "${motivoChiamata}", poi chiedi di nuovo se parli con ${interlocutore || chiCerchiamo}.`,
-    `   Se NON è la persona cercata → ${interlocutore ? `PRIMA presentati e spiega perché chiami ("${motivoChiamata}"), SOLO DOPO` : 'senza ripetere la presentazione,'} chiedi se può passarti ${interlocutore || chiCerchiamo} oppure chi è la persona giusta da contattare per il sopralluogo. NON chiedere nomi o numeri prima di aver spiegato chi sei e perché chiami.`,
-    `   Se DOPO aver confermato chi è chiede "di cosa si tratta?" o dice di non aver capito → NON chiedere di nuovo con chi parli (lo sai già): spiega con questa frase "${spiegazioneMotivo}" e poi riprendi la proposta.`,
-    `   Il MUTUO citalo SOLO a chi ha confermato di essere ${interlocutore || chiCerchiamo}: a chiunque altro di' solo chi sei e che chiami per la perizia sull'immobile.`,
+    `   Se PRIMA di confermare chiede "chi parla?" o "per cosa?" → rispondi presentandoti: "${referenteAgenzia ? presentazioneBreve : motivoChiamata}", poi chiedi di nuovo se parli con ${interlocutore || chiCerchiamo}.`,
+    `   Se dice che il NUMERO È SBAGLIATO o che NON CONOSCE ${interlocutore ? `nessuno che si chiama ${interlocutore}` : 'nessuno legato a questa pratica o a questo immobile'} → NON insistere: niente presentazione, niente domande su altri contatti. Scusati per il disturbo, saluta e CHIUDI SUBITO la chiamata (es. "Mi scusi per il disturbo, buona giornata."). Vale anche se lo dice DOPO la tua spiegazione: non ripetere la spiegazione e non fare altre domande.`,
+    `   ATTENZIONE: chi CONOSCE la persona cercata (un familiare, un collega, "se ne occupa lui", "io non c'entro, è di mio marito") NON è un numero sbagliato: vale la regola "Se NON è la persona cercata" qui sotto.`,
+    `   Se chi risponde dice di essere l'AGENTE IMMOBILIARE (o l'agenzia) che segue l'immobile → è la persona GIUSTA per il sopralluogo: NON chiedergli di passarti qualcun altro e NON chiedergli nome e numero di telefono (lo stai già chiamando). Presentati ("${presentazioneBreve}"), spiega il motivo con questa frase: "${spiegazioneAgenzia}" e poi PROPONI l'appuntamento: "${propostaBreve}". Il suo nome chiedilo solo alla fine, per annotarlo, se non te l'ha già detto.`,
+    `   Se NON è la persona cercata (e non è l'agente immobiliare) → ${interlocutore ? `PRIMA presentati e spiega perché chiami ("${motivoChiamata}"), SOLO DOPO` : 'senza ripetere la presentazione,'} chiedi se può passarti ${interlocutore || chiCerchiamo} oppure chi è la persona giusta da contattare per il sopralluogo. NON chiedere nomi o numeri prima di aver spiegato chi sei e perché chiami.`,
+    `   Se DOPO aver confermato chi è chiede "di cosa si tratta?" o dice di non aver capito → NON chiedere di nuovo con chi parli (lo sai già): spiega con questa frase "${referenteAgenzia ? spiegazioneAgenzia : spiegazioneMotivo}" e poi riprendi la proposta.`,
+    `   Il MUTUO citalo SOLO a chi ha confermato di essere ${interlocutore || chiCerchiamo} o all'agente immobiliare che segue l'immobile: a chiunque altro di' solo chi sei e che chiami per la perizia sull'immobile.`,
     ``,
     `3. GESTIONE DELLA RISPOSTA:`,
     `- ACCETTA giorno e orario → ripeti chiaramente data e ora, ringrazia e saluta.`,
-    `- È TITUBANTE o chiede di spostare → l'obiettivo è CONSERVARE l'appuntamento proposto: fai UN SOLO tentativo, gentile ma deciso, es.: "Guardi, le dico la verità: ci verrebbe difficile riprogrammare, l'agenda è pressoché piena e spostare il sopralluogo potrebbe allungare i tempi della sua pratica. È sicuro di non riuscire a esserci? In alternativa può anche delegare qualcuno: un familiare, l'agente immobiliare, il geometra...". Se delega qualcuno, raccogli NOME, TELEFONO e RUOLO del delegato (e ripeti il numero per conferma). Se invece insiste per spostare, NON forzare oltre — accondiscendi con garbo e procedi:`,
+    startTime
+      ? `- Chiede di ANTICIPARE o POSTICIPARE di POCHI MINUTI l'orario PROPOSTO all'inizio (una decina di minuti, al massimo un quarto d'ora, stesso giorno) → NON è uno spostamento, anche se ci sono slot alternativi: NON usare la frase sull'agenda piena. Chiedi con gentilezza se riesce a essere puntuale, es.: "Il perito ha diversi sopralluoghi in giornata e gli orari sono un po' stretti: riuscirebbe a esserci alle ${oraParlata(startTime)}?". Se proprio non riesce, puoi concedere AL MASSIMO dieci minuti${orarioMin && orarioMax ? ` (quindi non prima delle ${oraParlata(orarioMin)} e non dopo le ${oraParlata(orarioMax)})` : ''}: fissa l'orario concordato, chiedi la cortesia di essere puntuale perché il perito ha altri appuntamenti subito dopo, e nella conferma ripeti giorno e NUOVO orario. Non proporre MAI un orario diverso da quello appena concordato. L'aggiustamento vale SOLO per l'orario proposto all'inizio: gli slot alternativi non si spostano. Se chiede PIÙ di dieci minuti e non accetta i dieci minuti → NON concederlo: vale la regola dello spostamento qui sotto.`
+      : null,
+    `- È TITUBANTE o chiede di spostare (un altro giorno, o più dei dieci minuti concedibili) → l'obiettivo è CONSERVARE l'appuntamento proposto: fai UN SOLO tentativo, gentile ma deciso, es.: "Guardi, le dico la verità: ci verrebbe difficile riprogrammare, l'agenda è pressoché piena e spostare il sopralluogo potrebbe allungare i tempi della sua pratica. È sicuro di non riuscire a esserci? In alternativa può anche delegare qualcuno: un familiare, l'agente immobiliare, il geometra...". Se delega qualcuno, raccogli NOME, TELEFONO e RUOLO del delegato (e ripeti il numero per conferma). Se stai parlando con l'AGENTE IMMOBILIARE: di' "la pratica del suo cliente" (non "la sua pratica") e NON proporgli di delegare l'agente immobiliare. Se invece insiste per spostare, NON forzare oltre — accondiscendi con garbo e procedi:`,
     ...gestioneSpostamento,
     `- RIFIUTA / la perizia non serve più → prendi atto cortesemente e chiudi.`,
-    `- NON è lui la persona da contattare (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → dopo aver spiegato chi sei e perché chiami, fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
+    `- NUMERO SBAGLIATO / non conosce la persona → scusati e chiudi subito, senza altre domande.`,
+    `- Ti indica un'ALTRA persona da contattare, diversa da chi è al telefono (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → dopo aver spiegato chi sei e perché chiami, fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
     ``,
     `## DOMANDE SUL SOPRALLUOGO (rispondi SOLO se te lo chiedono, con parole tue e in breve):`,
     `- Come si svolge / cosa fa il perito / quanto dura → "${infoSopralluogo}"`,
@@ -438,13 +570,13 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
     ``,
     ...buildAlternativesSection(alternatives),
     `## AGENDA DEL GIORNO (solo per tua consultazione — NON elencarla al cliente, non citare altri clienti):`,
-    `${daySchedule || agendaFallback}`,
+    `${daySchedule ? orariInLettere(daySchedule) : agendaFallback}`,
     ``,
     `## DATI APPUNTAMENTO:`,
     `- Immobile (pronuncia SOLO questo: via, civico e città): ${luogoBreve}`,
     address ? `- Indirizzo esteso (solo riferimento interno, NON leggerlo al cliente): ${address}` : null,
     dateSpoken ? `- Giorno proposto: ${dateSpoken}` : `- Giorno: da definire`,
-    startTime ? `- Orario proposto: ${startTime}${endTime ? ` (indicativamente fino alle ${endTime})` : ''}` : `- Orario: da definire`,
+    startTime ? `- Orario proposto: alle ${oraParlata(startTime)}${endTime ? ` (indicativamente fino alle ${oraParlata(endTime)})` : ''}` : `- Orario: da definire`,
     technicianName ? `- Il sopralluogo sarà effettuato da ${technicianName}: puoi citarlo al cliente (es. "verrà il nostro tecnico ${technicianName}").` : null,
     isUrgent ? `- Priorità: URGENTE — dillo esplicitamente al cliente: il sopralluogo va effettuato il prima possibile.` : null,
     (isReferral && clientName) ? `- Intestatario della pratica: ${clientName}` : null,
@@ -452,13 +584,20 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
     notes ? `- Note interne (NON leggerle al cliente, servono a te): ${notes}` : null,
     ``,
     ...buildAnalysisNote(alternatives),
+    `## NOTA PER L'ANALISI POST-CHIAMATA — casi particolari (NON pronunciarla):`,
+    `- Numero sbagliato / la persona non è conosciuta: esito_appuntamento = numero_errato.`,
+    startTime
+      ? `- Confermato con un piccolo aggiustamento d'orario (pochi minuti, stesso giorno): esito_appuntamento = confermato, nuovo_orario_richiesto = l'orario concordato (HH:MM), nuova_data_richiesta vuota.`
+      : null,
+    `- Ha risposto l'agente immobiliare e ha accettato: esito_appuntamento = confermato (NON altro_referente: il referente era già al telefono), nuovo_referente_ruolo = agente immobiliare, nuovo_referente_nome = il suo nome se l'ha detto, nuovo_referente_telefono vuoto.`,
+    ``,
     `## REGOLE:`,
     `- Inizia a parlare direttamente con l'APERTURA: non leggere MAI ad alta voce titoli, etichette o nomi di sezione dello script o del flusso di conversazione (es. "presentazione", "apertura", "step 1").`,
     `- Tono cortese e professionale; non fornire MAI l'importo del finanziamento o altri dati sensibili.`,
     isUrgent ? `- URGENZA: questa pratica è URGENTE — comunicalo chiaramente al cliente e, se chiede di spostare, ricorda con garbo che sarebbe preferibile anticipare, non posticipare.` : null,
-    hasAlternatives ? `- DISPONIBILITÀ: oltre all'appuntamento proposto, puoi offrire o fissare SOLO gli slot alternativi indicati. Non inventare MAI altre date o orari.` : null,
-    `- ORARI: pronunciali in italiano colloquiale — "alle nove", "alle nove e mezza", "alle quindici". MAI leggere le cifre una a una ("zero nove e zero zero" è VIETATO).`,
-    `- INDIRIZZO: quando citi il luogo dell'immobile di' SOLO via, numero civico e città (es. "Via Roma 10, Milano"). NON pronunciare MAI CAP, provincia, quartiere, frazione, regione o la parola "Italia".`,
+    hasAlternatives ? `- DISPONIBILITÀ: oltre all'appuntamento proposto, puoi offrire o fissare SOLO gli slot alternativi indicati (oltre al piccolo aggiustamento di al massimo dieci minuti dell'orario proposto). Non inventare MAI altre date o orari.` : null,
+    `- NUMERI: scrivi SEMPRE i numeri IN LETTERE, MAI in cifre (la voce legge male le cifre): date "lunedì sedici novembre", orari "alle quindici e venti", "alle nove e mezza" (MAI "zero nove e zero zero"), civici "Via Roma dieci", durate "quindici minuti". I NUMERI DI TELEFONO ripetili cifra per cifra, in lettere e a gruppi: "tre nove tre, otto tre tre, sei due otto cinque".`,
+    `- INDIRIZZO: quando citi il luogo dell'immobile di' SOLO via, numero civico e città (es. "Via Roma dieci, Milano"). NON pronunciare MAI CAP, provincia, quartiere, frazione, regione o la parola "Italia".`,
     `- Ringrazia e saluta prima di chiudere la chiamata.`,
   ].filter(line => line !== null).join('\n');
 
@@ -474,6 +613,7 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
     presentazione: presentazione,
     motivo_chiamata: motivoChiamata,
     spiegazione_motivo: spiegazioneMotivo,
+    spiegazione_agenzia: spiegazioneAgenzia,
     info_sopralluogo: infoSopralluogo,
     proposta: proposta,
     agenda_giorno: daySchedule || '',

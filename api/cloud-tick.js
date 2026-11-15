@@ -92,6 +92,72 @@ var MESI_IT = [
   "novembre",
   "dicembre"
 ];
+var UNITA_IT = [
+  "zero",
+  "uno",
+  "due",
+  "tre",
+  "quattro",
+  "cinque",
+  "sei",
+  "sette",
+  "otto",
+  "nove",
+  "dieci",
+  "undici",
+  "dodici",
+  "tredici",
+  "quattordici",
+  "quindici",
+  "sedici",
+  "diciassette",
+  "diciotto",
+  "diciannove"
+];
+var DECINE_IT = ["", "", "venti", "trenta", "quaranta", "cinquanta", "sessanta", "settanta", "ottanta", "novanta"];
+var sottoCento = (n) => {
+  if (n < 20) return UNITA_IT[n];
+  const d = Math.floor(n / 10);
+  const u = n % 10;
+  if (!u) return DECINE_IT[d];
+  const decina = u === 1 || u === 8 ? DECINE_IT[d].slice(0, -1) : DECINE_IT[d];
+  return decina + (u === 3 ? "tré" : UNITA_IT[u]);
+};
+var sottoMille = (n) => {
+  const c = Math.floor(n / 100);
+  const r = n % 100;
+  const centinaia = c === 0 ? "" : c === 1 ? "cento" : `${UNITA_IT[c]}cento`;
+  if (!r) return centinaia || "zero";
+  const resto = centinaia && r === 3 ? "tré" : sottoCento(r);
+  return centinaia && resto.startsWith("ott") ? centinaia.slice(0, -1) + resto : centinaia + resto;
+};
+var numeroInLettere = (n) => {
+  if (!Number.isInteger(n) || n < 0 || n > 999999) return String(n);
+  if (n < 1e3) return sottoMille(n);
+  const migliaia = Math.floor(n / 1e3);
+  const resto = n % 1e3;
+  const testa = migliaia === 1 ? "mille" : `${sottoMille(migliaia)}mila`;
+  if (!resto) return testa;
+  return testa + (resto === 3 ? "tré" : sottoMille(resto));
+};
+var ORDINALI_IT = ["", "primo", "secondo", "terzo", "quarto", "quinto", "sesto", "settimo", "ottavo", "nono", "decimo"];
+var ROMANI = { I: 1, V: 5, X: 10, L: 50 };
+var daRomano = (r) => {
+  let tot = 0;
+  for (let i = 0; i < r.length; i++) {
+    const v = ROMANI[r[i]];
+    const dopo = ROMANI[r[i + 1]] || 0;
+    tot += v < dopo ? -v : v;
+  }
+  return tot;
+};
+var ROMANO_DEL_MESE = /\b([IVXL]{1,6})\s+(?=(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b)/gi;
+var PRIMO_DEL_MESE = /\b1\s+(?=(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b)/gi;
+var numeriInLettere = (text) => text.replace(/\b(\d{1,2})\s*[°ºª]/g, (_m, d) => ORDINALI_IT[+d] || numeroInLettere(+d)).replace(ROMANO_DEL_MESE, (m, r) => {
+  if (r !== r.toUpperCase()) return m;
+  const n = daRomano(r);
+  return n >= 1 && n <= 31 ? `${n === 1 ? "primo" : numeroInLettere(n)} ` : m;
+}).replace(PRIMO_DEL_MESE, "primo ").replace(/(\d)\s*\/\s*(?=[\dA-Za-z])/g, "$1 barra ").replace(/(\d)(bis|ter|quater)\b/gi, (_m, d, suf) => `${d} ${suf.toLowerCase()}`).replace(/(\d)(?=[A-Za-z])/g, "$1 ").replace(/\d+/g, (d) => d.length > 1 && d.startsWith("0") ? d.split("").map((c) => UNITA_IT[+c]).join(" ") : numeroInLettere(parseInt(d, 10)));
 var parseIsoDateParts = (isoDate) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate.trim());
   if (!m) return void 0;
@@ -106,7 +172,8 @@ var formatDateItalian = (isoDate) => {
   if (!isoDate) return "";
   const date = parseIsoDateParts(isoDate);
   if (!date) return isoDate;
-  return `${GIORNI_IT[date.getDay()]} ${date.getDate()} ${MESI_IT[date.getMonth()]}`;
+  const giorno = date.getDate() === 1 ? "primo" : numeroInLettere(date.getDate());
+  return `${GIORNI_IT[date.getDay()]} ${giorno} ${MESI_IT[date.getMonth()]}`;
 };
 var REGIONI_IT = [
   "abruzzo",
@@ -150,11 +217,25 @@ var oraParlata = (hhmm) => {
   const [hStr, mStr] = hhmm.split(":");
   const h = parseInt(hStr, 10);
   const m = parseInt(mStr || "0", 10);
-  if (isNaN(h)) return hhmm;
-  if (!m) return `${h}`;
-  if (m === 30) return `${h} e mezza`;
-  return `${h} e ${m}`;
+  if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) return hhmm;
+  const ore = numeroInLettere(h);
+  if (!m) return ore;
+  if (m === 30) return `${ore} e mezza`;
+  return `${ore} e ${numeroInLettere(m)}`;
 };
+var orariInLettere = (text) => text.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (m) => oraParlata(m));
+var spostaOrario = (hhmm, delta) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return void 0;
+  const tot = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + delta;
+  if (tot < 0 || tot >= 24 * 60) return void 0;
+  return `${String(Math.floor(tot / 60)).padStart(2, "0")}:${String(tot % 60).padStart(2, "0")}`;
+};
+var ruoloReferente = (contactPerson) => {
+  const parts = (typeof contactPerson === "string" ? contactPerson : "").split(/\s+[—–]\s+/);
+  return parts.length > 1 ? parts.slice(1).join(" ").trim() : "";
+};
+var E_AGENZIA = /agen[tz]|immobiliar/i;
 var nomeParlato = (raw) => {
   const name = (typeof raw === "string" ? raw : "").replace(/\s+/g, " ").trim();
   if (!name || name !== name.toUpperCase()) return name;
@@ -212,7 +293,7 @@ var buildAlternativesSection = (alternatives) => {
     ...spoken.map((s, i) => `  ${i + 1}) ${s}`),
     `- Di' al cliente SOLO giorno e ora (es. "Potrebbe andarle bene ${spoken[0]}?"): NON leggere MAI lettere, numeri o etichette delle alternative.`,
     `- Se ne ACCETTA una → confermala esplicitamente ripetendo giorno e ora: "Perfetto, allora le confermo il sopralluogo per <giorno> alle <ora>." Spiega al cliente che è un appuntamento FISSATO: da quel momento l'appuntamento valido è quello (non più quello proposto all'inizio). Ringrazia e saluta.`,
-    `- Se chiede un giorno o un orario DIVERSO da questi → non confermarlo e non dire che "dovrebbe essere possibile": proponi le alternative rimaste.`,
+    `- Se chiede un giorno o un orario DIVERSO da questi → non confermarlo e non dire che "dovrebbe essere possibile": proponi le alternative rimaste. (Unica eccezione: il piccolo aggiustamento di al massimo dieci minuti dell'orario proposto all'inizio, descritto nella gestione della risposta.)`,
     `- Se NESSUNA va bene → NON inventare altre disponibilità e NON promettere orari: chiedi quando preferirebbe (giorno e fascia oraria), prendine nota e di' che verrà ricontattato con una nuova proposta.`,
     ``
   ];
@@ -250,16 +331,23 @@ var buildCallData = (input) => {
   const timeSpoken = startTime ? `alle ${oraParlata(startTime)}` : "in orario da definire";
   const isReferral = !!contactPerson;
   const isUrgent = urgent === true || urgent === "true";
-  const luogoBreve = shortAddress || comune ? [shortAddress, comune].filter(Boolean).join(", ") : address ? cleanDisplayName(address) : "indirizzo da comunicare";
-  const luogoImmobile = comune && shortAddress ? `di ${comune} in ${shortAddress}` : `in ${luogoBreve}`;
+  const luogoBreve = numeriInLettere(shortAddress || comune ? [shortAddress, comune].filter(Boolean).join(", ") : address ? cleanDisplayName(address) : "indirizzo da comunicare");
+  const luogoImmobile = comune && shortAddress ? numeriInLettere(`di ${comune} in ${shortAddress}`) : `in ${luogoBreve}`;
   const interlocutore = nomeDaChiamare(isReferral ? contactPerson : clientName, { address, shortAddress, comune });
   const chiCerchiamo = isReferral ? "la persona di riferimento per il sopralluogo" : "l'intestatario della pratica";
+  const referenteAgenzia = isReferral && E_AGENZIA.test(ruoloReferente(contactPerson));
+  const nomeCliente = nomeDaChiamare(clientName, { address, shortAddress, comune });
   const motivoChiamata = `Sono ${AGENT_NAME} di ${COMPANY_NAME}, per conto di ${MANDANTE}, per la perizia sull'immobile ${luogoImmobile}.`;
-  const immobileViaComune = shortAddress && comune ? `${shortAddress} a ${comune}` : luogoBreve;
+  const immobileViaComune = shortAddress && comune ? numeriInLettere(`${shortAddress} a ${comune}`) : luogoBreve;
   const spiegazioneMotivo = `La chiamata è relativa alla richiesta di mutuo effettuata per l'immobile di ${immobileViaComune}: per procedere con la lavorazione della perizia è necessario effettuare il sopralluogo interno presso l'immobile.`;
-  const infoSopralluogo = `Il sopralluogo si svolge con rilievi fotografici e metrici, con misure a campione. Dura circa 15 minuti se si tratta di un appartamento, circa 25 minuti se si tratta di una villa.`;
+  const presentazioneBreve = `Sono ${AGENT_NAME} di ${COMPANY_NAME}, per conto di ${MANDANTE}.`;
+  const spiegazioneAgenzia = `La chiamo per la pratica di mutuo ${nomeCliente ? `di ${nomeCliente}` : "del vostro cliente"} per l'immobile che avete in gestione in ${immobileViaComune}: per procedere con la perizia è necessario effettuare il sopralluogo interno presso l'immobile.`;
+  const infoSopralluogo = `Il sopralluogo si svolge con rilievi fotografici e metrici, con misure a campione. Dura circa quindici minuti se si tratta di un appartamento, circa venticinque minuti se si tratta di una villa.`;
+  const orarioMin = startTime ? spostaOrario(startTime, -10) : void 0;
+  const orarioMax = startTime ? spostaOrario(startTime, 10) : void 0;
   const presentazione = interlocutore ? `Buongiorno, parlo con ${interlocutore}?` : `Buongiorno, s${motivoChiamata.slice(1)} Parlo con ${chiCerchiamo}?`;
   const proposta = dateSpoken && startTime ? `La chiamavo per proporle la data del sopralluogo del perito: avremmo disponibilità per ${dateSpoken} alle ${oraParlata(startTime)}. Può andarle bene?` : `La chiamavo per concordare la data del sopralluogo del perito: prendo nota delle sue disponibilità e verrà ricontattato con la proposta di giorno e orario.`;
+  const propostaBreve = dateSpoken && startTime ? `Avremmo disponibilità per ${dateSpoken} alle ${oraParlata(startTime)}. Può andarle bene?` : proposta;
   const gestioneSpostamento = hasAlternatives ? [
     `  * passa agli SLOT ALTERNATIVI (sezione qui sotto): offrili uno alla volta e, se ne accetta uno, fissalo.`,
     `  * NON dare per possibile nessun altro giorno o orario: oltre a quello proposto, le uniche disponibilità sono gli slot alternativi.`,
@@ -281,22 +369,27 @@ var buildCallData = (input) => {
     interlocutore ? `   NON presentarti e NON dire perché chiami prima che l'interlocutore abbia risposto: la prima frase serve SOLO a verificare con chi parli.` : null,
     ``,
     `2. PRESENTAZIONE E PROPOSTA — quando l'interlocutore conferma di essere la persona giusta, in UN'UNICA risposta:`,
-    interlocutore ? `   a) presentati e spiega perché chiami: "${motivoChiamata}" — ma se ti sei GIÀ presentata in questa chiamata (perché ha chiesto chi parla o per cosa), NON ripeterlo: passa direttamente al punto b).` : `   a) ti sei già presentata nell'apertura: NON ripetere la presentazione.`,
-    isReferral ? `      CONTESTO REFERENTE — NON stai chiamando l'intestatario: stai chiamando ${interlocutore || "la persona di riferimento"}, il cui numero ti è stato indicato da ${referredBy || "l'intestatario della pratica"} come riferimento per il sopralluogo. Spiega in breve che l'appuntamento riguarda l'immobile dell'intestatario${clientName ? ` (${nomeParlato(clientName)})` : ""} e che sei stata indirizzata a lui/lei.` : null,
-    `   b) PROPONI l'appuntamento con questa frase (non darlo MAI per già confermato: l'operatrice propone, il cliente conferma):`,
-    `"${proposta}"`,
+    referenteAgenzia ? `   a) presentati, spiega il motivo e proponi, SENZA ripetere l'indirizzo due volte: "${presentazioneBreve} ${spiegazioneAgenzia} ${propostaBreve}" — ma se ti sei GIÀ presentata in questa chiamata (nell'apertura o perché ha chiesto chi parla), NON ripetere la presentazione: di' solo "${spiegazioneAgenzia} ${propostaBreve}"` : interlocutore ? `   a) presentati e spiega perché chiami: "${motivoChiamata}" — ma se ti sei GIÀ presentata in questa chiamata (perché ha chiesto chi parla o per cosa), NON ripeterlo: passa direttamente al punto b).` : `   a) ti sei già presentata nell'apertura: NON ripetere la presentazione.`,
+    isReferral ? referenteAgenzia ? `      CONTESTO REFERENTE — stai chiamando l'AGENTE IMMOBILIARE che ha in gestione l'immobile, indicato ${referredBy ? `da ${referredBy}` : "dall'intestatario della pratica"} come riferimento per il sopralluogo. La pratica di mutuo è del suo cliente${nomeCliente ? ` (${nomeCliente})` : ""}.` : `      CONTESTO REFERENTE — NON stai chiamando l'intestatario: stai chiamando ${interlocutore || "la persona di riferimento"}, il cui numero ti è stato indicato ${referredBy ? `da ${referredBy}` : "dall'intestatario della pratica"} come riferimento per il sopralluogo. Spiega in breve che l'appuntamento riguarda l'immobile dell'intestatario${clientName ? ` (${nomeParlato(clientName)})` : ""} e che sei stata indirizzata a lui/lei.` : null,
+    referenteAgenzia ? `   b) la proposta è già nel punto a): non darla MAI per già confermata, l'operatrice propone e l'agente conferma.` : `   b) PROPONI l'appuntamento con questa frase (non darlo MAI per già confermato: l'operatrice propone, il cliente conferma):`,
+    referenteAgenzia ? null : `"${proposta}"`,
     ``,
-    `   Se PRIMA di confermare chiede "chi parla?" o "per cosa?" → rispondi presentandoti: "${motivoChiamata}", poi chiedi di nuovo se parli con ${interlocutore || chiCerchiamo}.`,
-    `   Se NON è la persona cercata → ${interlocutore ? `PRIMA presentati e spiega perché chiami ("${motivoChiamata}"), SOLO DOPO` : "senza ripetere la presentazione,"} chiedi se può passarti ${interlocutore || chiCerchiamo} oppure chi è la persona giusta da contattare per il sopralluogo. NON chiedere nomi o numeri prima di aver spiegato chi sei e perché chiami.`,
-    `   Se DOPO aver confermato chi è chiede "di cosa si tratta?" o dice di non aver capito → NON chiedere di nuovo con chi parli (lo sai già): spiega con questa frase "${spiegazioneMotivo}" e poi riprendi la proposta.`,
-    `   Il MUTUO citalo SOLO a chi ha confermato di essere ${interlocutore || chiCerchiamo}: a chiunque altro di' solo chi sei e che chiami per la perizia sull'immobile.`,
+    `   Se PRIMA di confermare chiede "chi parla?" o "per cosa?" → rispondi presentandoti: "${referenteAgenzia ? presentazioneBreve : motivoChiamata}", poi chiedi di nuovo se parli con ${interlocutore || chiCerchiamo}.`,
+    `   Se dice che il NUMERO È SBAGLIATO o che NON CONOSCE ${interlocutore ? `nessuno che si chiama ${interlocutore}` : "nessuno legato a questa pratica o a questo immobile"} → NON insistere: niente presentazione, niente domande su altri contatti. Scusati per il disturbo, saluta e CHIUDI SUBITO la chiamata (es. "Mi scusi per il disturbo, buona giornata."). Vale anche se lo dice DOPO la tua spiegazione: non ripetere la spiegazione e non fare altre domande.`,
+    `   ATTENZIONE: chi CONOSCE la persona cercata (un familiare, un collega, "se ne occupa lui", "io non c'entro, è di mio marito") NON è un numero sbagliato: vale la regola "Se NON è la persona cercata" qui sotto.`,
+    `   Se chi risponde dice di essere l'AGENTE IMMOBILIARE (o l'agenzia) che segue l'immobile → è la persona GIUSTA per il sopralluogo: NON chiedergli di passarti qualcun altro e NON chiedergli nome e numero di telefono (lo stai già chiamando). Presentati ("${presentazioneBreve}"), spiega il motivo con questa frase: "${spiegazioneAgenzia}" e poi PROPONI l'appuntamento: "${propostaBreve}". Il suo nome chiedilo solo alla fine, per annotarlo, se non te l'ha già detto.`,
+    `   Se NON è la persona cercata (e non è l'agente immobiliare) → ${interlocutore ? `PRIMA presentati e spiega perché chiami ("${motivoChiamata}"), SOLO DOPO` : "senza ripetere la presentazione,"} chiedi se può passarti ${interlocutore || chiCerchiamo} oppure chi è la persona giusta da contattare per il sopralluogo. NON chiedere nomi o numeri prima di aver spiegato chi sei e perché chiami.`,
+    `   Se DOPO aver confermato chi è chiede "di cosa si tratta?" o dice di non aver capito → NON chiedere di nuovo con chi parli (lo sai già): spiega con questa frase "${referenteAgenzia ? spiegazioneAgenzia : spiegazioneMotivo}" e poi riprendi la proposta.`,
+    `   Il MUTUO citalo SOLO a chi ha confermato di essere ${interlocutore || chiCerchiamo} o all'agente immobiliare che segue l'immobile: a chiunque altro di' solo chi sei e che chiami per la perizia sull'immobile.`,
     ``,
     `3. GESTIONE DELLA RISPOSTA:`,
     `- ACCETTA giorno e orario → ripeti chiaramente data e ora, ringrazia e saluta.`,
-    `- È TITUBANTE o chiede di spostare → l'obiettivo è CONSERVARE l'appuntamento proposto: fai UN SOLO tentativo, gentile ma deciso, es.: "Guardi, le dico la verità: ci verrebbe difficile riprogrammare, l'agenda è pressoché piena e spostare il sopralluogo potrebbe allungare i tempi della sua pratica. È sicuro di non riuscire a esserci? In alternativa può anche delegare qualcuno: un familiare, l'agente immobiliare, il geometra...". Se delega qualcuno, raccogli NOME, TELEFONO e RUOLO del delegato (e ripeti il numero per conferma). Se invece insiste per spostare, NON forzare oltre — accondiscendi con garbo e procedi:`,
+    startTime ? `- Chiede di ANTICIPARE o POSTICIPARE di POCHI MINUTI l'orario PROPOSTO all'inizio (una decina di minuti, al massimo un quarto d'ora, stesso giorno) → NON è uno spostamento, anche se ci sono slot alternativi: NON usare la frase sull'agenda piena. Chiedi con gentilezza se riesce a essere puntuale, es.: "Il perito ha diversi sopralluoghi in giornata e gli orari sono un po' stretti: riuscirebbe a esserci alle ${oraParlata(startTime)}?". Se proprio non riesce, puoi concedere AL MASSIMO dieci minuti${orarioMin && orarioMax ? ` (quindi non prima delle ${oraParlata(orarioMin)} e non dopo le ${oraParlata(orarioMax)})` : ""}: fissa l'orario concordato, chiedi la cortesia di essere puntuale perché il perito ha altri appuntamenti subito dopo, e nella conferma ripeti giorno e NUOVO orario. Non proporre MAI un orario diverso da quello appena concordato. L'aggiustamento vale SOLO per l'orario proposto all'inizio: gli slot alternativi non si spostano. Se chiede PIÙ di dieci minuti e non accetta i dieci minuti → NON concederlo: vale la regola dello spostamento qui sotto.` : null,
+    `- È TITUBANTE o chiede di spostare (un altro giorno, o più dei dieci minuti concedibili) → l'obiettivo è CONSERVARE l'appuntamento proposto: fai UN SOLO tentativo, gentile ma deciso, es.: "Guardi, le dico la verità: ci verrebbe difficile riprogrammare, l'agenda è pressoché piena e spostare il sopralluogo potrebbe allungare i tempi della sua pratica. È sicuro di non riuscire a esserci? In alternativa può anche delegare qualcuno: un familiare, l'agente immobiliare, il geometra...". Se delega qualcuno, raccogli NOME, TELEFONO e RUOLO del delegato (e ripeti il numero per conferma). Se stai parlando con l'AGENTE IMMOBILIARE: di' "la pratica del suo cliente" (non "la sua pratica") e NON proporgli di delegare l'agente immobiliare. Se invece insiste per spostare, NON forzare oltre — accondiscendi con garbo e procedi:`,
     ...gestioneSpostamento,
     `- RIFIUTA / la perizia non serve più → prendi atto cortesemente e chiudi.`,
-    `- NON è lui la persona da contattare (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → dopo aver spiegato chi sei e perché chiami, fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
+    `- NUMERO SBAGLIATO / non conosce la persona → scusati e chiudi subito, senza altre domande.`,
+    `- Ti indica un'ALTRA persona da contattare, diversa da chi è al telefono (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → dopo aver spiegato chi sei e perché chiami, fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
     ``,
     `## DOMANDE SUL SOPRALLUOGO (rispondi SOLO se te lo chiedono, con parole tue e in breve):`,
     `- Come si svolge / cosa fa il perito / quanto dura → "${infoSopralluogo}"`,
@@ -304,13 +397,13 @@ var buildCallData = (input) => {
     ``,
     ...buildAlternativesSection(alternatives),
     `## AGENDA DEL GIORNO (solo per tua consultazione — NON elencarla al cliente, non citare altri clienti):`,
-    `${daySchedule || agendaFallback}`,
+    `${daySchedule ? orariInLettere(daySchedule) : agendaFallback}`,
     ``,
     `## DATI APPUNTAMENTO:`,
     `- Immobile (pronuncia SOLO questo: via, civico e città): ${luogoBreve}`,
     address ? `- Indirizzo esteso (solo riferimento interno, NON leggerlo al cliente): ${address}` : null,
     dateSpoken ? `- Giorno proposto: ${dateSpoken}` : `- Giorno: da definire`,
-    startTime ? `- Orario proposto: ${startTime}${endTime ? ` (indicativamente fino alle ${endTime})` : ""}` : `- Orario: da definire`,
+    startTime ? `- Orario proposto: alle ${oraParlata(startTime)}${endTime ? ` (indicativamente fino alle ${oraParlata(endTime)})` : ""}` : `- Orario: da definire`,
     technicianName ? `- Il sopralluogo sarà effettuato da ${technicianName}: puoi citarlo al cliente (es. "verrà il nostro tecnico ${technicianName}").` : null,
     isUrgent ? `- Priorità: URGENTE — dillo esplicitamente al cliente: il sopralluogo va effettuato il prima possibile.` : null,
     isReferral && clientName ? `- Intestatario della pratica: ${clientName}` : null,
@@ -318,13 +411,18 @@ var buildCallData = (input) => {
     notes ? `- Note interne (NON leggerle al cliente, servono a te): ${notes}` : null,
     ``,
     ...buildAnalysisNote(alternatives),
+    `## NOTA PER L'ANALISI POST-CHIAMATA — casi particolari (NON pronunciarla):`,
+    `- Numero sbagliato / la persona non è conosciuta: esito_appuntamento = numero_errato.`,
+    startTime ? `- Confermato con un piccolo aggiustamento d'orario (pochi minuti, stesso giorno): esito_appuntamento = confermato, nuovo_orario_richiesto = l'orario concordato (HH:MM), nuova_data_richiesta vuota.` : null,
+    `- Ha risposto l'agente immobiliare e ha accettato: esito_appuntamento = confermato (NON altro_referente: il referente era già al telefono), nuovo_referente_ruolo = agente immobiliare, nuovo_referente_nome = il suo nome se l'ha detto, nuovo_referente_telefono vuoto.`,
+    ``,
     `## REGOLE:`,
     `- Inizia a parlare direttamente con l'APERTURA: non leggere MAI ad alta voce titoli, etichette o nomi di sezione dello script o del flusso di conversazione (es. "presentazione", "apertura", "step 1").`,
     `- Tono cortese e professionale; non fornire MAI l'importo del finanziamento o altri dati sensibili.`,
     isUrgent ? `- URGENZA: questa pratica è URGENTE — comunicalo chiaramente al cliente e, se chiede di spostare, ricorda con garbo che sarebbe preferibile anticipare, non posticipare.` : null,
-    hasAlternatives ? `- DISPONIBILITÀ: oltre all'appuntamento proposto, puoi offrire o fissare SOLO gli slot alternativi indicati. Non inventare MAI altre date o orari.` : null,
-    `- ORARI: pronunciali in italiano colloquiale — "alle nove", "alle nove e mezza", "alle quindici". MAI leggere le cifre una a una ("zero nove e zero zero" è VIETATO).`,
-    `- INDIRIZZO: quando citi il luogo dell'immobile di' SOLO via, numero civico e città (es. "Via Roma 10, Milano"). NON pronunciare MAI CAP, provincia, quartiere, frazione, regione o la parola "Italia".`,
+    hasAlternatives ? `- DISPONIBILITÀ: oltre all'appuntamento proposto, puoi offrire o fissare SOLO gli slot alternativi indicati (oltre al piccolo aggiustamento di al massimo dieci minuti dell'orario proposto). Non inventare MAI altre date o orari.` : null,
+    `- NUMERI: scrivi SEMPRE i numeri IN LETTERE, MAI in cifre (la voce legge male le cifre): date "lunedì sedici novembre", orari "alle quindici e venti", "alle nove e mezza" (MAI "zero nove e zero zero"), civici "Via Roma dieci", durate "quindici minuti". I NUMERI DI TELEFONO ripetili cifra per cifra, in lettere e a gruppi: "tre nove tre, otto tre tre, sei due otto cinque".`,
+    `- INDIRIZZO: quando citi il luogo dell'immobile di' SOLO via, numero civico e città (es. "Via Roma dieci, Milano"). NON pronunciare MAI CAP, provincia, quartiere, frazione, regione o la parola "Italia".`,
     `- Ringrazia e saluta prima di chiudere la chiamata.`
   ].filter((line) => line !== null).join("\n");
   const altSpoken = (label) => {
@@ -338,6 +436,7 @@ var buildCallData = (input) => {
     presentazione,
     motivo_chiamata: motivoChiamata,
     spiegazione_motivo: spiegazioneMotivo,
+    spiegazione_agenzia: spiegazioneAgenzia,
     info_sopralluogo: infoSopralluogo,
     proposta,
     agenda_giorno: daySchedule || "",
@@ -1432,8 +1531,14 @@ var resolveAlternative = (appt, label, all, technicians, fallback, now) => {
 var parseTimeText = (text) => {
   if (!text) return null;
   const t = text.toLowerCase();
-  const hm = t.match(/\b([01]?\d|2[0-3])\s*(?:[:.,]|\s+e\s+)\s*([0-5]\d)\b/);
-  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
+  const hm = t.match(/\b([01]?\d|2[0-3])\s*(?:[:.,]\s*([0-5]\d)|\s+e\s+(5|[0-5]\d))\b/);
+  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2] ?? hm[3], 10);
+  const parole = t.match(/\b([01]?\d|2[0-3])\s+(e\s+mezz[ao]|e\s+un\s+quarto|meno\s+un\s+quarto)\b/);
+  if (parole) {
+    const ora = parseInt(parole[1], 10) * 60;
+    if (parole[2].startsWith("meno")) return ora - 15;
+    return ora + (parole[2].includes("quarto") ? 15 : 30);
+  }
   const h = t.match(/\b(?:ore|alle|all[e']?)\s*([01]?\d|2[0-3])\b/) || t.match(/^\s*([01]?\d|2[0-3])\s*$/);
   if (h) return parseInt(h[1], 10) * 60;
   return null;
@@ -1600,6 +1705,80 @@ var reduceCallLaunchResult = (all, id, result, now) => all.map((a) => {
     callSummary: result.error || "Chiamata non avviata"
   };
 });
+var SMALL_SHIFT_MAX_MIN = 10;
+var GIORNI_TESTO = ["domenica", "lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato"];
+var MESI_TESTO = [
+  "gennaio",
+  "febbraio",
+  "marzo",
+  "aprile",
+  "maggio",
+  "giugno",
+  "luglio",
+  "agosto",
+  "settembre",
+  "ottobre",
+  "novembre",
+  "dicembre"
+];
+var senzaAccenti = (t) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+var sameDayText = (text, date) => {
+  const [y, m, d] = date.split("-").map((n) => parseInt(n, 10));
+  const gm = /^\s*(\d{1,2})\/(\d{1,2})\s*$/.exec(text);
+  if (gm) return parseInt(gm[1], 10) === d && parseInt(gm[2], 10) === m;
+  const parsed = parseFollowUpDate(text);
+  if (parsed) return parsed === date;
+  const day = new Date(y, m - 1, d);
+  const t = senzaAccenti(text);
+  if (GIORNI_TESTO.some((g, i) => i !== day.getDay() && t.includes(g))) return false;
+  if (MESI_TESTO.some((mese, i) => i !== m - 1 && t.includes(mese))) return false;
+  if ((t.match(/\d+/g) || []).some((n) => ![d, m, y].includes(parseInt(n, 10)))) return false;
+  if (/domani|dopodomani|settimana|prossim/.test(t)) return false;
+  return true;
+};
+var smallTimeShift = (a, outcome) => {
+  if (!a.date || !a.startTime) return void 0;
+  const nuovo = sameDayRequestedTime(a, outcome);
+  if (nuovo === void 0) return void 0;
+  const delta = nuovo - toMin(a.startTime);
+  if (delta === 0 || Math.abs(delta) > SMALL_SHIFT_MAX_MIN) return void 0;
+  return toHHMM(nuovo);
+};
+var sameDayRequestedTime = (a, outcome) => {
+  if (!a.date || !a.startTime || !outcome.requestedTime) return void 0;
+  if (/\b(tra|fra|dalle|verso|circa|oppure|o)\b|\d\s*-\s*\d/i.test(outcome.requestedTime)) return void 0;
+  const requested = parseTimeText(outcome.requestedTime);
+  if (requested === null) return void 0;
+  if (outcome.requestedDate && !sameDayText(outcome.requestedDate, a.date)) return void 0;
+  return requested;
+};
+var confirmedTimeMismatch = (a, outcome) => {
+  const nuovo = sameDayRequestedTime(a, outcome);
+  if (nuovo === void 0) return void 0;
+  const delta = nuovo - toMin(a.startTime);
+  return Math.abs(delta) > SMALL_SHIFT_MAX_MIN ? toHHMM(nuovo) : void 0;
+};
+var shiftFitsRoute = (all, a, newStart, newEnd, day) => {
+  if (!a.date || !a.startTime || !a.coords) return true;
+  if (!day) return false;
+  const oldStart = toMin(a.startTime);
+  const route = getDayRoute(all, a.technicianId, a.date, a.id);
+  const prev = route.filter((s) => s.start < oldStart).pop();
+  const next = route.find((s) => s.start >= oldStart);
+  const pausaPrima = a.hasLunchBreakBefore ? LUNCH_MINUTES : 0;
+  if (prev?.coords) {
+    if (prev.end + travelMinutes(prev.coords, a.coords) + pausaPrima > newStart) return false;
+  } else if (day.windowStart + (day.base ? travelMinutes(day.base, a.coords) : 0) > newStart) {
+    return false;
+  }
+  if (next?.coords) {
+    const pausaDopo = next.lunchBefore ? LUNCH_MINUTES : 0;
+    if (newEnd + travelMinutes(a.coords, next.coords) + pausaDopo > next.start) return false;
+  } else if (newEnd + (day.base ? travelMinutes(a.coords, day.base) : 0) > day.windowEnd) {
+    return false;
+  }
+  return true;
+};
 var ALTERNATIVE_RESULTS = ["confermato", "riprogrammare", "da_richiamare", "sconosciuto"];
 var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
   const a = all.find((x) => x.id === id);
@@ -1674,13 +1853,40 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
     }
   } else {
     switch (outcome.result) {
-      case "confermato":
+      case "confermato": {
+        const nuovoInizio = smallTimeShift(a, outcome);
+        const delta = nuovoInizio ? toMin(nuovoInizio) - toMin(a.startTime) : 0;
+        const vecchiaFine = a.endTime ? toMin(a.endTime) : toMin(a.startTime) + durationOf(a);
+        const regge = !!nuovoInizio && shiftFitsRoute(
+          list,
+          a,
+          toMin(nuovoInizio),
+          vecchiaFine + delta,
+          dayContextFor(techById(ctx.technicians, a.technicianId), a.date, ctx.fallback)
+        );
+        const oltreLimite = confirmedTimeMismatch(a, outcome);
         list = replaceById(list, {
           ...base,
+          ...nuovoInizio && regge ? {
+            startTime: nuovoInizio,
+            endTime: a.endTime ? toHHMM(toMin(a.endTime) + delta) : a.endTime,
+            notes: addNote(a.notes, `Orario aggiustato su richiesta del cliente: ${nuovoInizio} (era ${a.startTime})`)
+          } : nuovoInizio ? {
+            notes: addNote(
+              a.notes,
+              `ATTENZIONE: in chiamata al cliente sono state concesse le ${nuovoInizio} (proposto ${a.startTime}), ma il giro non lo consente: avvisare il cliente o il tecnico`
+            )
+          } : oltreLimite ? {
+            notes: addNote(
+              a.notes,
+              `ATTENZIONE: confermato ma l'esito riporta le ${oltreLimite} (proposto ${a.startTime}): verificare l'orario con il cliente`
+            )
+          } : {},
           status: a.status === "proposed" ? "confirmed" : base.status,
           callAttempts: 0
         });
         break;
+      }
       case "riprogrammare": {
         const quando = [outcome.requestedDate, outcome.requestedTime].filter(Boolean).join(" ");
         reschedule(
@@ -2254,7 +2460,8 @@ var interpretRetellCall = (raw) => {
       newContactName,
       newContactPhone,
       newContactRole,
-      summary: typeof analysis.call_summary === "string" ? analysis.call_summary : void 0,
+      // Riassunto in italiano dal campo custom `riassunto`; se manca, quello di Retell
+      summary: pickString(custom, ["riassunto", "riassunto_chiamata", "summary_it"]) || (typeof analysis.call_summary === "string" ? analysis.call_summary : void 0),
       sentiment: typeof analysis.user_sentiment === "string" ? analysis.user_sentiment : void 0
     }
   };

@@ -10,6 +10,8 @@ import { loadTechnicians, saveTechnicians, matchTechnician, isFullyUnavailable, 
 import { fetchCallOutcome, startConfirmationCall } from './services/callService';
 import {
   DEFAULT_AUTOPILOT_SETTINGS,
+  effectiveAutopilotSettings,
+  storableAutopilotSettings,
   type AutopilotSettings,
   type AttentionItem,
   type PlanningContext,
@@ -66,6 +68,10 @@ import type { SectionId, Workspace } from './layout/types';
 import { inAgendaRange, longDayLabel, matchesQuery, plural, rangeLabel } from './layout/format';
 import { DEFAULT_SORT, filterByStatus, sortPratiche, statusCounts, type SortState, type StatusFilter } from './layout/praticheTable';
 import { NAV_ITEMS } from './layout/SideNav';
+import TestModeBanner from './Components/TestModeBanner';
+import TestPraticheModal from './Components/TestPraticheModal';
+import { testModeTitle, useTestMode } from './services/testMode';
+import { isTestPratica, loadTestScenario, removeTestPratiche } from './services/testPratiche';
 
 // --- CONFIGURATION ---
 // URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
@@ -154,6 +160,16 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   const [autopilot, setAutopilot] = useState<AutopilotSettings>(() => loadAutopilotSettings());
   const [autopilotIntroSeen, setAutopilotIntroSeen] = useState<boolean>(() => !!loadSettings()?.autopilotIntroSeen);
   const [bridgeSettings, setBridgeSettings] = useState<BridgeSettings>(() => loadBridgeSettings());
+  // Versione di prova (dal ping del cloud, una volta all'avvio): scritta in
+  // cima, pratiche di prova e pilota che chiama anche la domenica
+  const testModeState = useTestMode();
+  const testMode = testModeState.testMode;
+  const testModeRef = useRef(testMode);
+  testModeRef.current = testMode;
+  const [showTestPratiche, setShowTestPratiche] = useState(false);
+  // Impostazioni EFFETTIVE del pilota (con i campi di sola esecuzione decisi
+  // dall'ambiente): servono al pilota, mai salvate né sincronizzate
+  const effectiveAutopilot = useMemo(() => effectiveAutopilotSettings(autopilot, { testMode }), [autopilot, testMode]);
   const [attentionOpen, setAttentionOpen] = useState<boolean>(() => loadSettings()?.attentionOpen ?? true);
   const [showAutopilotSettings, setShowAutopilotSettings] = useState(false);
   // Pilota in cloud: con il cloud attivo il motore gira sul server e questo
@@ -477,13 +493,15 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   techniciansRef.current = technicians;
   const autopilotRef = useRef(autopilot);
   autopilotRef.current = autopilot;
+  const effectiveAutopilotRef = useRef(effectiveAutopilot);
+  effectiveAutopilotRef.current = effectiveAutopilot;
   const fallbackRef = useRef<CloudConfig['fallback']>({ start: startTime, end: endTimeLimit, base: baseLocation?.coords || null, baseAddress: baseLocation?.address });
   fallbackRef.current = { start: startTime, end: endTimeLimit, base: baseLocation?.coords || null, baseAddress: baseLocation?.address };
 
   const getPlanningContext = useCallback((): PlanningContext => ({
     technicians: techniciansRef.current,
     fallback: fallbackRef.current,
-    settings: autopilotRef.current,
+    settings: effectiveAutopilotRef.current,
     now: new Date(),
   }), []);
 
@@ -492,7 +510,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   // pilota, orari e base generali. Letta dai ref (sempre aggiornati).
   const getCloudConfig = useCallback((): CloudConfig => ({
     technicians: techniciansRef.current,
-    autopilot: autopilotRef.current,
+    autopilot: storableAutopilotSettings(autopilotRef.current),
     fallback: fallbackRef.current,
   }), []);
 
@@ -501,7 +519,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   // sincronizzata non fa ripartire una push.
   const applyCloudConfig = useCallback((cfg: CloudConfig): CloudConfig => {
     const technicians = Array.isArray(cfg.technicians) ? cfg.technicians : techniciansRef.current;
-    const autopilotNext: AutopilotSettings = { ...DEFAULT_AUTOPILOT_SETTINGS, ...(cfg.autopilot || {}) };
+    const autopilotNext: AutopilotSettings = storableAutopilotSettings({ ...DEFAULT_AUTOPILOT_SETTINGS, ...(cfg.autopilot || {}) });
     const base = cfg.fallback?.base ?? null;
     const fallback: CloudConfig['fallback'] = {
       start: cfg.fallback?.start || fallbackRef.current.start,
@@ -512,6 +530,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     };
     techniciansRef.current = technicians;
     autopilotRef.current = autopilotNext;
+    effectiveAutopilotRef.current = effectiveAutopilotSettings(autopilotNext, { testMode: testModeRef.current });
     fallbackRef.current = fallback;
     setTechnicians(technicians);
     setAutopilot(autopilotNext);
@@ -690,7 +709,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     appointmentsRef,
     technicians,
     fallbackBase: baseLocation?.coords || null,
-    settings: autopilot,
+    settings: effectiveAutopilot,
     commit: setAllAppointments,
     isBusy: isImportOrDispatchBusy,
     setBusy: setAutoDispatchBusy,
@@ -1703,6 +1722,27 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   const mapShown = mapVisible && mapHere;
   const sectionLabel = (id: SectionId) => (id === 'impostazioni' ? 'Impostazioni' : NAV_ITEMS.find(n => n.id === id)?.label || '');
 
+  // --- Versione di prova: pratiche di prova e titolo della scheda ---
+  const testPraticheCount = allAppointments.filter(isTestPratica).length;
+  // Ricomincia da capo: via le pratiche di prova presenti, 16 nuove in
+  // attesa; i tecnici passano dal salvataggio di sempre (e dal cloud, se attivo)
+  const loadTestPratiche = useCallback((phone: string): string | null => {
+    const r = loadTestScenario(appointmentsRef.current, techniciansRef.current, phone);
+    if (!r.ok) return r.error;
+    if (r.technicians !== techniciansRef.current) {
+      techniciansRef.current = r.technicians;
+      setTechnicians(r.technicians);
+    }
+    setAllAppointments(r.appointments);
+    return null;
+  }, [setAllAppointments]);
+  const clearTestPratiche = useCallback(() => {
+    setAllAppointments(prev => removeTestPratiche(prev));
+  }, [setAllAppointments]);
+  useEffect(() => {
+    document.title = testModeTitle(document.title, testMode);
+  }, [testMode]);
+
   const SECTION_TITLES: Record<SectionId, { title: string; subtitle: string }> = {
     'panoramica': { title: 'Panoramica', subtitle: longDayLabel(todayStr) },
     'pratiche': { title: 'Tutte le pratiche', subtitle: `${plural(techFiltered.length, 'pratica', 'pratiche')}${selectedTech ? ` di ${selectedTech.name}` : ''} · ogni stato e data` },
@@ -1881,7 +1921,24 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     : SECTION_TITLES[section];
 
   return (
-    <div className="flex h-screen overflow-hidden bg-canvas">
+    <div className="flex flex-col h-screen overflow-hidden bg-canvas">
+      {/* --- VERSIONE DI PROVA: scritta sempre in cima --- */}
+      {testMode && (
+        <TestModeBanner
+          testNumbersConfigured={testModeState.testNumbersConfigured}
+          onOpenPratiche={() => setShowTestPratiche(true)}
+        />
+      )}
+      {testMode && showTestPratiche && (
+        <TestPraticheModal
+          testCount={testPraticheCount}
+          testNumbersConfigured={testModeState.testNumbersConfigured}
+          onLoad={loadTestPratiche}
+          onRemove={clearTestPratiche}
+          onClose={() => setShowTestPratiche(false)}
+        />
+      )}
+    <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* --- ADD/EDIT APPOINTMENT MODAL --- */}
       {showApptModal && (
         <AppointmentModal
@@ -2048,7 +2105,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
 
         {/* --- STRISCIA DEL PILOTA --- */}
         <AutopilotBar
-          settings={autopilot}
+          settings={effectiveAutopilot}
           stats={apStats}
           lock={tabLock === 'pending' ? 'leader' : tabLock}
           introSeen={autopilotIntroSeen}
@@ -2104,6 +2161,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
           {mapPanel}
         </div>
       )}
+    </div>
     </div>
   );
 }

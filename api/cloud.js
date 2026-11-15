@@ -167,11 +167,33 @@ var buildSopralluoghiExport = (appointments, technicians) => {
 var COMPANY_NAME = process.env.RETELL_COMPANY_NAME || "Effetre Properties";
 var AGENT_NAME = process.env.RETELL_AGENT_NAME || "Misi";
 var MANDANTE = process.env.RETELL_MANDANTE || "Prelios - Banca Intesa";
+var isTestModeEnv = (env) => {
+  if (env.VERCEL_ENV === "production") return false;
+  return env.VERCEL_ENV === "preview" || env.OPTIROUTE_TEST_MODE === "1";
+};
+var parseTestNumbers = (raw) => {
+  const out = [];
+  const add = (n2) => {
+    if (n2 && !out.includes(n2)) out.push(n2);
+  };
+  for (const chunk of (raw || "").split(/[,;\r\n]+/)) {
+    const part = chunk.trim();
+    if (!part) continue;
+    const whole = normalizePhone(part);
+    if (whole) add(whole);
+    else for (const word of part.split(/\s+/)) if (word) add(normalizePhone(word));
+  }
+  return out;
+};
+var TEST_NO_NUMBERS = "Versione di prova: nessun numero ammesso. Imposta RETELL_TEST_NUMBERS (ambiente Preview) con i numeri che si possono chiamare.";
+var TEST_NUMBER_NOT_ALLOWED = "Versione di prova: questo numero non è fra quelli ammessi per le prove.";
 var retellEnv = () => ({
   apiKey: process.env.RETELL_API_KEY || "",
   fromNumber: process.env.RETELL_FROM_NUMBER || "",
   agentId: process.env.RETELL_AGENT_ID || "",
-  apiBase: (process.env.RETELL_API_BASE || "https://api.retellai.com").replace(/\/+$/, "")
+  apiBase: (process.env.RETELL_API_BASE || "https://api.retellai.com").replace(/\/+$/, ""),
+  testMode: isTestModeEnv(process.env),
+  testNumbers: parseTestNumbers(process.env.RETELL_TEST_NUMBERS)
 });
 var normalizePhone = (raw) => {
   let phone = raw.replace(/[\s\-().]/g, "");
@@ -483,6 +505,11 @@ var buildRetellCallPayload = (body, env = retellEnv()) => {
   const toNumber = normalizePhone(String(phone));
   if (!toNumber) {
     return { ok: false, status: 400, error: `Numero di telefono non valido: ${phone}` };
+  }
+  if (env.testMode) {
+    const allowed = env.testNumbers || [];
+    if (allowed.length === 0) return { ok: false, status: 403, error: TEST_NO_NUMBERS };
+    if (!allowed.includes(toNumber)) return { ok: false, status: 403, error: TEST_NUMBER_NOT_ALLOWED };
   }
   const { dynamicVariables } = buildCallData(body);
   const isUrgent = urgent === true || urgent === "true";
@@ -1776,6 +1803,10 @@ var DEFAULT_AUTOPILOT_SETTINGS = {
   dispatchHorizonDays: 14,
   autoApprove: false
 };
+var effectiveAutopilotSettings = (s2, env) => ({
+  ...s2,
+  callEveryDay: env.testMode === true
+});
 var CALL_OUTCOME_MAX_AGE_MS = 45 * 60 * 1e3;
 var outcomeOverdue = (a, now) => a.callStatus === "called" && !!a.callId && !a.callOutcome && !!a.calledAt && now.getTime() - new Date(a.calledAt).getTime() >= CALL_OUTCOME_MAX_AGE_MS;
 var isCallInFlight = (a, now) => {
@@ -1818,6 +1849,7 @@ var baseFor = (ctx, technicianId, date) => {
   return { base: day ? day.base : tech?.baseCoords || ctx.fallback.base };
 };
 var dayAllowed = (d, s2) => {
+  if (s2.callEveryDay === true) return true;
   const day = d.getDay();
   if (day === 0) return false;
   if (day === 6) return s2.callSaturday;
@@ -2170,10 +2202,10 @@ var WEBHOOK_MIN_LAUNCH_MS = 3500;
 var INTERRUPTED_LAUNCH_SUMMARY = "Avvio della chiamata interrotto";
 var OUTCOME_TIMEOUT_SUMMARY = "Esito non ricevuto nei tempi: controlla la dashboard Retell.";
 var realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-var planningFrom = (config, now) => ({
+var planningFrom = (config, now, env = {}) => ({
   technicians: Array.isArray(config.technicians) ? config.technicians : [],
   fallback: config.fallback,
-  settings: { ...DEFAULT_AUTOPILOT_SETTINGS, ...config.autopilot || {} },
+  settings: effectiveAutopilotSettings({ ...DEFAULT_AUTOPILOT_SETTINGS, ...config.autopilot || {} }, { testMode: env.testMode === true }),
   now
 });
 var pad2 = (n2) => String(n2).padStart(2, "0");
@@ -2283,7 +2315,7 @@ var runTick = async (deps, source, opts = {}) => {
     const cfg2 = await store.readConfig();
     config = cfg2.config;
     if (config) {
-      const ctx0 = planningFrom(config, deps.now());
+      const ctx0 = planningFrom(config, deps.now(), deps);
       summary.pilotEnabled = ctx0.settings.enabled;
       summary.windowOpen = isWithinCallWindow(ctx0.now, ctx0.settings);
     }
@@ -2369,7 +2401,7 @@ var runTick = async (deps, source, opts = {}) => {
         let applied = 0;
         await commit(store, (all) => {
           applied = 0;
-          const ctx = planningFrom(cfg, deps.now());
+          const ctx = planningFrom(cfg, deps.now(), deps);
           let list = all;
           for (const f of found) {
             const next = reduceCallOutcome(list, f.id, f.outcome, f.callId, ctx);
@@ -2381,11 +2413,11 @@ var runTick = async (deps, source, opts = {}) => {
         summary.outcomesApplied = applied;
       }
     }
-    const settings = planningFrom(cfg, deps.now()).settings;
+    const settings = planningFrom(cfg, deps.now(), deps).settings;
     if (settings.enabled) {
       if (!deps.retell.configured()) {
         const { appointments } = await store.readAppointments();
-        if (nextDueCall(appointments || [], planningFrom(cfg, deps.now()))) {
+        if (nextDueCall(appointments || [], planningFrom(cfg, deps.now(), deps))) {
           summary.error = "Chiamate AI non configurate sul server (RETELL_API_KEY, RETELL_FROM_NUMBER)";
         }
       } else {
@@ -2402,7 +2434,7 @@ var runTick = async (deps, source, opts = {}) => {
           const marked = await commit(store, (all) => {
             picked = null;
             alternatives = [];
-            const ctx = planningFrom(cfg, ts);
+            const ctx = planningFrom(cfg, ts, deps);
             const next = nextDueCall(all, ctx);
             if (!next) return all;
             picked = next;
@@ -2447,7 +2479,7 @@ var runTick = async (deps, source, opts = {}) => {
   }
   try {
     const { appointments } = await store.readAppointments();
-    const stats = autopilotStats(appointments || [], planningFrom(cfg, deps.now()));
+    const stats = autopilotStats(appointments || [], planningFrom(cfg, deps.now(), deps));
     summary.inFlight = stats.inFlight;
     summary.queued = stats.queued;
     summary.windowOpen = stats.windowOpen;
@@ -2631,7 +2663,8 @@ var engineDeps = (d, store) => ({
   retell: d.retell,
   clock: d.clock,
   sleep: d.sleep,
-  timezone: d.timezone
+  timezone: d.timezone,
+  testMode: isTestModeEnv(d.env)
 });
 var HttpError = class extends Error {
   constructor(status, code, message) {
@@ -2779,6 +2812,9 @@ var handleOp = async (op, req, res, d, service) => {
         protocol: CLOUD_PROTOCOL_VERSION,
         secretConfigured: !!d.env.CRON_SECRET,
         storeConfigured: !!d.store,
+        // Versione di prova: solo se è accesa e se ci sono numeri ammessi (mai i numeri)
+        testMode: isTestModeEnv(d.env),
+        testNumbersConfigured: parseTestNumbers(d.env.RETELL_TEST_NUMBERS).length > 0,
         gestionale: {
           enabled: settings.enabled,
           parentAllowed: settings.enabled && !!parent && isAllowedOrigin(settings, parent)

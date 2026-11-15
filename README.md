@@ -272,6 +272,59 @@ certi (segreteria, mancata risposta, numero non componibile) e per il resto most
 finestra di chiamata ("Registra esito della telefonata").
 
 
+## Versione di prova
+
+Ogni ramo pubblicato su Vercel ha un'**anteprima** (ambiente *Preview*) con un archivio
+tutto suo, separato da quello vero. L'anteprima è una **versione di prova**: serve a
+provare telefonate vere dell'operatore AI senza toccare i dati veri e senza poter
+chiamare nessun numero che non sia stato autorizzato.
+
+**Quando è accesa**
+
+- Sulle anteprime di Vercel (`VERCEL_ENV=preview`), oppure fuori da Vercel con
+  `OPTIROUTE_TEST_MODE=1` (per esempio con `npm run dev:cloud`).
+- **Mai in produzione**: con `VERCEL_ENV=production` resta spenta anche se
+  `OPTIROUTE_TEST_MODE` è impostata per errore.
+
+**Come si riconosce**
+
+- In cima all'app c'è sempre la scritta «VERSIONE DI PROVA · dati finti, separati da
+  quelli veri · le telefonate partono solo verso i numeri ammessi» e il titolo della
+  scheda del browser comincia con «PROVA · ». Se non c'è nessun numero ammesso, la
+  scritta avvisa che le chiamate sono bloccate. Vale anche dentro il gestionale.
+- Il browser lo scopre all'avvio dal ping anonimo del cloud (`/api/cloud?op=ping`, campi
+  `testMode` e `testNumbersConfigured`; i numeri non vengono mai mostrati).
+
+**Variabili (Vercel → Settings → Environment Variables, ambiente Preview)**
+
+- `RETELL_TEST_NUMBERS` — i soli numeri che si possono chiamare in prova: uno o più,
+  separati da virgola, punto e virgola, spazi o a capo (es. `+39 333 1234567, +39 02 1234567`).
+  Si confrontano dopo la stessa normalizzazione dei numeri delle chiamate, quindi
+  `0039 333…`, `333 …` e `+39333…` sono lo stesso numero.
+- `OPTIROUTE_TEST_MODE` — `1` per accendere la versione di prova fuori da Vercel.
+
+**Cosa cambia rispetto alla versione vera**
+
+- **Telefonate**: partono solo verso i numeri di `RETELL_TEST_NUMBERS`, sia quelle
+  avviate dal browser sia quelle del pilota in cloud. Per ogni altro numero la chiamata
+  non parte (errore 403: «Versione di prova: questo numero non è fra quelli ammessi per
+  le prove.»); senza numeri ammessi non parte nessuna chiamata. Il testo della chiamata
+  è lo stesso della versione vera.
+- **Pratiche di prova**: dal pulsante «Pratiche di prova» della scritta si indica il
+  numero da chiamare (ricordato in questo browser) e si caricano 16 pratiche finte in
+  attesa (`prova-01`…`prova-16`, codici `900001`…`900016`, progetto `PROVA`), in due
+  gruppi da otto: Oltrepò pavese e Milano ovest con Novara. Ogni gruppo va a un tecnico
+  diverso: se nessun tecnico attivo è competente si aggiunge un «Tecnico di prova», a uno
+  senza base si imposta la base (Stradella o Magenta); il resto dei tecnici non si tocca.
+  Ogni caricamento toglie prima le pratiche di prova presenti, in qualunque stato: si
+  ricomincia da capo. «Togli le pratiche di prova» le elimina. Le pratiche hanno nomi di
+  fantasia e casi utili all'operatore AI (un'urgente, un referente, un nome tutto
+  maiuscolo, una senza intestatario, note pratiche, una visita da 40 minuti). Con il
+  cloud attivo si sincronizzano come ogni altra modifica.
+- **Pilota automatico**: chiama **tutti i giorni, domenica compresa**, negli orari
+  impostati (fuori dalla prova la domenica mai e il sabato solo se scelto). Vale nel
+  browser e nel motore in cloud; l'impostazione non si salva e non si sincronizza.
+
 ## Pratiche MISI/Prelios e gestionale
 
 - **Import elenco pratiche MISI**: "Importa Excel" accetta anche l'export grezzo dell'elenco

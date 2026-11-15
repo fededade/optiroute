@@ -33,6 +33,8 @@ export interface CloudPing {
   protocol: number;
   secretConfigured: boolean;
   storeConfigured: boolean;
+  testMode?: boolean;
+  testNumbersConfigured?: boolean;
   gestionale?: { enabled: boolean; parentAllowed: boolean };
 }
 

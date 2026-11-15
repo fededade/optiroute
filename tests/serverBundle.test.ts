@@ -52,7 +52,7 @@ describe('bundle generati', () => {
 });
 
 describe('bundle in funzione (archivio in memoria, Retell finto)', () => {
-  const VARS = ['OPTIROUTE_STORE', 'CRON_SECRET', 'RETELL_API_KEY', 'RETELL_FROM_NUMBER', 'RETELL_API_BASE', 'VERCEL_ENV', 'RETELL_AGENT_ID'];
+  const VARS = ['OPTIROUTE_STORE', 'CRON_SECRET', 'RETELL_API_KEY', 'RETELL_FROM_NUMBER', 'RETELL_API_BASE', 'VERCEL_ENV', 'RETELL_AGENT_ID', 'OPTIROUTE_TEST_MODE', 'RETELL_TEST_NUMBERS'];
   const saved: Record<string, string | undefined> = {};
   let retell: FakeRetellHttp;
   const g = globalThis as { __optirouteNow?: () => Date; __optirouteMemoryRedis?: { clear(): void } };
@@ -65,6 +65,8 @@ describe('bundle in funzione (archivio in memoria, Retell finto)', () => {
     for (const k of VARS) saved[k] = process.env[k];
     delete process.env.VERCEL_ENV;
     delete process.env.RETELL_AGENT_ID;
+    delete process.env.OPTIROUTE_TEST_MODE;
+    delete process.env.RETELL_TEST_NUMBERS;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       if (!url.startsWith('http://127.0.0.1:')) {
@@ -98,7 +100,7 @@ describe('bundle in funzione (archivio in memoria, Retell finto)', () => {
     const cloudTick = (await import('../api/cloud-tick.js')).default;
 
     const ping = await invoke(cloud, { query: { op: 'ping' } });
-    expect(ping.body).toEqual({ protocol: 1, secretConfigured: true, storeConfigured: true, gestionale: { enabled: false, parentAllowed: false } });
+    expect(ping.body).toEqual({ protocol: 1, secretConfigured: true, storeConfigured: true, testMode: false, testNumbersConfigured: false, gestionale: { enabled: false, parentAllowed: false } });
 
     const D = '2026-11-13';
     const init = await invoke(cloud, {

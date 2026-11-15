@@ -12,7 +12,7 @@ import {
   type TickSource,
 } from '../src/services/cloudProtocol';
 import { buildSopralluoghiExport } from '../src/services/gestionaleExport';
-import { retellEnv } from '../api/retell-call';
+import { isTestModeEnv, parseTestNumbers, retellEnv } from '../api/retell-call';
 import { bearerToken, headerValue, isAuthorized, isValidWebhookToken, mintSessionToken, webhookToken } from './auth';
 import {
   GestionaleAuthError,
@@ -96,6 +96,7 @@ const engineDeps = (d: HandlerDeps, store: Store): EngineDeps => ({
   clock: d.clock,
   sleep: d.sleep,
   timezone: d.timezone,
+  testMode: isTestModeEnv(d.env),
 });
 
 // --- Risposte ---
@@ -279,6 +280,9 @@ const handleOp = async (op: string, req: ApiRequest, res: ApiResponse, d: Handle
         protocol: CLOUD_PROTOCOL_VERSION,
         secretConfigured: !!d.env.CRON_SECRET,
         storeConfigured: !!d.store,
+        // Versione di prova: solo se è accesa e se ci sono numeri ammessi (mai i numeri)
+        testMode: isTestModeEnv(d.env),
+        testNumbersConfigured: parseTestNumbers(d.env.RETELL_TEST_NUMBERS).length > 0,
         gestionale: {
           enabled: settings.enabled,
           parentAllowed: settings.enabled && !!parent && isAllowedOrigin(settings, parent),

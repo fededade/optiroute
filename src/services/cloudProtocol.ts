@@ -215,6 +215,10 @@ export interface CloudPingResponse {
   protocol: number;
   secretConfigured: boolean;
   storeConfigured: boolean;
+  // Versione di prova (anteprima): banner nel browser, chiamate solo verso i
+  // numeri ammessi; `testNumbersConfigured` dice se ce n'è almeno uno
+  testMode?: boolean;
+  testNumbersConfigured?: boolean;
   // `parentAllowed`: la pagina indicata con &parent= è del gestionale
   // (l'elenco delle pagine ammesse non viene mai restituito)
   gestionale?: { enabled: boolean; parentAllowed: boolean };

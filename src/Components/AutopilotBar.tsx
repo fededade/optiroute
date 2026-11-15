@@ -352,7 +352,7 @@ const AutopilotBar: React.FC<AutopilotBarProps> = ({
             <div className="modal-body">
               <ul className="text-sm text-ink-700 space-y-2 list-disc pl-5 leading-relaxed">
                 <li>Chiama da solo i clienti dei <b>giri approvati</b> (bottone "Approva e chiama"), richiama chi non risponde e riempie gli slot liberati.</li>
-                <li>Chiama solo nella fascia oraria impostata: <b className="num">{settings.callWindowStart}–{settings.callWindowEnd}</b>{settings.callSaturday ? ', anche il sabato' : ', dal lunedì al venerdì'}.</li>
+                <li>Chiama solo nella fascia oraria impostata: <b className="num">{settings.callWindowStart}–{settings.callWindowEnd}</b>{settings.callEveryDay ? ', tutti i giorni (versione di prova)' : settings.callSaturday ? ', anche il sabato' : ', dal lunedì al venerdì'}.</li>
                 {cloud ? (
                   <li>Lavora <b>dal cloud</b>: le chiamate partono dal server, anche a browser chiuso (quando lo scheduler è attivo).</li>
                 ) : (

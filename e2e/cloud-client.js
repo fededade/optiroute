@@ -50,6 +50,7 @@ const applyChanges = (all, changes) => {
 
 const cloud = {
   appointments: [], config: null, rev: 1, configRev: 1, key: KEY, mode: 'ok',
+  pingExtra: {}, // campi in più nel ping (versione di prova)
   holder: null, schedulerSeenAt: null, lastTick: null, log: [],
   snapshot(device) {
     if (!this.holder) this.holder = device;
@@ -72,7 +73,7 @@ const handleCloud = async (route, who) => {
   cloud.log.push({ who, op, method: req.method(), url: req.url(), auth, body, at: Date.now() });
   if (cloud.mode === 'offline') return route.abort('failed');
   const json = (status, data) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
-  if (op === 'ping') return json(200, { protocol: 1, secretConfigured: true, storeConfigured: true });
+  if (op === 'ping') return json(200, { protocol: 1, secretConfigured: true, storeConfigured: true, ...cloud.pingExtra });
   if (auth !== `Bearer ${cloud.key}`) return json(401, { error: 'auth' });
   const device = url.searchParams.get('device') || (body && body.device) || '';
   switch (op) {
@@ -169,7 +170,7 @@ const newContext = async (browser, who, { now } = {}) => {
   return { ctx, page, apiLog };
 };
 
-const seed = async (page, withData) => {
+const seed = async (page, withData, settings = seedSettings) => {
   await page.goto(BASE);
   await page.evaluate(({ appts, settings, techs, withData }) => {
     localStorage.clear();
@@ -178,7 +179,7 @@ const seed = async (page, withData) => {
       localStorage.setItem('optiroute_technicians_v1', JSON.stringify(techs));
     }
     localStorage.setItem('optiroute_settings_v1', JSON.stringify(settings));
-  }, { appts: seedAppointments(), settings: seedSettings, techs: [tech], withData });
+  }, { appts: seedAppointments(), settings, techs: [tech], withData });
   await page.reload();
   await page.waitForSelector('[data-testid="autopilot-bar"]');
 };
@@ -416,12 +417,95 @@ const stored = (page, key) => page.evaluate(k => JSON.parse(localStorage.getItem
     for (let i = 0; i < 20 && !launched; i++) { await sleep(500); launched = F.apiLog.some(u => u.includes('/api/retell-call')); }
     check('f) cloud spento: "Approva e chiama" fa partire /api/retell-call', launched);
     await sleep(2000);
-    check('f) cloud spento: nessuna richiesta a /api/cloud', F.apiLog.every(u => !u.includes('/api/cloud')) && cloud.log.every(r => r.who !== 'F'));
+    // l'unica eccezione è il ping anonimo dell'avvio (versione di prova?)
+    const onlyPing = u => !u.includes('/api/cloud') || /[?&]op=ping(&|$)/.test(u);
+    check('f) cloud spento: nessuna richiesta a /api/cloud (salvo il ping anonimo dell\'avvio)',
+      F.apiLog.every(onlyPing) && cloud.log.every(r => r.who !== 'F' || (r.op === 'ping' && !r.auth)));
     check('f) nessun chip del cloud', await F.page.locator('[data-testid="cloud-chip"]').count() === 0);
     check('f) "Tieni aperta questa scheda" come prima', /Tieni aperta questa scheda/.test(await F.page.locator('[data-testid="autopilot-bar"]').innerText()));
     check('f) menu Pianifica (ex pannello "Impostazioni e azioni") apribile e richiudibile', await pianificaToggles(F.page));
     await shot(F.page, 'f-cloud-spento');
     await F.ctx.close();
+
+    // ================= h) versione di prova =================
+    const proveSettings = { ...seedSettings, autopilot: { ...seedSettings.autopilot, enabled: false } };
+    const testOnly = list => list.filter(a => a.id.startsWith('prova-'));
+    cloud.pingExtra = { testMode: true, testNumbersConfigured: false };
+    const T = await newContext(browser, 'T');
+    await seed(T.page, true, proveSettings);
+    await T.page.waitForSelector('[data-testid="test-mode-banner"]', { timeout: 10000 });
+    const banner = await T.page.locator('[data-testid="test-mode-banner"]').innerText();
+    check('h) prova: scritta in cima', /VERSIONE DI PROVA/.test(banner) && /dati finti, separati da quelli veri/.test(banner) && /solo verso i numeri ammessi/.test(banner), banner.replace(/\n/g, ' '));
+    check('h) prova senza numeri: avviso chiamate bloccate', /RETELL_TEST_NUMBERS/.test(banner) && await T.page.locator('[data-testid="test-mode-no-numbers"]').count() === 1);
+    check('h) titolo della scheda con «PROVA · »', (await T.page.title()).startsWith('PROVA · '), await T.page.title());
+    const bannerBox = await T.page.locator('[data-testid="test-mode-banner"]').boundingBox();
+    check('h) scritta proprio in cima', bannerBox && bannerBox.y === 0);
+    await shot(T.page, 'h1-versione-di-prova-1400');
+    await T.page.getByTestId('test-mode-open').click();
+    await T.page.waitForSelector('[data-testid="test-pratiche-modal"]');
+    check('h) finestra «Pratiche di prova» aperta', await T.page.getByRole('dialog', { name: 'Pratiche di prova' }).count() === 1);
+    await T.page.getByTestId('test-pratiche-phone').fill('');
+    await T.page.getByTestId('test-pratiche-load').click();
+    check('h) numero obbligatorio', /Scrivi il numero/.test(await T.page.getByTestId('test-pratiche-error').innerText()));
+    await T.page.getByTestId('test-pratiche-phone').fill('12ab');
+    await T.page.getByTestId('test-pratiche-load').click();
+    check('h) numero non valido rifiutato', /non valido/.test(await T.page.getByTestId('test-pratiche-error').innerText()) && testOnly(await stored(T.page, 'optiroute_appointments_v1')).length === 0);
+    await T.page.getByTestId('test-pratiche-phone').fill('02 5550 0101');
+    await sleep(300);
+    await shot(T.page, 'h2-finestra-pratiche-di-prova');
+    await T.page.getByTestId('test-pratiche-load').click();
+    await T.page.waitForSelector('[data-testid="test-pratiche-done"]');
+    await T.page.waitForFunction(() => JSON.parse(localStorage.getItem('optiroute_appointments_v1') || '[]').filter(a => a.id.startsWith('prova-')).length === 16, null, { timeout: 5000 }).catch(() => {});
+    let listT = await stored(T.page, 'optiroute_appointments_v1');
+    const provaT = testOnly(listT);
+    check('h) «Carica»: 16 pratiche di prova in attesa', provaT.length === 16 && provaT.every(a => a.status === 'pending' && a.project === 'PROVA'), `${provaT.length}`);
+    check('h) telefono normalizzato e ricordato', provaT.every(a => a.phone === '+390255500101') && await T.page.evaluate(() => localStorage.getItem('optiroute_test_phone_v1')) === '+390255500101');
+    check('h) le pratiche vere restano', listT.length === 20 && ['p1', 'p2', 'p3', 'w1'].every(id => listT.some(a => a.id === id)));
+    const techsT = await stored(T.page, 'optiroute_technicians_v1');
+    const pvTech = new Set(provaT.filter(a => a.province === 'PV').map(a => a.technicianId));
+    const miTech = new Set(provaT.filter(a => a.province !== 'PV').map(a => a.technicianId));
+    check('h) due gruppi, due tecnici (aggiunto il tecnico di prova per Pavia)',
+      pvTech.size === 1 && miTech.size === 1 && [...pvTech][0] !== [...miTech][0] && [...miTech][0] === 'tech-1'
+        && techsT.some(t => t.name === 'Tecnico di prova Pavia' && t.baseCoords) && techsT.find(t => t.id === 'tech-1').baseAddress === tech.baseAddress,
+      JSON.stringify(techsT.map(t => t.name)));
+    // si ricomincia da capo (la sostituzione di pratiche cambiate è nei test vitest)
+    await T.page.getByTestId('test-pratiche-load').click();
+    await sleep(500);
+    listT = await stored(T.page, 'optiroute_appointments_v1');
+    check('h) ricaricare non raddoppia', testOnly(listT).length === 16 && listT.length === 20);
+    await T.page.getByTestId('test-pratiche-remove').click();
+    await sleep(500);
+    listT = await stored(T.page, 'optiroute_appointments_v1');
+    check('h) «Togli»: nessuna pratica di prova, le altre restano', testOnly(listT).length === 0 && listT.length === 4);
+    await T.page.getByTestId('test-pratiche-load').click();
+    await T.page.getByRole('button', { name: 'Chiudi', exact: true }).click();
+    // impaginazione a 1440 e a 390 px: nessuno scorrimento orizzontale
+    for (const [w, h] of [[1440, 900], [390, 844]]) {
+      await T.page.setViewportSize({ width: w, height: h });
+      await sleep(400);
+      const fit = await T.page.evaluate(() => {
+        const b = document.querySelector('[data-testid="test-mode-banner"]').getBoundingClientRect();
+        return { scroll: document.documentElement.scrollWidth, inner: window.innerWidth, right: b.right, top: b.top, height: b.height };
+      });
+      check(`h) a ${w} px la scritta sta nella pagina`, fit.scroll <= fit.inner && fit.right <= fit.inner + 0.5 && fit.top === 0, JSON.stringify(fit));
+      await shot(T.page, `h3-versione-di-prova-${w}`);
+    }
+    await T.page.getByTestId('test-mode-open').click();
+    await T.page.waitForSelector('[data-testid="test-pratiche-modal"]');
+    await sleep(500); // fine dell'animazione di apertura
+    await shot(T.page, 'h4-finestra-390');
+    await T.ctx.close();
+
+    // fuori dalla prova: niente scritta, niente prefisso
+    cloud.pingExtra = {};
+    const N = await newContext(browser, 'N');
+    await seed(N.page, true, proveSettings);
+    await N.page.waitForFunction(() => true);
+    for (let i = 0; i < 10 && !N.apiLog.some(u => /op=ping/.test(u)); i++) await sleep(300);
+    await sleep(800);
+    check('h) fuori prova: ping letto ma nessuna scritta', N.apiLog.some(u => /op=ping/.test(u)) && await N.page.locator('[data-testid="test-mode-banner"]').count() === 0);
+    check('h) fuori prova: titolo di sempre', !(await N.page.title()).startsWith('PROVA'), await N.page.title());
+    await N.ctx.close();
   } catch (err) {
     console.error('ERRORE', err);
     results.push({ name: 'eccezione', ok: false, extra: String(err) });

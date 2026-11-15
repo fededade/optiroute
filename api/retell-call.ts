@@ -13,6 +13,9 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 //   RETELL_API_BASE     -> base dell'API Retell (default https://api.retellai.com; per i test)
 //   CRON_SECRET         -> se impostata, l'endpoint richiede Authorization: Bearer <CRON_SECRET>
 //                          (o un biglietto di sessione del gestionale, vedi server/auth.ts)
+// Versione di prova (vedi isTestModeEnv):
+//   OPTIROUTE_TEST_MODE -> "1" accende la modalità prova fuori da Vercel (mai in produzione)
+//   RETELL_TEST_NUMBERS -> in modalità prova, gli UNICI numeri che si possono chiamare
 //
 // NB: questo file è importato (e impacchettato) anche dal motore lato server
 // (server/engine.ts): niente import relativi qui, Vercel non li risolverebbe.
@@ -27,13 +30,49 @@ export interface RetellEnv {
   fromNumber: string;
   agentId: string;
   apiBase: string;
+  // Versione di prova: le chiamate partono solo verso testNumbers
+  testMode?: boolean;
+  testNumbers?: string[];
 }
+
+// --- Versione di prova ---
+
+// Regola unica della modalità prova: anteprima di Vercel (ogni ramo ha il suo
+// archivio separato) oppure OPTIROUTE_TEST_MODE=1 fuori da Vercel. MAI in
+// produzione, anche se la variabile è impostata per errore.
+export const isTestModeEnv = (env: Record<string, string | undefined>): boolean => {
+  if (env.VERCEL_ENV === 'production') return false;
+  return env.VERCEL_ENV === 'preview' || env.OPTIROUTE_TEST_MODE === '1';
+};
+
+// Numeri ammessi in prova: separati da virgola, punto e virgola, a capo o
+// spazi; normalizzati come i numeri da chiamare (quelli non validi si
+// scartano). Un pezzo che è già un numero valido con gli spazi dentro
+// ("+39 02 5550 0101") vale come numero unico.
+export const parseTestNumbers = (raw: string | undefined): string[] => {
+  const out: string[] = [];
+  const add = (n: string | null) => { if (n && !out.includes(n)) out.push(n); };
+  for (const chunk of (raw || '').split(/[,;\r\n]+/)) {
+    const part = chunk.trim();
+    if (!part) continue;
+    const whole = normalizePhone(part);
+    if (whole) add(whole);
+    else for (const word of part.split(/\s+/)) if (word) add(normalizePhone(word));
+  }
+  return out;
+};
+
+export const TEST_NO_NUMBERS =
+  'Versione di prova: nessun numero ammesso. Imposta RETELL_TEST_NUMBERS (ambiente Preview) con i numeri che si possono chiamare.';
+export const TEST_NUMBER_NOT_ALLOWED = 'Versione di prova: questo numero non è fra quelli ammessi per le prove.';
 
 export const retellEnv = (): RetellEnv => ({
   apiKey: process.env.RETELL_API_KEY || '',
   fromNumber: process.env.RETELL_FROM_NUMBER || '',
   agentId: process.env.RETELL_AGENT_ID || '',
   apiBase: (process.env.RETELL_API_BASE || 'https://api.retellai.com').replace(/\/+$/, ''),
+  testMode: isTestModeEnv(process.env),
+  testNumbers: parseTestNumbers(process.env.RETELL_TEST_NUMBERS),
 });
 
 // Protezione opzionale: con CRON_SECRET impostata serve la chiave oppure un
@@ -494,6 +533,14 @@ export const buildRetellCallPayload = (body: RetellCallBody, env: RetellEnv = re
   const toNumber = normalizePhone(String(phone));
   if (!toNumber) {
     return { ok: false, status: 400, error: `Numero di telefono non valido: ${phone}` };
+  }
+
+  // Versione di prova: si chiamano SOLO i numeri ammessi (vale per il
+  // browser e per il pilota in cloud, che passano entrambi da qui)
+  if (env.testMode) {
+    const allowed = env.testNumbers || [];
+    if (allowed.length === 0) return { ok: false, status: 403, error: TEST_NO_NUMBERS };
+    if (!allowed.includes(toNumber)) return { ok: false, status: 403, error: TEST_NUMBER_NOT_ALLOWED };
   }
 
   // Script e variabili dinamiche (alternative comprese: quelle non valide

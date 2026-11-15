@@ -414,7 +414,37 @@ describe('pratiche di prova', () => {
     expect(removeTestPratiche(none)).toBe(none);
   });
 
+  it('senza «Parti da zero»: le altre pratiche restano e nessuna è contata come eliminata', () => {
+    const others = [
+      appt({ id: 'vecchia-1', phone: '+390255500201', status: 'confirmed', date: '2026-11-17', startTime: '09:00' }),
+      appt({ id: 'vecchia-2', phone: '+390255500202' }),
+    ];
+    const r = load([...others, ...load().appointments]);
+    expect(r.removedOthers).toBe(0);
+    expect(r.appointments).toHaveLength(18);
+    expect(r.appointments.slice(0, 2)).toEqual(others);
+    expect(loadTestScenario(others, defaultTechnicians(), PHONE_RAW, { wipeAll: false })).toMatchObject({ ok: true, removedOthers: 0 });
+  });
+
+  it('con «Parti da zero»: restano SOLO le 16 nuove in attesa, con il conto delle altre eliminate', () => {
+    const others = [
+      appt({ id: 'vecchia-1', phone: '+390255500201', status: 'confirmed', date: '2026-11-17', startTime: '09:00' }),
+      appt({ id: 'vecchia-2', phone: '+390255500202', status: 'proposed', date: '2026-11-18', startTime: '10:00' }),
+      appt({ id: 'vecchia-3', phone: '+390255500203' }),
+    ];
+    const oldTest = load().appointments.map(a => (a.id === 'prova-01' ? { ...a, status: 'confirmed' as const } : a));
+    const r = loadTestScenario([...others, ...oldTest], defaultTechnicians(), PHONE_RAW, { wipeAll: true });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.removedOthers).toBe(3);   // le pratiche di prova non contano
+    expect(r.appointments).toHaveLength(TEST_PRATICHE_COUNT);
+    expect(r.appointments.every(a => isTestPratica(a) && a.status === 'pending')).toBe(true);
+    // niente da eliminare: conto a zero
+    const empty = loadTestScenario([], defaultTechnicians(), PHONE_RAW, { wipeAll: true });
+    expect(empty).toMatchObject({ ok: true, removedOthers: 0 });
+  });
+
   it('numero non valido: niente modifiche', () => {
+    expect(loadTestScenario([appt({ id: 'vecchia-1' })], defaultTechnicians(), 'abc', { wipeAll: true }).ok).toBe(false);
     expect(loadTestScenario([], defaultTechnicians(), 'abc').ok).toBe(false);
     expect(loadTestScenario([], defaultTechnicians(), '').ok).toBe(false);
   });

@@ -496,6 +496,45 @@ const stored = (page, key) => page.evaluate(k => JSON.parse(localStorage.getItem
     await shot(T.page, 'h4-finestra-390');
     await T.ctx.close();
 
+    // «Parti da zero»: due pratiche non di prova già presenti (una confermata)
+    const W = await newContext(browser, 'W');
+    await seed(W.page, true, proveSettings);
+    await W.page.evaluate(() => {
+      const base = { coords: { lat: 45.4642, lng: 9.19 }, technicianId: 'tech-1', province: 'MI' };
+      localStorage.setItem('optiroute_appointments_v1', JSON.stringify([
+        { ...base, id: 'vecchia-1', title: 'Cliente Prova Vecchia Uno', address: 'Via Finta 21, Milano', phone: '+390255500121', status: 'confirmed', date: '2026-11-17', startTime: '09:00', endTime: '09:20' },
+        { ...base, id: 'vecchia-2', title: 'Cliente Prova Vecchia Due', address: 'Via Finta 22, Milano', phone: '+390255500122', status: 'pending' },
+      ]));
+    });
+    await W.page.reload();
+    await W.page.waitForSelector('[data-testid="test-mode-banner"]', { timeout: 10000 });
+    await W.page.getByTestId('test-mode-open').click();
+    await W.page.waitForSelector('[data-testid="test-pratiche-modal"]');
+    const othersText = await W.page.getByTestId('test-pratiche-others').innerText();
+    check('h) zero: la finestra conta le altre pratiche', /presenti in questa versione di prova: 2 \(1 confermata\)/.test(othersText), othersText);
+    const wipeBox = W.page.getByTestId('test-pratiche-wipe');
+    check('h) zero: casella presente e NON spuntata la prima volta', await wipeBox.count() === 1 && !(await wipeBox.isChecked()));
+    await shot(W.page, 'h5-parti-da-zero');
+    // senza casella: le altre restano
+    await W.page.getByTestId('test-pratiche-phone').fill('+390255500101');
+    await W.page.getByTestId('test-pratiche-load').click();
+    await W.page.waitForSelector('[data-testid="test-pratiche-done"]');
+    await sleep(500);
+    let listW = await stored(W.page, 'optiroute_appointments_v1');
+    check('h) zero: senza casella le altre pratiche restano', listW.length === 18 && testOnly(listW).length === 16 && ['vecchia-1', 'vecchia-2'].every(id => listW.some(a => a.id === id))
+      && !/Eliminate/.test(await W.page.getByTestId('test-pratiche-done').innerText()), `${listW.length}`);
+    // con la casella spuntata: restano solo le 16 in attesa
+    await wipeBox.check();
+    check('h) zero: scelta ricordata', await W.page.evaluate(() => localStorage.getItem('optiroute_test_wipe_v1')) === '1');
+    await W.page.getByTestId('test-pratiche-load').click();
+    await W.page.waitForFunction(() => JSON.parse(localStorage.getItem('optiroute_appointments_v1') || '[]').length === 16, null, { timeout: 5000 }).catch(() => {});
+    listW = await stored(W.page, 'optiroute_appointments_v1');
+    const doneW = await W.page.getByTestId('test-pratiche-done').innerText();
+    check('h) zero: con la casella restano solo le 16 in attesa', listW.length === 16 && listW.every(a => a.id.startsWith('prova-') && a.status === 'pending'), `${listW.length}`);
+    check('h) zero: il messaggio dice quante ne ha eliminate', /^Eliminate 2 pratiche già presenti\. Caricate 16 pratiche di prova/.test(doneW), doneW);
+    check('h) zero: niente più altre pratiche, niente casella', await W.page.getByTestId('test-pratiche-others').count() === 0 && await wipeBox.count() === 0);
+    await W.ctx.close();
+
     // fuori dalla prova: niente scritta, niente prefisso
     cloud.pingExtra = {};
     const N = await newContext(browser, 'N');

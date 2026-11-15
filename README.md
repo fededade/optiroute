@@ -320,7 +320,11 @@ chiamare nessun numero che non sia stato autorizzato.
   diverso: se nessun tecnico attivo è competente si aggiunge un «Tecnico di prova», a uno
   senza base si imposta la base (Stradella o Magenta); il resto dei tecnici non si tocca.
   Ogni caricamento toglie prima le pratiche di prova presenti, in qualunque stato: si
-  ricomincia da capo. «Togli le pratiche di prova» le elimina. Le pratiche hanno nomi di
+  ricomincia da capo. Se ci sono altre pratiche (non di prova) la finestra le conta
+  (quante e quante confermate) e offre la casella «Parti da zero» (spenta la prima
+  volta, la scelta si ricorda in questo browser): spuntata, il caricamento elimina anche
+  quelle e restano solo le 16 nuove; sono dati della sola versione di prova, la versione
+  vera non viene toccata. «Togli le pratiche di prova» elimina solo quelle di prova. Le pratiche hanno nomi di
   fantasia e casi utili all'operatore AI (un'urgente, un referente, un nome tutto
   maiuscolo, una senza intestatario, note pratiche, una visita da 40 minuti). Con il
   cloud attivo si sincronizzano come ogni altra modifica.

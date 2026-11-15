@@ -5,12 +5,15 @@ import { Field, ic } from './modal/parts';
 import { safeLocalStorage } from '../services/safeStorage';
 import { normalizePhone } from '../utils/phone';
 import { TEST_PRATICHE_COUNT } from '../services/testPratiche';
+import { plural } from '../layout/format';
 
 // Finestra delle pratiche di prova (solo nella versione di prova): numero da
 // chiamare, caricamento delle 16 pratiche finte (ricomincia da capo) e
 // rimozione. Le modifiche le fa l'app con i suoi percorsi di sempre.
 
 export const TEST_PHONE_KEY = 'optiroute_test_phone_v1';
+// Scelta «Parti da zero» (elimina anche le altre pratiche), ricordata in questo browser
+export const TEST_WIPE_KEY = 'optiroute_test_wipe_v1';
 
 const loadPhone = (): string => {
   try {
@@ -28,17 +31,38 @@ const savePhone = (phone: string): void => {
   }
 };
 
+const loadWipe = (): boolean => {
+  try {
+    return safeLocalStorage.getItem(TEST_WIPE_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const saveWipe = (wipe: boolean): void => {
+  try {
+    safeLocalStorage.setItem(TEST_WIPE_KEY, wipe ? '1' : '0');
+  } catch {
+    // memoria piena o bloccata: la scelta si rifà la prossima volta
+  }
+};
+
+export type TestLoadOutcome = { error: string } | { removedOthers: number };
+
 interface TestPraticheModalProps {
   testCount: number;                       // pratiche di prova presenti ora
+  otherCount: number;                      // altre pratiche (non di prova) presenti ora
+  otherConfirmedCount: number;             // di cui confermate
   testNumbersConfigured: boolean;
-  onLoad: (phone: string) => string | null; // null = fatto, altrimenti l'errore
+  onLoad: (phone: string, wipeAll: boolean) => TestLoadOutcome;
   onRemove: () => void;
   onClose: () => void;
 }
 
-const TestPraticheModal: React.FC<TestPraticheModalProps> = ({ testCount, testNumbersConfigured, onLoad, onRemove, onClose }) => {
+const TestPraticheModal: React.FC<TestPraticheModalProps> = ({ testCount, otherCount, otherConfirmedCount, testNumbersConfigured, onLoad, onRemove, onClose }) => {
   const fid = useId();
   const [phone, setPhone] = useState<string>(loadPhone);
+  const [wipe, setWipe] = useState<boolean>(loadWipe);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
@@ -54,16 +78,20 @@ const TestPraticheModal: React.FC<TestPraticheModalProps> = ({ testCount, testNu
       setDone(null);
       return;
     }
-    const failure = onLoad(normalized);
-    if (failure) {
-      setError(failure);
+    // la casella vale solo se ci sono altre pratiche (altrimenti non si vede)
+    const outcome = onLoad(normalized, wipe && otherCount > 0);
+    if ('error' in outcome) {
+      setError(outcome.error);
       setDone(null);
       return;
     }
     savePhone(normalized);
     setPhone(normalized);
     setError(null);
-    setDone(`Caricate ${TEST_PRATICHE_COUNT} pratiche di prova in attesa, tutte con il numero ${normalized}.`);
+    const removed = outcome.removedOthers > 0
+      ? `Eliminate ${plural(outcome.removedOthers, 'pratica già presente', 'pratiche già presenti')}. `
+      : '';
+    setDone(`${removed}Caricate ${TEST_PRATICHE_COUNT} pratiche di prova in attesa, tutte con il numero ${normalized}.`);
   };
 
   const remove = () => {
@@ -132,6 +160,27 @@ const TestPraticheModal: React.FC<TestPraticheModalProps> = ({ testCount, testNu
           <p className="text-[13px] leading-5 text-rose-700" data-testid="test-pratiche-no-numbers">
             Le chiamate restano bloccate finché non imposti RETELL_TEST_NUMBERS su Vercel (ambiente Preview).
           </p>
+        )}
+        {otherCount > 0 && (
+          <div className="space-y-2">
+            <p className="text-[13px] leading-5 text-ink-700" data-testid="test-pratiche-others">
+              Altre pratiche presenti in questa versione di prova: <span className="num">{otherCount}</span>
+              {otherConfirmedCount > 0 && <> (<span className="num">{otherConfirmedCount}</span> {otherConfirmedCount === 1 ? 'confermata' : 'confermate'})</>}
+            </p>
+            <label className="flex items-start gap-2 text-[13px] leading-5 text-ink-700 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-1 shrink-0"
+                checked={wipe}
+                onChange={e => { setWipe(e.target.checked); saveWipe(e.target.checked); }}
+                data-testid="test-pratiche-wipe"
+              />
+              <span>
+                Parti da zero: elimina anche {otherCount === 1 ? "l'altra pratica presente" : <>le altre <span className="num">{otherCount}</span> pratiche presenti</>}
+                <span className="block text-xs text-ink-500">Sono dati della sola versione di prova: la versione vera non viene toccata.</span>
+              </span>
+            </label>
+          </div>
         )}
         <p className="text-xs text-ink-500" data-testid="test-pratiche-count">
           Pratiche di prova presenti ora: <span className="num">{testCount}</span>

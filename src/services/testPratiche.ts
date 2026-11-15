@@ -154,21 +154,35 @@ export const removeTestPratiche = (all: Appointment[]): Appointment[] =>
   all.some(isTestPratica) ? all.filter(a => !isTestPratica(a)) : all;
 
 export type TestScenarioResult =
-  | { ok: true; appointments: Appointment[]; technicians: Technician[]; phone: string }
+  | { ok: true; appointments: Appointment[]; technicians: Technician[]; phone: string; removedOthers: number }
   | { ok: false; error: string };
+
+export interface TestScenarioOptions {
+  wipeAll?: boolean;   // «Parti da zero»: elimina anche le pratiche non di prova
+}
 
 export const INVALID_TEST_PHONE = 'Numero non valido: scrivilo con il prefisso, per esempio +39 333 1234567.';
 
 // Ricomincia da capo: toglie le pratiche di prova presenti (qualunque stato
-// abbiano) e aggiunge le 16 nuove in attesa, assegnate ai due tecnici
-export const loadTestScenario = (all: Appointment[], technicians: Technician[], rawPhone: string): TestScenarioResult => {
+// abbiano) e aggiunge le 16 nuove in attesa, assegnate ai due tecnici. Con
+// wipeAll restano SOLO le 16 nuove: tutte le altre pratiche vengono eliminate
+// (removedOthers dice quante non di prova).
+export const loadTestScenario = (
+  all: Appointment[],
+  technicians: Technician[],
+  rawPhone: string,
+  options: TestScenarioOptions = {}
+): TestScenarioResult => {
   const phone = normalizePhone(rawPhone || '');
   if (!phone) return { ok: false, error: INVALID_TEST_PHONE };
   const prepared = prepareTestTechnicians(technicians);
+  const kept = options.wipeAll ? [] : removeTestPratiche(all);
+  const removedOthers = options.wipeAll ? all.filter(a => !isTestPratica(a)).length : 0;
   return {
     ok: true,
     phone,
     technicians: prepared.technicians,
-    appointments: [...removeTestPratiche(all), ...buildTestPratiche(phone, prepared.techByGroup)],
+    appointments: [...kept, ...buildTestPratiche(phone, prepared.techByGroup)],
+    removedOthers,
   };
 };

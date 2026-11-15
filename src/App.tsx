@@ -1726,17 +1726,21 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
 
   // --- Versione di prova: pratiche di prova e titolo della scheda ---
   const testPraticheCount = allAppointments.filter(isTestPratica).length;
-  // Ricomincia da capo: via le pratiche di prova presenti, 16 nuove in
-  // attesa; i tecnici passano dal salvataggio di sempre (e dal cloud, se attivo)
-  const loadTestPratiche = useCallback((phone: string): string | null => {
-    const r = loadTestScenario(appointmentsRef.current, techniciansRef.current, phone);
-    if (!r.ok) return r.error;
+  // Le altre pratiche (non di prova) presenti in questa versione di prova
+  const otherPraticheCount = allAppointments.length - testPraticheCount;
+  const otherConfirmedCount = allAppointments.filter(a => !isTestPratica(a) && a.status === 'confirmed').length;
+  // Ricomincia da capo: via le pratiche di prova presenti (con wipeAll anche
+  // tutte le altre), 16 nuove in attesa. Pratiche e tecnici passano dal
+  // salvataggio di sempre (e dal cloud, se attivo: le eliminazioni si sincronizzano)
+  const loadTestPratiche = useCallback((phone: string, wipeAll: boolean): { error: string } | { removedOthers: number } => {
+    const r = loadTestScenario(appointmentsRef.current, techniciansRef.current, phone, { wipeAll });
+    if (!r.ok) return { error: r.error };
     if (r.technicians !== techniciansRef.current) {
       techniciansRef.current = r.technicians;
       setTechnicians(r.technicians);
     }
     setAllAppointments(r.appointments);
-    return null;
+    return { removedOthers: r.removedOthers };
   }, [setAllAppointments]);
   const clearTestPratiche = useCallback(() => {
     setAllAppointments(prev => removeTestPratiche(prev));
@@ -1934,6 +1938,8 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
       {testMode && showTestPratiche && (
         <TestPraticheModal
           testCount={testPraticheCount}
+          otherCount={otherPraticheCount}
+          otherConfirmedCount={otherConfirmedCount}
           testNumbersConfigured={testModeState.testNumbersConfigured}
           onLoad={loadTestPratiche}
           onRemove={clearTestPratiche}

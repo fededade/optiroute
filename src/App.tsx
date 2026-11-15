@@ -65,7 +65,9 @@ import SettingsSection from './layout/sections/SettingsSection';
 import AllPraticheSection from './layout/sections/AllPraticheSection';
 import { useUiPrefs, useViewportWidth } from './layout/useUiPrefs';
 import type { SectionId, Workspace } from './layout/types';
-import { inAgendaRange, longDayLabel, matchesQuery, plural, rangeLabel } from './layout/format';
+import { longDayLabel, matchesQuery, plural, rangeLabel } from './layout/format';
+import type { DaySelection } from './layout/days';
+import { activeDays, agendaFilter, dayCounts, isDayActive, mapDayFilter, routeDaysOf, selectSingleDay } from './layout/days';
 import { DEFAULT_SORT, filterByStatus, sortPratiche, statusCounts, type SortState, type StatusFilter } from './layout/praticheTable';
 import { NAV_ITEMS } from './layout/SideNav';
 import TestModeBanner from './Components/TestModeBanner';
@@ -152,6 +154,18 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   // Data LOCALE: con toISOString (UTC) fra mezzanotte e l'una/le due "oggi" era ancora ieri
   const [currentDate, setCurrentDate] = useState<string>(() => localDateStr(new Date()));
   const [viewMode, setViewMode] = useState<ViewMode>('day');
+  // Giorni aggiunti col calendario ("Più giorni", solo in vista giorno).
+  // Non si salva: all'avvio è attivo solo oggi.
+  const [extraDays, setExtraDays] = useState<string[]>([]);
+  const daySel: DaySelection = useMemo(() => ({ currentDate, viewMode, extraDays }), [currentDate, viewMode, extraDays]);
+  const applyDaySel = useCallback((s: DaySelection) => {
+    setCurrentDate(s.currentDate);
+    setViewMode(s.viewMode);
+    setExtraDays(s.extraDays);
+  }, []);
+  // Un solo giorno (frecce, "Oggi", clic su una giornata, conferme)
+  const showSingleDay = useCallback((d: string) => applyDaySel(selectSingleDay(d)), [applyDaySel]);
+  const changeViewMode = useCallback((v: ViewMode) => { setViewMode(v); setExtraDays([]); }, []);
   const [startTime, setStartTime] = useState(() => loadSettings()?.startTime || "09:00");
   const [endTimeLimit, setEndTimeLimit] = useState(() => loadSettings()?.endTimeLimit || "18:00");
   // Pannello impostazioni/azioni della sidebar: richiudibile per dare spazio all'elenco
@@ -271,36 +285,13 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   }, [selectedTechId]);
 
   const getVisibleAppointments = useCallback(() => {
-      const selectedDate = new Date(currentDate);
-
-      const isSameWeek = (dateStr?: string) => {
-          if (!dateStr) return false;
-          const d = new Date(dateStr);
-          const startOfWeek = new Date(selectedDate);
-          const day = startOfWeek.getDay() || 7;
-          if (day !== 1) startOfWeek.setHours(-24 * (day - 1));
-
-          const endOfWeek = new Date(startOfWeek);
-          endOfWeek.setDate(startOfWeek.getDate() + 6);
-
-          return d >= startOfWeek && d <= endOfWeek;
-      };
-
-      const isSameMonth = (dateStr?: string) => {
-          if (!dateStr) return false;
-          const d = new Date(dateStr);
-          return d.getMonth() === selectedDate.getMonth() && d.getFullYear() === selectedDate.getFullYear();
-      };
-
       return allAppointments.filter((appt: Appointment) => {
           if (!matchesTechFilter(appt)) return false;
 
+          // Confermate: solo dei giorni attivi (giorno, più giorni, settimana, mese)
           if (appt.status === 'confirmed') {
               if (!filters.confirmed) return false;
-              if (viewMode === 'day') return appt.date === currentDate;
-              if (viewMode === 'week') return isSameWeek(appt.date);
-              if (viewMode === 'month') return isSameMonth(appt.date);
-              return false;
+              return isDayActive(daySel, appt.date);
           }
           if (appt.status === 'proposed') return filters.proposed;
           if (appt.status === 'pending') return filters.pending;
@@ -309,7 +300,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
           if (appt.status === 'cancelled') return filters.cancelled;
           return true;
       });
-  }, [allAppointments, filters, currentDate, viewMode, matchesTechFilter]);
+  }, [allAppointments, filters, daySel, matchesTechFilter]);
 
   const visibleAppointments = getVisibleAppointments();
 
@@ -1137,8 +1128,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
 
     // La vista segue la conferma (vedi handleConfirmDay)
     if (newStatus === 'confirmed') {
-        setCurrentDate(confirmDate);
-        setViewMode('day');
+        showSingleDay(confirmDate);
     }
 
     // On confirmation, propose the AI confirmation call if a phone number exists
@@ -1156,8 +1146,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     ));
     // La vista segue la conferma: senza questo salto le confermate "spariscono"
     // (vivono sulla loro data mentre la vista resta su oggi)
-    setCurrentDate(date);
-    setViewMode('day');
+    showSingleDay(date);
   };
 
   // Riordino di un giro PROPOSTO (drag & drop): ricalcola gli orari con le
@@ -1362,7 +1351,8 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
 
   // --- Drag & drop: tieni premuto e trascina una scheda confermata per
   // riordinare il giro; gli orari si ricalcolano subito. ---
-  const canDragReorder = viewMode === 'day' && !isOptimizing;
+  // Con più giorni l'Agenda è per giorno (schede, non linea del tempo): niente riordino
+  const canDragReorder = viewMode === 'day' && extraDays.length === 0 && !isOptimizing;
 
   const sameRoute = (a?: Appointment, b?: Appointment): boolean =>
     !!a && !!b && a.status === b.status &&
@@ -1452,7 +1442,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     const counts = new Map<string, number>();
     for (const a of allAppointments) {
       if (a.status !== 'confirmed' || !a.date || !matchesTechFilter(a)) continue;
-      if (viewMode === 'day' && a.date === currentDate) continue;
+      if (viewMode === 'day' && isDayActive(daySel, a.date)) continue;
       counts.set(a.date, (counts.get(a.date) || 0) + 1);
     }
     return Array.from(counts.entries()).sort((x, y) => x[0].localeCompare(y[0]));
@@ -1628,9 +1618,8 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     if (!document.getElementById(`appt-${id}`)) {
       const target = sectionOf(appt);
       if (target !== section) navigate(target);
-      if (appt.status === 'confirmed' && appt.date && !inAgendaRange(appt.date, currentDate, viewMode)) {
-        setCurrentDate(appt.date);
-        setViewMode('day');
+      if (appt.status === 'confirmed' && appt.date && !isDayActive(daySel, appt.date)) {
+        showSingleDay(appt.date);
       }
       if (search && !matchesQuery(appt, search)) setSearch('');
     }
@@ -1687,8 +1676,12 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   };
 
   // Elenchi per le sezioni (stesse regole di sempre)
-  const agendaItems = allAppointments.filter(a =>
-    a.status === 'confirmed' && matchesTechFilter(a) && inAgendaRange(a.date, currentDate, viewMode));
+  const agendaItems = allAppointments.filter(a => matchesTechFilter(a) && agendaFilter(daySel)(a));
+  // Calendario: pratiche nel giro per giorno (confermate / proposte), filtro tecnico
+  const calendarCounts = useMemo(() => dayCounts(allAppointments, matchesTechFilter), [allAppointments, matchesTechFilter]);
+  const activeDayList = activeDays(daySel);
+  const multiDay = viewMode === 'day' && activeDayList.length > 1;
+  const singleDayView = viewMode === 'day' && !multiDay;
   const confirmedUpcoming = allAppointments.filter(a => a.status === 'confirmed' && !!a.date && a.date >= todayStr && matchesTechFilter(a)).length;
   const attentionTotal = attention.length + followUpAlerts.length;
   const navCounts: NavCounts = {
@@ -1725,7 +1718,13 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     [tableBase, praticheStatus, praticheSort, techById]);
   // Elenco "mostrate ora": lo usano la mappa e l'esportazione (getExportPool)
   const visibleStable = useMemo(() => getVisibleAppointments(), [getVisibleAppointments]);
-  const shownNow = tableMode ? tableRows : visibleStable;
+  // Giri (confermate e proposte con giorno e ora) solo dei giorni attivi; in
+  // Proposte la mappa mostra tutte le proposte, come l'elenco
+  const shownNow = useMemo(
+    () => (tableMode ? tableRows : visibleStable.filter(mapDayFilter(daySel, section === 'proposte'))),
+    [tableMode, tableRows, visibleStable, daySel, section]);
+  // Più giorni sulla mappa: segnaposto, linee, legenda ed elenchi col colore del giorno
+  const colorByDay = !tableMode && activeDayList.length > 1 && routeDaysOf(shownNow).length > 1;
   // In Impostazioni la mappa non serve (la preferenza salvata resta com'è)
   const mapHere = !(section === 'impostazioni' && !tableMode);
   const mapShown = mapVisible && mapHere;
@@ -1762,7 +1761,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     'da-gestire': { title: 'Da gestire', subtitle: attentionTotal ? `${attentionTotal} ${attentionTotal === 1 ? 'voce richiede' : 'voci richiedono'} una decisione` : 'Niente in sospeso' },
     'in-attesa': { title: 'In attesa', subtitle: `${listPending.length} da pianificare` },
     'proposte': { title: 'Proposte', subtitle: `${plural(listProposed.length, 'tappa', 'tappe')} in ${plural(proposedGroups.length, 'giro', 'giri')} da approvare` },
-    'agenda': { title: 'Agenda', subtitle: `${agendaItems.length} confermati · ${rangeLabel(currentDate, viewMode)}` },
+    'agenda': { title: 'Agenda', subtitle: `${agendaItems.length} confermati · ${multiDay ? `${activeDayList.length} giorni` : rangeLabel(currentDate, viewMode)}` },
     'problemi': { title: 'Problemi', subtitle: `${plural(listIssues.length, 'pratica', 'pratiche')} da sistemare` },
     'archivio': { title: 'Archivio', subtitle: `${listStandby.length} in stand-by · ${listCancelled.length} annullate` },
     'impostazioni': { title: 'Impostazioni', subtitle: 'Base, orari, pilota e tecnici' },
@@ -1802,7 +1801,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
             attentionTotal={attentionTotal}
             slotCount={followUpAlerts.length}
             onNavigate={navigate}
-            onOpenDay={(d) => { setCurrentDate(d); setViewMode('day'); navigate('agenda'); }}
+            onOpenDay={(d) => { showSingleDay(d); navigate('agenda'); }}
             onOpenProposals={() => navigate('proposte')}
             onAttentionSelect={handleAttentionSelect}
             onAttentionShow={(item) => showAppointment(item.id)}
@@ -1856,6 +1855,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
             pendingCount={pendingAll.length}
             onDispatch={() => setShowDispatchModal(true)}
             onEnableAutopilot={() => setAutopilotEnableRequest(n => n + 1)}
+            dayColors={colorByDay}
           />
         );
       case 'agenda':
@@ -1864,11 +1864,13 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
             ws={ws}
             items={agendaItems}
             otherDays={otherConfirmedDays}
-            onGoDay={(day) => { setCurrentDate(day); setViewMode('day'); }}
+            onGoDay={showSingleDay}
             onOptimize={handleOptimize}
             optimizeLabel={optimizeLabel}
             canDragReorder={canDragReorder}
-            routeSummary={viewMode === 'day' ? routeSummary : null}
+            routeSummary={singleDayView ? routeSummary : null}
+            multiDay={multiDay}
+            dayColors={colorByDay}
             selectedTech={selectedTech}
             techUnavailable={techUnavailable}
             onOpenProposals={() => navigate('proposte')}
@@ -1907,7 +1909,9 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
     <MapPanel
       appointments={shownNow}
       center={mapCenter}
-      routeSummary={!tableMode && viewMode === 'day' ? routeSummary : null}
+      routeSummary={!tableMode && singleDayView ? routeSummary : null}
+      activeDays={activeDayList}
+      colorByDay={colorByDay}
       listNote={tableMode ? `Sulla mappa: ${shownNow.length === 0 ? 'nessuna pratica in elenco' : shownNow.length === 1 ? 'la pratica in elenco' : `le ${shownNow.length} pratiche in elenco`}` : undefined}
       baseLocation={baseLocation}
       technicians={technicians}
@@ -2111,9 +2115,13 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
           onSendReport={handleSendToN8n}
           isSending={isSendingToN8n}
           currentDate={currentDate}
-          onDateChange={setCurrentDate}
+          onDateChange={showSingleDay}
           viewMode={viewMode}
-          onViewMode={setViewMode}
+          onViewMode={changeViewMode}
+          daySelection={daySel}
+          onDaySelection={applyDaySel}
+          dayCounts={calendarCounts}
+          todayStr={todayStr}
           mapVisible={mapVisible || !mapHere}
           onToggleMap={toggleMap}
         />

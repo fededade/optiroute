@@ -5,6 +5,8 @@ import * as L from 'leaflet';
 import type { Appointment, Coordinates, RouteSummary, AppointmentStatus, Technician } from '../types';
 import { getFullRouteGeometry } from '../services/routingService';
 import { displayCode, formatPhone, prettyCode, titleIsAddress } from '../layout/format';
+import { dayColor } from '../layout/days';
+import { isInRoute } from '../services/slotService';
 
 const iconUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
 const iconRetinaUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png';
@@ -22,21 +24,6 @@ let DefaultIcon = L.icon({
 
 L.Marker.prototype.options.icon = DefaultIcon;
 
-const DATE_COLORS = [
-    '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981',
-    '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef', '#f43f5e'
-];
-
-const getColorForDate = (dateStr?: string): string => {
-    if (!dateStr) return '#3b82f6';
-    let hash = 0;
-    for (let i = 0; i < dateStr.length; i++) {
-        hash = dateStr.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const index = Math.abs(hash) % DATE_COLORS.length;
-    return DATE_COLORS[index];
-};
-
 // Segnaposto della scheda selezionata: anello oro (colore del marchio)
 const SELECTED_RING = 'box-shadow: 0 0 0 3px #fff, 0 0 0 6px #DDAE49, 0 4px 10px rgba(18,20,26,0.35);';
 const BASE_SHADOW = 'box-shadow: 0 1px 3px rgba(18,20,26,0.35);';
@@ -49,10 +36,10 @@ const markerBorder = (urgent?: boolean, proposed?: boolean): string => {
   return `border: ${width} ${style} ${color};`;
 };
 
-const createScheduledIcon = (number: number, color: string, urgent?: boolean, proposed?: boolean, selected?: boolean) => {
+const createScheduledIcon = (number: number, color: string, urgent?: boolean, proposed?: boolean, selected?: boolean, day?: string) => {
   return L.divIcon({
     className: 'custom-div-icon',
-    html: `<div style="background-color: ${color}; ${proposed ? 'opacity: 0.88;' : ''} width: 28px; height: 28px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-family: 'JetBrains Mono', ui-monospace, monospace; ${markerBorder(urgent, proposed)} ${selected ? SELECTED_RING : BASE_SHADOW} font-size: 13px;">${number || '?'}</div>`,
+    html: `<div data-route-marker="${proposed ? 'proposed' : 'confirmed'}" data-day="${day || ''}" data-color="${color}" style="background-color: ${color}; ${proposed ? 'opacity: 0.88;' : ''} width: 28px; height: 28px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-family: 'JetBrains Mono', ui-monospace, monospace; ${markerBorder(urgent, proposed)} ${selected ? SELECTED_RING : BASE_SHADOW} font-size: 13px;">${number || '?'}</div>`,
     iconSize: [28, 28],
     iconAnchor: [14, 14],
     popupAnchor: [0, -10]
@@ -127,6 +114,9 @@ interface MapComponentProps {
   onStatusChange: (id: string, status: AppointmentStatus) => void;
   onRequestCall?: (id: string) => void;
   selectedId?: string | null;   // scheda selezionata: segnaposto evidenziato
+  // Più giorni attivi: segnaposto e linee dei giri col colore del GIORNO
+  // (il tecnico resta nel fumetto); altrimenti col colore del tecnico
+  colorByDay?: boolean;
 }
 
 // La mappa si adatta quando il suo riquadro cambia misura (divisore,
@@ -223,17 +213,20 @@ const MapComponent: React.FC<MapComponentProps> = ({
   onStatusChange,
   onRequestCall,
   selectedId,
+  colorByDay = false,
 }) => {
   const [techRoutes, setTechRoutes] = useState<TechRoute[]>([]);
 
   const techById = (id?: string): Technician | undefined =>
     id ? technicians.find(t => t.id === id) : undefined;
 
-  // Colore del marker: tecnico assegnato, altrimenti colore per data (legacy)
+  // Colore del marker: con più giorni attivi il colore del giorno, altrimenti
+  // quello del tecnico assegnato (senza tecnico: il colore del giorno)
   const colorFor = (appt: Appointment): string => {
+    if (colorByDay && isInRoute(appt)) return dayColor(appt.date);
     const tech = techById(appt.technicianId);
     if (tech) return tech.color;
-    return getColorForDate(appt.date);
+    return dayColor(appt.date);
   };
 
   useEffect(() => {
@@ -260,7 +253,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
         if (group.length < 1) continue;
         const sorted = [...group].sort((a, b) => (a.sequenceOrder || 999) - (b.sequenceOrder || 999));
 
-        const [techId, , statusFlag] = key.split('|');
+        const [techId, date, statusFlag] = key.split('|');
         const tech = techById(techId !== 'none' ? techId : undefined);
         const startCoords = tech?.baseCoords || baseLocation?.coords;
 
@@ -282,7 +275,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
         results.push({
           key,
-          color: tech?.color || '#6366f1',
+          color: colorByDay ? dayColor(date) : (tech?.color || '#6366f1'),
           positions,
           dashed: statusFlag === 'p',
         });
@@ -296,7 +289,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
     fetchRoutes();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appointments, baseLocation, technicians]);
+  }, [appointments, baseLocation, technicians, colorByDay]);
 
   const getIcon = (appt: Appointment) => {
     const selected = appt.id === selectedId;
@@ -306,7 +299,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
           colorFor(appt),
           appt.urgent,
           appt.status === 'proposed',
-          selected
+          selected,
+          appt.date
         );
     } else if (appt.status === 'standby') {
         return createStandbyIcon(selected);
@@ -407,7 +401,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
                       ) : (
                         <span className={`chip ${statusChip(appt.status)}`}>{appt.status === 'issue' ? issueLabel(appt.issueType) : statusLabel(appt.status)}</span>
                       )}
-                      {isScheduled && appt.date && <span className="text-xs text-ink-500">{dayOf(appt.date)}</span>}
+                      {isScheduled && appt.date && (colorByDay
+                        ? <span className="chip chip-neutral" data-testid="popup-day"><span className="dot" style={{ backgroundColor: dayColor(appt.date) }} />{dayOf(appt.date)}</span>
+                        : <span className="text-xs text-ink-500">{dayOf(appt.date)}</span>)}
                       {appt.status === 'proposed' && <span className="chip chip-info">Da confermare</span>}
                     </div>
                     <p className="mt-1.5 text-[15px] font-semibold leading-snug text-ink-950">
@@ -467,7 +463,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
           {techRoutes.map(route => (
             <Polyline
-              key={route.key}
+              // il colore nella chiave: react-leaflet non aggiorna il colore di una linea già disegnata
+              key={`${route.key}|${route.color}`}
               positions={route.positions}
               color={route.color}
               weight={4}

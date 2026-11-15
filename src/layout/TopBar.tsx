@@ -1,12 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 import {
-  CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Map as MapIcon, MapPinned, Menu as MenuIcon,
+  ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Map as MapIcon, MapPinned, Menu as MenuIcon,
   Plug, Plus, Search, Send, Settings2, Sparkles, Truck, Upload, Users, X,
 } from 'lucide-react';
 import type { Technician } from '../types';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Menu';
 import type { ViewMode } from './types';
 import { addDays, dayTitle, isoDate } from './format';
+import DayCalendar from './DayCalendar';
+import type { DayCount, DaySelection } from './days';
+import { activeDays, dayColor, toggleDay } from './days';
 
 // Barra in alto: titolo della sezione, ricerca, filtro tecnico e azioni
 // raggruppate in menu con voci testuali. In Agenda anche data e vista.
@@ -49,6 +52,11 @@ interface TopBarProps {
   onDateChange: (d: string) => void;
   viewMode: ViewMode;
   onViewMode: (v: ViewMode) => void;
+  // Giorni attivi (calendario): selezione, conteggi per giorno, oggi
+  daySelection: DaySelection;
+  onDaySelection: (s: DaySelection) => void;
+  dayCounts: Map<string, DayCount>;
+  todayStr: string;
 
   mapVisible: boolean;
   onToggleMap: () => void;
@@ -228,6 +236,8 @@ const TopBar: React.FC<TopBarProps> = (p) => {
     p.onDateChange(d);
   };
 
+  const multiDays = p.daySelection.viewMode === 'day' ? activeDays(p.daySelection) : [];
+
   const agendaBar = p.isAgenda && (
     <div className="flex items-center gap-2 flex-wrap px-4 md:px-6 pb-3">
       <div className="inline-flex items-center rounded-control border border-line bg-surface shadow-card">
@@ -235,12 +245,27 @@ const TopBar: React.FC<TopBarProps> = (p) => {
         <button type="button" className="h-9 px-3 text-sm font-semibold text-ink-800 hover:bg-slate-50 border-x border-line" onClick={() => p.onDateChange(isoDate(new Date()))}>Oggi</button>
         <button type="button" className="icon-btn h-9 rounded-l-none" onClick={() => step(1)} title="Periodo successivo" aria-label="Periodo successivo"><ChevronRight size={16} strokeWidth={1.75} /></button>
       </div>
-      <label className="relative">
-        <span className="sr-only">Data di riferimento</span>
-        <CalendarRange size={15} strokeWidth={1.75} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400 pointer-events-none" aria-hidden />
-        <input type="date" value={p.currentDate} onChange={e => e.target.value && p.onDateChange(e.target.value)} className="input w-[170px] pl-9 num" aria-label="Data di riferimento" />
-      </label>
-      <span className="text-sm text-ink-500 hidden sm:inline">{dayTitle(p.currentDate)}</span>
+      <DayCalendar
+        selection={p.daySelection}
+        counts={p.dayCounts}
+        todayStr={p.todayStr}
+        mobile={p.mobile}
+        onChange={p.onDaySelection}
+      />
+      {multiDays.length > 1 && (
+        <div className="flex items-center gap-1.5 flex-wrap order-last w-full" data-testid="active-days" aria-label="Giorni attivi">
+          {multiDays.map(d => (
+            <span key={d} className="chip h-7 pl-2 pr-1 border-line bg-surface text-ink-800" data-testid={`active-day-${d}`}>
+              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: dayColor(d) }} aria-hidden />
+              {dayTitle(d)}
+              <button type="button" className="icon-btn h-5 w-5" onClick={() => p.onDaySelection(toggleDay(p.daySelection, d))} aria-label={`Togli ${dayTitle(d)}`} title="Togli questo giorno">
+                <X size={12} strokeWidth={2} />
+              </button>
+            </span>
+          ))}
+          <button type="button" className="btn btn-ghost btn-sm h-7 px-2" onClick={() => p.onDateChange(p.todayStr)} data-testid="active-days-reset">Solo oggi</button>
+        </div>
+      )}
       <div className="seg ml-auto" role="tablist" aria-label="Vista">
         {(['day', 'week', 'month'] as ViewMode[]).map(v => (
           <button key={v} type="button" role="tab" aria-selected={p.viewMode === v} className={`seg-item ${p.viewMode === v ? 'seg-item-active' : ''}`} onClick={() => p.onViewMode(v)}>

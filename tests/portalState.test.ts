@@ -16,6 +16,7 @@ import {
   isPortalExcluded,
   portalExclusions,
   suspensionFingerprint,
+  suspensionState,
 } from '../src/services/portalState';
 import { describeImport } from '../src/hooks/useBridgeInbox';
 import { P, appt, stop } from './fixtures';
@@ -191,6 +192,32 @@ describe('classificazione della nota di sospensione (oggi sabato 14/11/2026)', (
   const vettori: [string, string, string | undefined][] = [
     ['cliente da richiamare il 20/11', 'richiamo', '2026-11-20'],
     ['Cliente da richiamare in data 20/11/2026', 'richiamo', '2026-11-20'],
+    // chiamare/telefonare/contattare; giorno del mese senza il mese
+    ['chiamare dopo il 19', 'richiamo', '2026-11-19'],
+    ['cliente da chiamare dal 25', 'richiamo', '2026-11-25'],
+    ['richiamare il 10', 'richiamo', '2026-11-10'],
+    ['disponibile dal 2', 'disponibilita', '2026-12-02'],
+    ['assente fino al 20', 'disponibilita', '2026-11-21'],
+    ['richiamare dopo le 19', 'richiamo', undefined],
+    ['chiamare alle 19', 'richiamo', undefined],
+    ['telefonare tra 19 giorni', 'richiamo', '2026-12-03'],
+    ['contattare il referente', 'richiamo', undefined],
+    ['via Roma 19, richiamare', 'richiamo', undefined],
+    ["numero errato, chiamare l'agenzia", 'numero', undefined],
+    // scelte: giorno che nel mese non c'è (31: novembre no, ottobre sì), orari e altri numeri
+    ['richiamare il 31', 'richiamo', '2026-10-31'],
+    ['disponibile dal 31', 'disponibilita', '2026-12-31'],
+    ['entro il 16 telefonare', 'richiamo', '2026-11-16'],
+    ['richiamare il 19 ore 10', 'richiamo', undefined], // "19 ore": come da regola, non è una data
+    ['richiamare il 19:30', 'richiamo', undefined],
+    ['richiamare il 19.30', 'richiamo', undefined],
+    ['richiamare il 2,5', 'richiamo', undefined],
+    ['richiamare dal 3 piano', 'richiamo', undefined],
+    ['richiamare il 3° giorno', 'richiamo', undefined],
+    ['chiamare il 19 dicembre', 'richiamo', '2026-12-19'],
+    ['chiamata il 20 alle 10, poi il 25', 'richiamo', '2026-11-20'],
+    ['il 32', 'altro', undefined],
+    ['dopo il 25', 'disponibilita', '2026-11-25'],
     ['da ricontattare dopo il 3 dicembre', 'richiamo', '2026-12-03'],
     ["RICHIAMARE LUNEDI'", 'richiamo', '2026-11-16'],
     ['risentire a gennaio', 'richiamo', '2027-01-01'],
@@ -321,7 +348,7 @@ describe('applicazione delle sospensioni del portale', () => {
       expect(byId(list, id)).toMatchObject({ status: 'issue', issueType: 'callback' });
       expect(byId(list, id).followUpDate).toBeUndefined();
     }
-    expect(byId(list, 'n5').notes).toBe('Sospesa sul portale (nessuna nota).');
+    expect(byId(list, 'n5').notes).toBe('Sospesa sul portale (nota non disponibile).');
     expect(byId(list, 'n5').portalSuspension).toBe('-');
   });
 
@@ -389,27 +416,116 @@ describe('applicazione delle sospensioni del portale', () => {
     expect(run(operator, [sosp('800001', 'cliente da richiamare il 20/11')]).list).toBe(operator);
   });
 
-  it('nota cambiata sul portale: si riapplica (una riga per nota)', () => {
+  it('nota cambiata sul portale, pratica rimessa in attesa: si riapplica, la riga si sostituisce', () => {
     const first = run([appt({ id: 'i2', periziaCode: '800002' })], [sosp('800002', 'cliente da richiamare il 20/11')]).list;
     const operator = first.map(a => ({ ...a, status: 'pending' as const, issueType: undefined, followUpDate: undefined }));
     const r = run(operator, [sosp('800002', 'cliente disponibile solo dal 2 dicembre')]);
     const a = byId(r.list, 'i2');
-    expect(a).toMatchObject({ status: 'pending', followUpDate: '2026-12-02', portalSuspension: 'cliente disponibile solo dal 2 dicembre' });
-    expect(a.notes).toBe('Sospesa sul portale: cliente da richiamare il 20/11\nSospesa sul portale: cliente disponibile solo dal 2 dicembre');
+    expect(a).toMatchObject({ status: 'pending', followUpDate: '2026-12-02', portalSuspension: 'cliente disponibile solo dal 2 dicembre', portalSuspensionState: 'pending||2026-12-02' });
+    expect(a.notes).toBe('Sospesa sul portale: cliente disponibile solo dal 2 dicembre');
   });
 
-  it('non più sospesa sul portale: si toglie solo l\'impronta; assente dallo snapshot: niente', () => {
-    const first = run([appt({ id: 'i3', periziaCode: '800003' })], [sosp('800003', 'cliente da richiamare')]).list;
+  it('stato dato dalla sospensione: salvato solo con l\'applicazione completa', () => {
+    const r = run(
+      [appt({ id: 's1', periziaCode: '810001' }), appt({ id: 's2', periziaCode: '810002', status: 'standby' })],
+      [sosp('810001', 'cliente da richiamare il 20/11'), sosp('810002', 'cliente da richiamare il 20/11')],
+    );
+    expect(byId(r.list, 's1').portalSuspensionState).toBe('issue|callback|2026-11-20');
+    expect('portalSuspensionState' in byId(r.list, 's2')).toBe(false);
+    expect(suspensionState(byId(r.list, 's1'))).toBe('issue|callback|2026-11-20');
+  });
+
+  it('prima senza nota, poi con la nota vera: la data si applica, la riga si sostituisce (una sola)', () => {
+    const first = run([appt({ id: 'e1', periziaCode: '820001', notes: 'Scala B' })], [{ codice: '820001', fase: 'sospesa', sospensione: { nota: '' } }]);
+    const a0 = byId(first.list, 'e1');
+    expect(a0).toMatchObject({ status: 'issue', issueType: 'callback', portalSuspension: '-', portalSuspensionState: 'issue|callback|' });
+    expect(a0.notes).toBe('Scala B\nSospesa sul portale (nota non disponibile).');
+    const second = run(first.list, [sosp('820001', 'cliente da richiamare il 20/11')]);
+    const a = byId(second.list, 'e1');
+    expect(a).toMatchObject({ status: 'issue', issueType: 'callback', followUpDate: '2026-11-20', portalSuspension: 'cliente da richiamare il 20/11', portalSuspensionState: 'issue|callback|2026-11-20' });
+    expect(a.notes).toBe('Scala B\nSospesa sul portale: cliente da richiamare il 20/11');
+    expect(second.applied).toEqual([{ id: 'e1', codice: '820001', kind: 'richiamo', date: '2026-11-20', statusChanged: true }]);
+    // idempotente
+    const third = run(second.list, [sosp('820001', 'cliente da richiamare il 20/11')]);
+    expect(third.applied).toEqual([]);
+    expect(third.list).toBe(second.list);
+  });
+
+  it('nota cambiata con pratica intatta: riclassificata; la riga resta al suo posto, le altre note no', () => {
+    const first = run([appt({ id: 'e2', periziaCode: '820002', notes: 'Citofono rotto' })], [sosp('820002', 'cliente da richiamare il 20/11')]).list;
+    const withMore = first.map(a => ({ ...a, notes: `${a.notes}\nChiedere del portiere` }));
+    const r = run(withMore, [sosp('820002', 'lavori non ultimati, richiamare a gennaio')]);
+    const a = byId(r.list, 'e2');
+    expect(a).toMatchObject({ status: 'issue', issueType: 'works_pending', followUpDate: '2027-01-01', portalSuspensionState: 'issue|works_pending|2027-01-01' });
+    expect(a.notes).toBe('Citofono rotto\nSospesa sul portale: lavori non ultimati, richiamare a gennaio\nChiedere del portiere');
+    expect(r.applied[0].statusChanged).toBe(true);
+  });
+
+  it('nota cambiata con pratica toccata dall\'operatore: solo riga (sostituita) e impronta', () => {
+    const first = run([appt({ id: 'e3', periziaCode: '820003' })], [sosp('820003', 'cliente da richiamare il 20/11')]).list;
+    // l'operatore sposta la data di richiamo
+    const operator = first.map(a => ({ ...a, followUpDate: '2026-11-25' }));
+    const r = run(operator, [sosp('820003', 'cliente disponibile solo dal 2 dicembre')]);
+    const a = byId(r.list, 'e3');
+    expect(a).toMatchObject({ status: 'issue', issueType: 'callback', followUpDate: '2026-11-25', portalSuspension: 'cliente disponibile solo dal 2 dicembre' });
+    expect('portalSuspensionState' in a).toBe(false);
+    expect(a.notes).toBe('Sospesa sul portale: cliente disponibile solo dal 2 dicembre');
+    expect(r.applied[0].statusChanged).toBe(false);
+  });
+
+  it('nota cambiata: confermate e chiamate in corso mai toccate, anche se intatte', () => {
+    const first = run([appt({ id: 'e4', periziaCode: '820004' })], [sosp('820004', 'cliente da richiamare')]).list;
+    const calling = first.map(a => ({ ...a, callStatus: 'calling' as const }));
+    const r = run(calling, [sosp('820004', 'cliente da richiamare il 20/11')]);
+    expect(r.applied).toEqual([]);
+    expect(r.list).toBe(calling);
+    // non più sospesa durante la chiamata: si aspetta
+    const gone = run(calling, [{ codice: '820004', fase: 'da_fissare' }]);
+    expect(gone.list).toBe(calling);
+    expect(gone.cleared).toEqual([]);
+    const confirmed = [stop('e5', D, '09:00', '09:30', P.milano, { periziaCode: '820005', status: 'confirmed', portalSuspension: '-', portalSuspensionState: 'issue|callback|' })];
+    expect(run(confirmed, [sosp('820005', 'cliente da richiamare il 20/11')]).list).toBe(confirmed);
+  });
+
+  it('non più sospesa, pratica intatta: torna in attesa senza data, la nostra riga si toglie', () => {
+    const first = run([appt({ id: 'i3', periziaCode: '800003', notes: 'Scala B' })], [sosp('800003', 'cliente da richiamare il 20/11')]).list;
     const absent = run(first, [sosp('899999', 'x')]);
     expect(absent.list).toBe(first);
     const r = run(first, [{ codice: '800003', fase: 'da_fissare' }]);
     const a = byId(r.list, 'i3');
     expect('portalSuspension' in a).toBe(false);
-    expect(a).toMatchObject({ status: 'issue', issueType: 'callback', notes: 'Sospesa sul portale: cliente da richiamare' });
+    expect('portalSuspensionState' in a).toBe(false);
+    expect(a).toMatchObject({ status: 'pending', notes: 'Scala B' });
+    expect(a.issueType).toBeUndefined();
+    expect(a.followUpDate).toBeUndefined();
     expect(r.cleared).toEqual(['i3']);
+    expect(r.restored).toEqual(['i3']);
     // anche con un bridge vecchio (fase assente) se la pratica è nello snapshot
-    expect(run(first, [{ codice: '800003' }]).cleared).toEqual(['i3']);
+    expect(run(first, [{ codice: '800003' }]).restored).toEqual(['i3']);
     expect(run(r.list, [{ codice: '800003' }]).list).toBe(r.list);
+    // senza altre note: note vuote
+    const solo = run([appt({ id: 'i4', periziaCode: '800004' })], [sosp('800004', 'cliente disponibile solo dal 25/11')]).list;
+    const back = byId(run(solo, [{ codice: '800004', fase: 'da_fissare' }]).list, 'i4');
+    expect(back).toMatchObject({ status: 'pending' });
+    expect(back.notes).toBeUndefined();
+    expect(back.followUpDate).toBeUndefined();
+  });
+
+  it('non più sospesa, pratica toccata dall\'operatore: si tolgono solo impronta e stato dato', () => {
+    const first = run([appt({ id: 'i5', periziaCode: '800005' })], [sosp('800005', 'cliente da richiamare')]).list;
+    const operator = first.map(a => ({ ...a, status: 'standby' as const }));
+    const r = run(operator, [{ codice: '800005', fase: 'da_fissare' }]);
+    const a = byId(r.list, 'i5');
+    expect('portalSuspension' in a).toBe(false);
+    expect('portalSuspensionState' in a).toBe(false);
+    expect(a).toMatchObject({ status: 'standby', issueType: 'callback', notes: 'Sospesa sul portale: cliente da richiamare' });
+    expect(r.cleared).toEqual(['i5']);
+    expect(r.restored).toEqual([]);
+    // pratica di prima (solo impronta, senza stato dato): come prima
+    const old = [appt({ id: 'i6', periziaCode: '800006', status: 'issue', issueType: 'callback', portalSuspension: 'x', notes: 'Sospesa sul portale: x' })];
+    const r2 = run(old, [{ codice: '800006', fase: 'da_fissare' }]);
+    expect(byId(r2.list, 'i6')).toMatchObject({ status: 'issue', notes: 'Sospesa sul portale: x' });
+    expect(r2.restored).toEqual([]);
   });
 
   it('impronta: testo ripulito, "-" se vuota', () => {
@@ -427,5 +543,8 @@ describe('testo del chip', () => {
     expect(describeImport({ added: 0, updated: 0, failed: 0, removed: 1, removedPortal: 2 }, at))
       .toBe('1 tolta perché già nel gestionale, 2 tolte perché già fissate o chiuse sul portale alle 12:15');
     expect(describeImport({ added: 0, updated: 0, failed: 0, removedPortal: 1 }, at)).toBe('1 tolta perché già fissata o chiusa sul portale alle 12:15');
+    expect(describeImport({ added: 0, updated: 0, failed: 0, suspended: 1, resumed: 2 }, at))
+      .toBe('1 sospesa sul portale, 2 tornate in attesa (non più sospese) alle 12:15');
+    expect(describeImport({ added: 0, updated: 0, failed: 0, resumed: 1 }, at)).toBe('1 tornata in attesa (non più sospesa) alle 12:15');
   });
 });

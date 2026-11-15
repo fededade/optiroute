@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { codeKey, displayCode, displayNotes, praticaKey } from '../src/services/praticaCode';
-import { displayCode as displayCodeFromLayout, displayNotes as displayNotesFromLayout } from '../src/layout/format';
+import * as XLSX from 'xlsx';
+import { codeKey, displayCode, displayNotes, praticaKey, prettyCode } from '../src/services/praticaCode';
+import {
+  displayCode as displayCodeFromLayout, displayNotes as displayNotesFromLayout, matchesQuery, prettyCode as prettyCodeFromLayout,
+} from '../src/layout/format';
+import { sortPratiche } from '../src/layout/praticheTable';
+import { generateExcelBlob } from '../src/services/excelService';
 import { buildSopralluoghiExport } from '../src/services/gestionaleExport';
 import { diffBridgeSnapshot, type BridgePratica } from '../src/services/bridgeService';
 import { importRowsToAppointments, type ImportRow } from '../src/hooks/importPratiche';
@@ -129,5 +134,92 @@ describe('server: stessa pratica importata da due dispositivi', () => {
     expect(next[0].periziaCode).toBeUndefined(); // il codice salvato non si riscrive
     const other = applyAppointmentChanges(all, [{ op: 'put', id: 'y', value: appt({ id: 'y', periziaCode: '845327' }) }]);
     expect(other.map(a => a.id)).toEqual(['a', 'y']);
+  });
+});
+
+describe('codice da leggere: sei cifre sempre con il punto (solo presentazione)', () => {
+  it.each([
+    ['844787', '844.787'],
+    ['844.787', '844.787'],
+    ['844 787', '844.787'],
+    ['  844787 ', '844.787'],
+    ['ISP 844787', 'ISP 844.787'],
+    ['ISP 844.787', 'ISP 844.787'],
+    ['ISP  844 787', 'ISP 844.787'],
+    ['isp844787', 'isp844.787'],
+    // ogni altra forma resta com'è
+    ['84478', '84478'],
+    ['8447871', '8447871'],
+    ['1.234.567', '1.234.567'],
+    ['BR-1', 'BR-1'],
+    ['ISP-C1', 'ISP-C1'],
+    ['844-787', '844-787'],
+    ['PR-0001', 'PR-0001'],
+    ['', ''],
+  ])('%j -> %j', (input, shown) => {
+    expect(prettyCode(input)).toBe(shown);
+  });
+
+  it('vuoto o mancante; layout/format la riesporta', () => {
+    expect(prettyCode(undefined)).toBe('');
+    expect(prettyCode(null)).toBe('');
+    expect(prettyCodeFromLayout).toBe(prettyCode);
+  });
+
+  it('identità ed export verso il gestionale non cambiano', () => {
+    for (const code of ['844787', '844.787', '844 787', 'ISP 844787']) {
+      expect(codeKey(prettyCode(code))).toBe(codeKey(code));
+      expect(displayCode({ periziaCode: code })).toBe(code);
+    }
+    const out = buildSopralluoghiExport([appt({ id: 'g', status: 'confirmed', date: '2026-11-13', startTime: '09:00', periziaCode: '844787' })], [tech()]);
+    expect(out.confirmed[0].codice).toBe('844787');
+  });
+
+  it('ricerca: si trova scrivendo 844787, 844.787 o 844 787, comunque sia salvato', () => {
+    const saved = [
+      appt({ id: 'a', periziaCode: '844787' }),
+      appt({ id: 'b', periziaCode: '844.787' }),
+      appt({ id: 'c', periziaCode: '844 787' }),
+      appt({ id: 'd', periziaCode: 'ISP 844787' }),
+      appt({ id: 'e', notes: 'Rif: ISP 844.787\nScala B' }),
+    ];
+    for (const q of ['844787', '844.787', '844 787', 'ISP 844.787', '844.78', '4478']) {
+      expect(saved.filter(a => matchesQuery(a, q)).map(a => a.id), q).toEqual(['a', 'b', 'c', 'd', 'e']);
+    }
+    // altri numeri: niente
+    expect(saved.filter(a => matchesQuery(a, '844.788'))).toEqual([]);
+    expect(matchesQuery(appt({ periziaCode: '844787' }), '844 788')).toBe(false);
+  });
+
+  it('ordinamento per codice: stesso risultato di prima (testo salvato)', () => {
+    const list = [
+      appt({ id: 'x', periziaCode: '844 787' }),
+      appt({ id: 'y', periziaCode: '844.786' }),
+      appt({ id: 'z', periziaCode: '844788' }),
+      appt({ id: 'w', periziaCode: 'BR-1' }),
+    ];
+    const collator = new Intl.Collator('it', { sensitivity: 'base', numeric: true });
+    const byStored = [...list].sort((p, q) => collator.compare(p.periziaCode || '', q.periziaCode || '')).map(a => a.id);
+    expect(sortPratiche(list, { key: 'codice', dir: 'asc' }).map(a => a.id)).toEqual(byStored);
+  });
+
+  it('export Excel: colonna «Codice» con il punto, il resto com\'è', async () => {
+    const blob = await generateExcelBlob([
+      appt({ id: 'a', periziaCode: '844787' }),
+      appt({ id: 'b', periziaCode: 'ISP 844 787' }),
+      appt({ id: 'c', periziaCode: 'BR-1' }),
+      appt({ id: 'd' }),
+    ]);
+    const wb = XLSX.read(new Uint8Array(await blob.arrayBuffer()), { type: 'array', cellStyles: true });
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[wb.SheetNames[0]]);
+    expect(rows.map(r => r['Codice'])).toEqual(['844.787', 'ISP 844.787', 'BR-1', '-']);
+    // una larghezza per ogni colonna (prima ne mancava una: «Codice» e le
+    // successive prendevano quella della colonna dopo)
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const header = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1 })[0];
+    const cols = sheet['!cols'] || [];
+    expect(cols.length).toBe(header.length);
+    expect(cols[header.indexOf('Codice')].wch).toBe(14);
+    expect(cols[header.indexOf('Note')].wch).toBe(30);
   });
 });

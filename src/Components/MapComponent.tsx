@@ -4,7 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-
 import * as L from 'leaflet';
 import type { Appointment, Coordinates, RouteSummary, AppointmentStatus, Technician } from '../types';
 import { getFullRouteGeometry } from '../services/routingService';
-import { displayCode, formatPhone, titleIsAddress } from '../layout/format';
+import { displayCode, formatPhone, prettyCode, titleIsAddress } from '../layout/format';
 
 const iconUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png';
 const iconRetinaUrl = 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png';
@@ -388,7 +388,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
              const tech = techById(appt.technicianId);
              const isScheduled = appt.status === 'confirmed' || appt.status === 'proposed';
              const markerColor = isScheduled ? colorFor(appt) : '#475569';
-             const code = displayCode(appt);
+             const code = prettyCode(displayCode(appt));
              const sameAsAddress = titleIsAddress(appt);
              return (
                 <Marker

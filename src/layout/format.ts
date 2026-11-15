@@ -1,5 +1,6 @@
 import type { Appointment } from '../types';
 import type { ViewMode } from './types';
+import { codeKey, displayCode, praticaKey, prettyCode } from '../services/praticaCode';
 
 // Piccole funzioni di formattazione per l'interfaccia (nessuna logica di dominio)
 
@@ -55,14 +56,20 @@ export const placeLabel = (a: Appointment): string => {
   return parts[1] && !/^\d/.test(parts[1]) ? parts[1] : '';
 };
 
-// Ricerca: cliente, indirizzo, comune, codice pratica, telefono, note, referente
+// Ricerca: cliente, indirizzo, comune, codice pratica, telefono, note, referente.
+// Il codice si trova comunque sia scritto ("844787", "844.787", "844 787"):
+// nel testo ci sono anche la sua chiave e la forma mostrata a video.
 const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 export const matchesQuery = (a: Appointment, query: string): boolean => {
   const q = norm(query.trim());
   if (!q) return true;
-  const hay = norm([a.title, a.address, a.shortAddress, a.comune, a.province, a.periziaCode, a.phone, a.notes, a.contactPerson, a.project]
+  const code = displayCode(a);
+  const hay = norm([a.title, a.address, a.shortAddress, a.comune, a.province, a.periziaCode, prettyCode(code), codeKey(code), a.phone, a.notes, a.contactPerson, a.project]
     .filter(Boolean).join(' \n '));
   if (q.split(/\s+/).every(w => hay.includes(w))) return true;
+  // numero di pratica scritto per intero in un'altra forma ("ISP 844.787")
+  const key = codeKey(query);
+  if (/^\d{5,7}$/.test(key) && key === praticaKey(a)) return true;
   const digits = q.replace(/\D/g, '');
   return digits.length >= 4 && (a.phone || '').replace(/\D/g, '').includes(digits);
 };
@@ -138,7 +145,7 @@ export const kmLabel =(km?: number): string =>
 // mette il riferimento come prima riga delle note ("Rif: ISP 845.326").
 // Qui lo si mostra come codice; i dati salvati non cambiano.
 // (Le funzioni stanno in services/praticaCode, condivise con il server.)
-export { displayCode, displayNotes, notesRef } from '../services/praticaCode';
+export { displayCode, displayNotes, notesRef, prettyCode } from '../services/praticaCode';
 
 // Confronto "di sostanza": senza maiuscole, accenti, spazi e punteggiatura
 const squash = (s?: string): string => norm(s || '').replace(/[\s,.;:'"\-–—/()]+/g, '');

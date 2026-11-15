@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import type { Appointment } from '../types';
+import { prettyCode } from './praticaCode';
 
 export interface ExcelRow {
   Intestatario?: string;
@@ -224,7 +225,7 @@ const createWorkbook = (
     'Telefono': a.phone || '-',
     'Indirizzo Completo': a.address,
     'Prov.': a.province || '-',
-    'Codice': a.periziaCode || '-',
+    'Codice': prettyCode(a.periziaCode) || '-', // come a video: "844.787"
     'Note': a.notes || '',
     'Stato': statusLabel(a),
     'Rientro previsto': a.followUpDate || '-',
@@ -248,6 +249,7 @@ const createWorkbook = (
     { wch: 16 }, // Phone
     { wch: 50 }, // Address
     { wch: 7 },  // Province
+    { wch: 14 }, // Codice
     { wch: 30 }, // Notes
     { wch: 26 }, // Status
     { wch: 14 }, // Follow-up

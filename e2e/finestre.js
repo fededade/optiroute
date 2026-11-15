@@ -47,7 +47,7 @@ const seedAppointments = () => [
   stop('g1', 'Cliente Alfa', '09:00', '09:20', P.navigli, { sequenceOrder: 1, callStatus: 'called' }),
   stop('g2', 'Cliente Beta', '10:00', '10:20', P.portaVenezia, { sequenceOrder: 2, periziaCode: 'PR-0001', notes: 'Citofono al secondo piano, chiedere dell\'amministratore.', contactPerson: 'Referente Esempio (amministratore)', referredBy: 'Cliente Beta' }),
   stop('g3', 'Cliente Gamma', '11:00', '11:20', P.sesto, { sequenceOrder: 3, urgent: true }),
-  stop('g4', 'Cliente Delta', '12:00', '12:20', P.cityLife, { sequenceOrder: 4, phone: undefined }),
+  stop('g4', 'Cliente Delta', '12:00', '12:20', P.cityLife, { sequenceOrder: 4, phone: undefined, periziaCode: '844787' }),
   pend('p1', 'Attesa Uno', P.navigli, { urgent: true }),
   pend('p2', 'Attesa Due', P.cityLife),
   pend('p3', 'Attesa Pavia', P.pavia, { technicianId: undefined, province: 'PV', comune: 'Pavia', address: 'Via Pavia 3, Pavia' }),
@@ -205,6 +205,7 @@ async function tour(browser, viewport) {
   // ===== 1. Nuova pratica (bottone "Nuova pratica" nella barra in alto) =====
   await newPratica(page);
   await dialog(page).getByText('Nuovo Appuntamento').waitFor();
+  assert.equal(await dialog(page).getByTestId('appointment-code').count(), 0, 'nessun codice in "Nuovo Appuntamento"');
   await shot(page, 'pratica-nuova');
   await dialog(page).getByLabel('Cliente / Intestatario').fill('Cliente Prova Nuova');
   await dialog(page).getByLabel('Telefono').fill('abc');
@@ -308,8 +309,25 @@ async function tour(browser, viewport) {
   await dialog(page).waitFor({ state: 'detached' });
 
   // ===== 5. Modifica pratica (stato e data di rientro) =====
+  // il codice salvato senza punto ("844787") si legge "844.787" nella scheda
+  // e accanto al titolo della modifica (il valore salvato non cambia)
+  assert.equal((await page.locator('#appt-g4').getByTestId('pratica-code').innerText()).trim(), '844.787');
   await cardAction(page, 'g4', 'Modifica la pratica');
   await dialog(page).getByText('Modifica Appuntamento').waitFor();
+  const codeTag = dialog(page).getByTestId('appointment-code');
+  assert.equal((await codeTag.innerText()).trim(), '844.787');
+  assert.equal(await codeTag.getAttribute('title'), 'Codice perizia');
+  // titolo intero su una riga e codice tutto dentro la finestra (a 390 px
+  // il codice, se non c'è posto, va sotto il titolo)
+  const heading = dialog(page).getByRole('heading', { name: 'Modifica Appuntamento' });
+  const titleBox = await heading.boundingBox();
+  const tagBox = await codeTag.boundingBox();
+  const dlgBox = await dialog(page).boundingBox();
+  assert.ok(titleBox.height < 34, `titolo su una riga (${titleBox.height}px)`);
+  assert.ok(await heading.evaluate(h => h.scrollWidth <= h.clientWidth), 'titolo non troncato');
+  assert.ok(tagBox.x >= dlgBox.x && tagBox.x + tagBox.width <= dlgBox.x + dlgBox.width, 'codice dentro la finestra');
+  assert.ok(tagBox.y < titleBox.y + titleBox.height + 30, 'codice accanto o subito sotto il titolo');
+  ok('pratica: codice della perizia col punto nella scheda e in "Modifica Appuntamento"', '844787 → 844.787');
   await dialog(page).getByLabel('Categoria / Problematica').selectOption('works_pending');
   await dialog(page).getByLabel('Data prevista fine lavori').fill('2026-12-01');
   await dialog(page).getByLabel('Note').fill('Cantiere in corso: richiamare a fine lavori.');

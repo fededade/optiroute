@@ -53,3 +53,17 @@ export const codeKey = (text: string | undefined | null): string => {
 
 // Chiave della pratica ('' se non ha codice)
 export const praticaKey = (a: CodeSource): string => codeKey(displayCode(a));
+
+// Codice da LEGGERE (solo presentazione: identità, export verso il gestionale
+// e chiamata usano il testo salvato, che non cambia). Un numero di perizia di
+// SEI cifre si mostra sempre con il punto dopo le prime tre, comunque sia
+// salvato: "844787", "844.787", "844 787" → "844.787"; il prefisso
+// alfabetico resta: "ISP 844787" → "ISP 844.787". Ogni altra forma (5 o 7
+// cifre, "BR-1"…) resta com'è.
+const SIX_DIGITS = /^([A-Z]+ ?)?(\d{3})[. ]?(\d{3})$/i;
+
+export const prettyCode = (text: string | undefined | null): string => {
+  const raw = text || '';
+  const m = SIX_DIGITS.exec(raw.trim().replace(/\s+/g, ' '));
+  return m ? `${m[1] || ''}${m[2]}.${m[3]}` : raw;
+};

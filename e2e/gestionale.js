@@ -572,6 +572,51 @@ const parentEval = (page, fn, arg) => page.mainFrame().evaluate(fn, arg);
       await sleep(3000);
       const after = JSON.stringify((await serverList()).filter(a => ['847001', '847003', '847004'].includes(digits(a.periziaCode))));
       assert.equal(after, before, 'secondo scaricamento: nessuna modifica');
+
+      // Sospesa che arriva PRIMA senza nota (il bridge legge le note un po'
+      // per volta) e POI con la nota vera: la data di richiamo si applica e
+      // nelle note resta una sola riga, quella nuova
+      const richiamo2 = romeDay(6);
+      const nota2 = `cliente da richiamare il ${richiamo2.slice(8, 10)}/${richiamo2.slice(5, 7)}`;
+      const deliver = list => parentEval(G.page, l => {
+        window.__bridge = { status: 'ok', portalCount: l.length,
+          snapshot: { bridge: 'optiroute-bridge', version: 1, generatedAt: new Date().toISOString(),
+            portals: [{ id: 'prelios', status: 'ok', lastSync: new Date().toISOString() }], pratiche: l },
+          excluded: [] };
+        window.__emit('bridge.updated');
+      }, list);
+      const tardiva = extra => pratica('847006', 'Cliente Nota Tardiva', 'Via Tardiva', '+390255500106', { stato: 'Sospesa', fase: 'sospesa', ...extra });
+      const seenLate = new Set();
+      await deliver([...pratiche, tardiva({ sospensione: { nota: '' } })]);
+      const empty = await waitFor(async () => {
+        const l = await serverList();
+        find(l, '847006').forEach(a => seenLate.add(a.status));
+        const a = find(l, '847006')[0];
+        return a && a.portalSuspension === '-' ? a : null;
+      }, 'sospesa senza nota importata', 30000);
+      assert.equal(empty.status, 'issue');
+      assert.equal(empty.followUpDate, undefined);
+      assert.equal(empty.notes, 'Sospesa sul portale (nota non disponibile).');
+      await deliver([...pratiche, tardiva({ sospensione: { nota: nota2 } })]);
+      const late = await waitFor(async () => {
+        const l = await serverList();
+        find(l, '847006').forEach(a => seenLate.add(a.status));
+        const a = find(l, '847006')[0];
+        return a && a.portalSuspension === nota2 ? a : null;
+      }, 'nota arrivata dopo applicata', 30000).catch(async err => {
+        log('server:', JSON.stringify(find(await serverList(), '847006')));
+        throw err;
+      });
+      await sleep(2000);
+      const lateFinal = find(await serverList(), '847006');
+      lateFinal.forEach(a => seenLate.add(a.status));
+      assert.equal(lateFinal.length, 1, 'nessun doppione');
+      assert.equal(late.status, 'issue');
+      assert.equal(late.issueType, 'callback');
+      assert.equal(late.followUpDate, richiamo2, 'data di richiamo dalla nota arrivata dopo');
+      assert.equal(late.notes, `Sospesa sul portale: ${nota2}`, 'una sola riga, quella nuova');
+      assert.equal(late.portalSuspensionState, `issue|callback|${richiamo2}`);
+      assert.ok(!seenLate.has('proposed') && !seenLate.has('pending'), 'mai in attesa né proposta');
       await G.page.screenshot({ path: path.join(OUT, '2e-bridge-stato-portale.png') });
       await G.ctx.close();
     });

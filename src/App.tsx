@@ -731,6 +731,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
       let updated = 0;
       let added = 0;
       let suspended = 0;
+      let resumed = 0;
       const opts = portalOptions();
       setAllAppointments(prev => {
         // Sull'elenco e sui tecnici di ADESSO (possono essere cambiati
@@ -745,9 +746,14 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
         });
         const portalResult = applyPortalSuspensions(next, portal, opts);
         suspended = portalResult.applied.length;
+        resumed = portalResult.restored.length;
         return portalResult.list;
       });
-      return { added, updated, failed: result.failures.length, ...(suspended > 0 ? { suspended } : {}) };
+      return {
+        added, updated, failed: result.failures.length,
+        ...(suspended > 0 ? { suspended } : {}),
+        ...(resumed > 0 ? { resumed } : {}),
+      };
     } finally {
       importBusyRef.current = false;
       setImportBusy(false);

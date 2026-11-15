@@ -4,7 +4,7 @@ import type { Appointment } from '../types';
 import { CallStatusInline } from '../Components/AutopilotBadges';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Menu';
 import type { Workspace } from './types';
-import { containsText, displayCode, formatPhone, placeLabel, shortName, shortStreet, titleIsAddress } from './format';
+import { containsText, displayCode, formatPhone, placeLabel, prettyCode, shortName, shortStreet, titleIsAddress } from './format';
 import { STATUS_META, actionsFor, statusLabel } from './praticaActions';
 import {
   SORT_LABELS, TABLE_COLUMNS, appointmentText, highlightParts, nextSort, phoneMissing, tableLayoutFor,
@@ -103,7 +103,7 @@ const TableRow: React.FC<RowCommon & { layout: TableLayout }> = ({ appt, ws, q, 
   const when = appointmentText(appt);
   const street = shortStreet(appt);
   const place = placeLabel(appt);
-  const code = displayCode(appt);
+  const code = prettyCode(displayCode(appt));
   const sameAsAddress = titleIsAddress(appt);
   const muted = appt.status === 'cancelled' || appt.status === 'standby';
   return (
@@ -192,7 +192,7 @@ const CompactRow: React.FC<RowCommon & { narrow: boolean }> = ({ appt, ws, q, na
   const street = sameAsAddress ? '' : shortStreet(appt);
   const rawPlace = placeLabel(appt);
   const place = sameAsAddress && containsText(appt.title, appt.comune || rawPlace) ? '' : rawPlace;
-  const code = displayCode(appt);
+  const code = prettyCode(displayCode(appt));
   const muted = appt.status === 'cancelled' || appt.status === 'standby';
   const sep = <span className="text-ink-300" aria-hidden>·</span>;
   return (

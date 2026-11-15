@@ -1558,6 +1558,25 @@ var bestSlot = (options) => {
   }
   return best;
 };
+var RETURN_TOLERANCE_KM = 0.5;
+var allowedByReturnRule = (option, route, ctx, coords) => {
+  if (option.position < route.length) return true;
+  if (route.length === 0 || !ctx.base) return true;
+  const last = route[route.length - 1];
+  if (calculateDistance(ctx.base, coords) <= calculateDistance(ctx.base, last.coords) + RETURN_TOLERANCE_KM) return true;
+  return option.end + travelMinutes(coords, ctx.base) <= ctx.windowEnd;
+};
+var bestSlotForReturn = (options, route, ctx, coords) => {
+  const allowed = options.filter((o) => allowedByReturnRule(o, route, ctx, coords));
+  if (route.length > 0 && ctx.base) {
+    const last = route[route.length - 1];
+    if (calculateDistance(ctx.base, coords) < calculateDistance(ctx.base, last.coords)) {
+      const tail = bestSlot(allowed.filter((o) => o.position === route.length));
+      if (tail) return tail;
+    }
+  }
+  return bestSlot(allowed);
+};
 var applyPatches = (all, patches) => {
   if (patches.length === 0) return all;
   const byId = /* @__PURE__ */ new Map();
@@ -1627,6 +1646,7 @@ var removeFromRoute = (all, id, changes, ctx) => {
     // al rientro nel giro partirebbe una chiamata mai approvata
     autoCall: void 0,
     autoCallNotBefore: void 0,
+    autoSlot: void 0,
     ...changes
   };
   const result = all.map((x) => x.id === id ? updated : x);
@@ -1726,7 +1746,7 @@ var computeAlternativeSlots = (appt, all, technicians, opts) => {
     const route = getDayRoute(all, appt.technicianId, date, appt.id);
     const notBefore = minStartOn(date, opts.now, minLead);
     const options = findFeasibleSlots(route, ctx, appt.coords, duration, notBefore > 0 ? { notBefore } : {}).filter((o) => o.start >= notBefore).filter((o) => !(date === appt.date && currentStart !== null && Math.abs(o.start - currentStart) < SAME_DAY_MIN_GAP));
-    const best = bestSlot(options);
+    const best = bestSlotForReturn(options, route, ctx, appt.coords);
     if (!best) continue;
     const score = best.detourKm + DAY_DISTANCE_WEIGHT * Math.abs(daysBetween(refDate, date)) + (route.length === 0 ? EMPTY_DAY_PENALTY : 0);
     candidates.push({ date, option: best, score });
@@ -2118,7 +2138,7 @@ var backfillSlot = (all, freed, leftId, ctx) => {
     const options = findFeasibleSlots(route, day, cand2.coords, durationOf(cand2), {
       notBefore: freed.start - 30,
       notAfter: freed.start + 120
-    }).filter((o) => dateAtMinutes(freed.date, o.start).getTime() >= minStartAbs);
+    }).filter((o) => dateAtMinutes(freed.date, o.start).getTime() >= minStartAbs).filter((o) => allowedByReturnRule(o, route, day, cand2.coords));
     for (const option2 of options) {
       const score = option2.detourKm + Math.abs(option2.start - freed.start) / 60 + (advance ? 3 : 0) - (cand2.urgent ? 1e3 : 0);
       if (!best || score < best.score) best = { cand: cand2, option: option2, score };

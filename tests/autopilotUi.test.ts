@@ -8,7 +8,10 @@ import {
   autoDispatchStartDate,
   isAutoDispatchable,
   needsAnotherRun,
+  planningOf,
+  routeSignature,
 } from '../src/hooks/useAutoDispatch';
+import { slotSignature } from '../src/services/slotService';
 import { autopilotQueueKey } from '../src/hooks/useAutopilot';
 import { DEFAULT_AUTOPILOT_SETTINGS } from '../src/services/autopilotService';
 import { appt, at, stop, tech, P } from './fixtures';
@@ -159,5 +162,22 @@ describe('chiave della coda del pilota', () => {
     const k1 = autopilotQueueKey([{ ...all[0], autoCall: 'route' }]);
     const k2 = autopilotQueueKey([{ ...all[0], callStatus: 'calling' }]);
     expect(new Set([k0, k1, k2]).size).toBe(3);
+  });
+});
+
+describe('smistamento automatico: bozze e firma dello slot', () => {
+  it('planningOf porta anche la firma dello slot (autoSlot)', () => {
+    const u = { ...stop('x', '2026-11-16', '09:00', '09:20', P.navigli), autoSlot: '2026-11-16|09:00|tech-1', notes: 'non copiare' };
+    const out = planningOf(u);
+    expect(out.autoSlot).toBe('2026-11-16|09:00|tech-1');
+    expect('notes' in out).toBe(false);
+    expect(planningOf({ ...u, status: 'pending', autoSlot: undefined })).toHaveProperty('autoSlot', undefined);
+  });
+
+  it('una bozza approvata durante il calcolo cambia la firma dei giri (il risultato si scarta)', () => {
+    const s = stop('x', '2026-11-16', '09:00', '09:20', P.navigli);
+    const bozza = { ...s, autoSlot: slotSignature(s) };
+    expect(routeSignature([{ ...bozza, autoCall: 'route' }])).not.toBe(routeSignature([bozza]));
+    expect(routeSignature([{ ...bozza, notes: 'altro' }])).toBe(routeSignature([bozza]));
   });
 });

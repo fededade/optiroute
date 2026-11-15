@@ -122,6 +122,29 @@ describe('init, pull, push', () => {
     expect(res.body.appointments.map((a: Appointment) => a.id)).toEqual(['s1', 'x', 'n']);
   });
 
+  it('push: la firma dello slot dello smistamento (autoSlot) non viene scartata', async () => {
+    const t = make();
+    await t.init();
+    const sig = `${D}|09:00|tech-1`;
+    const res = await t.call('push', {
+      method: 'POST',
+      body: {
+        device: 'dev-a',
+        changes: [
+          { op: 'patch', id: 's1', set: { autoSlot: sig }, unset: [] },
+          { op: 'put', id: 'n', value: { ...stop('n', D, '11:00', '11:20', P.navigli), autoSlot: `${D}|11:00|tech-1` } },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.appointments.find((a: Appointment) => a.id === 's1').autoSlot).toBe(sig);
+    expect(res.body.appointments.find((a: Appointment) => a.id === 'n').autoSlot).toBe(`${D}|11:00|tech-1`);
+    const pulled = await t.call('pull', { query: { rev: '0', configRev: '0' } });
+    expect(pulled.body.appointments.find((a: Appointment) => a.id === 's1').autoSlot).toBe(sig);
+    const back = await t.call('push', { method: 'POST', body: { device: 'dev-a', changes: [{ op: 'patch', id: 's1', set: {}, unset: ['autoSlot'] }] } });
+    expect(back.body.appointments.find((a: Appointment) => a.id === 's1').autoSlot).toBeUndefined();
+  });
+
   it('push vuoto senza config: nessuna scrittura; con config: nuova configRev', async () => {
     const t = make();
     await t.init();

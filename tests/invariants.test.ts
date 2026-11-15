@@ -17,6 +17,7 @@ import {
   reduceCallLaunchResult,
   reduceCallOutcome,
   reduceCallStarted,
+  reservedOfferStops,
   slotStartOf,
 } from '../src/services/autopilotService';
 import {
@@ -27,12 +28,14 @@ import {
   applyPatches,
   dateAtMinutes,
   getDayRoute,
+  isDraftStop,
   isInRoute,
   localDateStr,
   toMin,
   travelMinutes,
 } from '../src/services/slotService';
 import { workWindowOn } from '../src/services/technicianService';
+import { calculateDistance } from '../src/utils/geo';
 import { P } from './fixtures';
 
 // Test a invarianti: mondi casuali ma riproducibili (seme fisso), sequenze
@@ -287,6 +290,39 @@ const checkFixed = (before: Appointment[], after: Appointment[], allowed: Set<st
   }
 };
 
+// Campi che lo smistamento può cambiare su una bozza (nel suo giorno, in un
+// altro giorno o rimettendola in attesa)
+const DRAFT_PATCH_KEYS = [
+  'status', 'date', 'technicianId', 'startTime', 'endTime', 'sequenceOrder', 'travelTimeFromPrev', 'distanceFromPrev',
+  'hasLunchBreakBefore', 'autoSlot',
+];
+
+// 9) Regola del rientro: in ogni giorno formato da capo dallo smistamento
+// (giorno vuoto, oppure di sole bozze e ripianificato) con la base e almeno
+// due tappe, l'ultima tappa è la più vicina alla base
+const checkReturnRule = (before: Appointment[], after: Appointment[], w: World, now: Date) => {
+  const reservedDays = new Set(reservedOfferStops(before, now).map(a => `${a.technicianId}|${a.date}`));
+  const days = new Set(after.filter(isInRoute).map(a => `${a.technicianId}|${a.date}`));
+  for (const key of days) {
+    const [techId, date] = key.split('|');
+    const t = w.technicians.find(x => x.id === techId);
+    const base = t?.baseCoords || w.fallback.base;
+    if (!t || !base || reservedDays.has(key)) continue;
+    const dayBefore = getDayRoute(before, techId, date);
+    const dayAfter = getDayRoute(after, techId, date);
+    if (dayAfter.length < 2) continue;
+    const ids = (r: typeof dayAfter) => r.map(s => s.id).sort().join(',');
+    const rebuilt = dayBefore.length === 0 || (dayBefore.every(s => isDraftStop(s.appt)) && ids(dayBefore) !== ids(dayAfter));
+    if (!rebuilt) continue;
+    coverage.returnRuleDays += 1;
+    const dist = dayAfter.map(s => calculateDistance(base, s.coords));
+    const last = dist[dist.length - 1];
+    if (last > Math.min(...dist) + 1e-9) {
+      throw new InvariantError(`giorno ${key}: l'ultima tappa ${dayAfter[dayAfter.length - 1].id} non è la più vicina alla base`);
+    }
+  }
+};
+
 // Pratiche entrate nel giro o spostate
 const movedIds = (before: Appointment[], after: Appointment[]): string[] => {
   const beforeById = new Map(before.map(a => [a.id, a]));
@@ -304,6 +340,7 @@ const movedIds = (before: Appointment[], after: Appointment[]): string[] => {
 export const coverage = {
   worlds: 0, steps: 0, calls: 0, outcomes: 0, alternativesOffered: 0, alternativesAccepted: 0,
   backfills: 0, advances: 0, incrementalInserts: 0, ignoredOutcomes: 0, dstWorlds: 0,
+  draftsMoved: 0, returnRuleDays: 0,
 };
 
 const applyProposal = (all: Appointment[], updates: Appointment[], patches: AppointmentPatch[]) => {
@@ -324,6 +361,7 @@ const runWorld = async (seed: number, trace?: (step: number, op: string, all: Ap
   let step = 0;
   let op = 'init';
   let callSeq = 0;
+  let arrivals = 0;
   let lastOutcome: { id: string; outcome: CallOutcome; callId?: string } | null = null;
   const noAnswer = new Map<string, { slot: string; count: number }>();
   const ctxNow = (): PlanningContext => ({ technicians: w.technicians, fallback: w.fallback, settings: w.settings, now });
@@ -344,14 +382,20 @@ const runWorld = async (seed: number, trace?: (step: number, op: string, all: Ap
       if ([pending, w.technicians, all].some((x, i) => snapshotOf(x) !== snaps[i])) throw new InvariantError('computeDispatch ha mutato gli argomenti');
       return out;
     })();
+    // Solo le bozze (proposte dello smistamento mai approvate né toccate) si
+    // possono risistemare; per le altre tappe solo sequenza e viaggi
+    const drafts = new Set(before.filter(isDraftStop).map(a => a.id));
     for (const p of res.patches) {
-      const k = Object.keys(p.changes).filter(k => !['sequenceOrder', 'travelTimeFromPrev', 'distanceFromPrev'].includes(k));
+      const allowedKeys = drafts.has(p.id) ? DRAFT_PATCH_KEYS : ['sequenceOrder', 'travelTimeFromPrev', 'distanceFromPrev'];
+      const k = Object.keys(p.changes).filter(k => !allowedKeys.includes(k));
       if (k.length > 0) throw new InvariantError(`patch di smistamento su ${p.id} tocca ${k.join(',')}`);
     }
     const busyDays = new Set(before.filter(isInRoute).map(a => `${a.technicianId}|${a.date}`));
     coverage.incrementalInserts += res.updates.filter(u => isInRoute(u) && busyDays.has(`${u.technicianId}|${u.date}`)).length;
+    coverage.draftsMoved += res.patches.filter(p => drafts.has(p.id) && ('startTime' in p.changes || 'status' in p.changes)).length;
     all = applyProposal(all, res.updates, res.patches);
-    checkFixed(before, all, new Set(pending.map(a => a.id)));
+    checkFixed(before, all, new Set([...pending.map(a => a.id), ...drafts]));
+    checkReturnRule(before, all, w, now);
   };
 
   try {
@@ -374,6 +418,27 @@ const runWorld = async (seed: number, trace?: (step: number, op: string, all: Ap
 
       if (roll < 0.1) {
         op = 'smistamento';
+        // Spesso arrivano pratiche nuove (a volte urgenti) prima dello
+        // smistamento: esercita inserimenti nei giri e ripianificazione delle bozze
+        if (r.chance(0.6)) {
+          const nNew = r.int(1, 4);
+          for (let i = 0; i < nNew; i++) {
+            const t = r.pick(w.technicians);
+            arrivals += 1;
+            all = [...all, {
+              id: `n${arrivals}`,
+              address: `Via Nuova ${arrivals}`,
+              title: `Pratica nuova ${arrivals}`,
+              coords: jitter(r, t.baseCoords || CENTERS[0], 0.12),
+              status: 'pending',
+              province: 'MI',
+              technicianId: t.id,
+              urgent: r.chance(0.35) || undefined,
+              phone: `+3903${String(arrivals).padStart(6, '0')}`,
+              durationMinutes: r.pick([undefined, undefined, 30, 45]),
+            }];
+          }
+        }
         await dispatch();
       } else if (roll < 0.22) {
         op = 'approvazione';
@@ -558,7 +623,8 @@ describe('invarianti su mondi casuali (seme fisso)', () => {
     const c = coverage;
     const msg = JSON.stringify(c);
     if (c.worlds < 300 || c.calls < 800 || c.outcomes < 500 || c.alternativesOffered < 600 || c.alternativesAccepted < 30 ||
-        c.backfills < 60 || c.advances < 40 || c.incrementalInserts < 50 || c.ignoredOutcomes < 40 || c.dstWorlds < 100) {
+        c.backfills < 60 || c.advances < 40 || c.incrementalInserts < 50 || c.ignoredOutcomes < 40 || c.dstWorlds < 100 ||
+        c.draftsMoved < 100 || c.returnRuleDays < 500) {
       throw new Error(`copertura insufficiente: ${msg}`);
     }
     console.log(`invarianti: ${msg}`);

@@ -30,8 +30,11 @@ Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con 
    `http://127.0.0.1:8765`. L'app le scarica ogni 5 minuti, le geocodifica e assegna il
    tecnico. L'import da Excel resta disponibile.
 2. **I giri si formano da soli.** Le pratiche in attesa con telefono vengono smistate in giri
-   proposti, inserite negli spazi liberi dei giri esistenti senza mai spostare l'orario di
-   una tappa già fissata. Le date che un cliente ha rifiutato non gli vengono riproposte.
+   proposti, con la **regola del rientro**: l'ultimo sopralluogo del giorno è il più vicino
+   alla base del tecnico (se finisce tardi, almeno il rientro è breve). Le proposte non ancora
+   approvate (bozze) possono essere risistemate quando arrivano pratiche nuove; l'orario di una
+   tappa approvata, chiamata o confermata non si sposta mai. Le date che un cliente ha
+   rifiutato non gli vengono riproposte.
 3. **L'operatore approva il giro**: un clic su "Approva e chiama" nella sezione Proposte (per giro o per tutti).
 4. **Il pilota chiama.** Dentro la fascia oraria impostata chiama i clienti uno alla volta.
    - Se il cliente **non può**, l'agente gli offre subito fino a 3 **slot alternativi reali**
@@ -167,7 +170,7 @@ ogni pezzo risponde.
   - Preconfigurati: *Omar Afifi* (province di Milano e Novara) e *Federica Sala* (provincia di Pavia, comuni attorno a Stradella/Broni/Varzi entro 15 km). Tutto modificabile dalla scheda.
   - Le pratiche nuove o importate vengono **assegnate automaticamente** al tecnico competente (per provincia da Excel/geocoding, o per raggio dalle zone); assegnazione modificabile a mano dal form di modifica.
   - Il filtro "Tutti i tecnici" nella barra in alto restringe elenchi e mappa a un tecnico; i colori di segnaposto e percorsi corrispondono al tecnico.
-- **Smistamento automatico ("Smista pratiche per zona")**: le pratiche in attesa vengono distribuite sui prossimi giorni per ogni tecnico, con **data e orario ipotizzati** (rispettando orari, indisponibilità e punto di partenza di ciascuno). Se un giorno ha già tappe, le nuove si inseriscono negli spazi liberi senza toccare gli orari esistenti. Le proposte compaiono nella sezione "Proposte": l'operatore conferma singolarmente o per giornata intera, oppure rifiuta.
+- **Smistamento automatico ("Smista pratiche per zona")**: le pratiche in attesa vengono distribuite sui prossimi giorni per ogni tecnico, con **data e orario ipotizzati** (rispettando orari, indisponibilità e punto di partenza di ciascuno). Ogni giorno segue la **regola del rientro**: l'ultimo sopralluogo è il più vicino alla base (in linea d'aria), così a fine giornata il rientro è breve. In un giorno nuovo si scelgono le pratiche per priorità (urgenti, rientrate, normali), aggiungendone una alla volta finché entrano tutte (chi non entra, per esempio un'urgente troppo lontana, non blocca le successive), e si parte dalla più lontana per finire sulla più vicina. Se il giorno ha solo **bozze** (proposte dello smistamento mai approvate, chiamate o cambiate a mano) e arriva almeno una pratica nuova che ci sta, il giorno si ripianifica da capo: le bozze possono cambiare orario e, se una pratica con priorità più alta toglie loro il posto, passano a un altro giorno o tornano in attesa. Se il giorno ha almeno una tappa approvata, chiamata o confermata, le nuove si inseriscono negli spazi liberi senza toccare gli orari esistenti, e in coda al giro entra solo una tappa più vicina alla base dell'ultima (o che permette comunque di rientrare entro la fine della giornata); la stessa regola vale per gli slot alternativi offerti in chiamata e per i rimpiazzi. Senza un punto di partenza (né del tecnico né generale) lo smistamento lavora come prima. Il riordino a mano e "Ottimizza" restano scelte dell'operatore. Le proposte compaiono nella sezione "Proposte": l'operatore conferma singolarmente o per giornata intera, oppure rifiuta.
 - **Tag "Urgente"** su ogni pratica (checkbox nel form, colonna `Urgente` in import): badge rosso in lista e mappa, priorità nello smistamento (pianificate per prime nei primi giorni utili) e **annuncio esplicito dell'urgenza nella chiamata AI**.
 - **Inserimento appuntamenti**
   - *Aggiunta rapida*: nella sezione "In attesa" digita un indirizzo e premi "Aggiungi" (opzionale pulizia AI con Gemini).

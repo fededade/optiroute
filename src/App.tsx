@@ -1208,7 +1208,9 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
   };
 
   // Applica gli esiti dello smistamento (stato 'proposed' + assegnazioni) e
-  // il riordino delle tappe già nel giro (sequenza e viaggi, mai gli orari)
+  // le modifiche alle tappe già nel giro: sequenza e viaggi per quelle
+  // approvate, chiamate o confermate (mai gli orari); nuovo orario, nuovo
+  // giorno o ritorno in attesa per le bozze risistemate dallo smistamento
   const handleApplyDispatch = (updates: Appointment[], patches: AppointmentPatch[] = []) => {
     const byId = new Map(updates.map(u => [u.id, u]));
     setAllAppointments(prev => applyPatches(prev.map(a => byId.get(a.id) || a), patches));

@@ -4,7 +4,8 @@ import { workWindowOn } from './technicianService';
 
 // Motore degli slot: calcola dove (e a che ora) una pratica può entrare nel
 // giro di un tecnico SENZA spostare le tappe già presenti. L'orario di una
-// tappa nel giro è stato comunicato al cliente: qui non si tocca mai.
+// tappa approvata, chiamata o confermata qui non si tocca mai (le sole tappe
+// che lo smistamento può risistemare sono le bozze: vedi isDraftStop).
 // Tutte le funzioni sono pure (nessuna rete, nessun Date.now(), nessuna
 // mutazione degli argomenti): i viaggi sono stimati in linea d'aria come fa
 // lo smistamento con `useEstimates`.
@@ -62,6 +63,32 @@ const ceil5 = (min: number): number => Math.ceil(min / 5) * 5;
 
 export const isInRoute = (a: Appointment): boolean =>
   (a.status === 'confirmed' || a.status === 'proposed') && !!a.date && !!a.startTime;
+
+// Firma dello slot attuale di una tappa: "data|inizio|tecnico". Lo smistamento
+// la salva in `autoSlot` quando pianifica la tappa.
+export const slotSignature = (a: Pick<Appointment, 'date' | 'startTime' | 'technicianId'>): string =>
+  `${a.date || ''}|${a.startTime || ''}|${a.technicianId || ''}`;
+
+// Bozza: tappa proposta dallo smistamento e rimasta com'era. Nessuno ne ha
+// cambiato data, ora o tecnico a mano, non è mai stata approvata per la
+// chiamata né chiamata, non rimpiazza uno slot liberato. Solo le bozze si
+// possono risistemare quando lo smistamento ripianifica il giorno; le tappe
+// approvate, chiamate o confermate non si spostano mai. Le tappe pianificate
+// dalla versione precedente (senza `autoSlot`) non sono bozze.
+export const isDraftStop = (a: Appointment): boolean =>
+  a.status === 'proposed' &&
+  isInRoute(a) &&
+  !!a.autoSlot &&
+  a.autoSlot === slotSignature(a) &&
+  !a.autoCall &&
+  !a.callStatus &&
+  !a.callId &&
+  !a.callStartedAt &&
+  !a.calledAt &&
+  !a.callOutcome &&
+  !((a.callAttempts || 0) > 0) &&
+  !(a.offeredAlternatives && a.offeredAlternatives.length > 0) &&
+  !a.backfillOf;
 
 export interface RouteStop {
   id: string;
@@ -219,6 +246,51 @@ export const bestSlot = (options: SlotOption[]): SlotOption | null => {
   return best;
 };
 
+// --- Regola del rientro ---
+// L'ultimo sopralluogo del giro deve essere il più vicino possibile alla base:
+// se l'ultimo appuntamento finisce tardi, almeno il rientro è breve.
+
+export const RETURN_TOLERANCE_KM = 0.5;
+
+// Uno slot IN CODA al giro (dopo l'ultima tappa) è ammesso solo se la nuova
+// tappa è vicina alla base almeno quanto l'ultima (con una tolleranza), oppure
+// se il tecnico rientra comunque alla base entro la fine della giornata.
+// Gli slot in mezzo al giro, i giri vuoti e i giorni senza base sono sempre
+// ammessi.
+export const allowedByReturnRule = (
+  option: SlotOption,
+  route: RouteStop[],
+  ctx: DayContext,
+  coords: Coordinates
+): boolean => {
+  if (option.position < route.length) return true;
+  if (route.length === 0 || !ctx.base) return true;
+  const last = route[route.length - 1];
+  if (calculateDistance(ctx.base, coords) <= calculateDistance(ctx.base, last.coords) + RETURN_TOLERANCE_KM) return true;
+  return option.end + travelMinutes(coords, ctx.base) <= ctx.windowEnd;
+};
+
+// Opzione migliore rispettando la regola del rientro: le opzioni non ammesse
+// si scartano; se la nuova tappa è più vicina alla base dell'ultima tappa del
+// giro si preferisce lo slot in coda (così l'ultima diventa la più vicina),
+// altrimenti detour minimo e, a parità, inizio più presto (come bestSlot).
+export const bestSlotForReturn = (
+  options: SlotOption[],
+  route: RouteStop[],
+  ctx: DayContext,
+  coords: Coordinates
+): SlotOption | null => {
+  const allowed = options.filter(o => allowedByReturnRule(o, route, ctx, coords));
+  if (route.length > 0 && ctx.base) {
+    const last = route[route.length - 1];
+    if (calculateDistance(ctx.base, coords) < calculateDistance(ctx.base, last.coords)) {
+      const tail = bestSlot(allowed.filter(o => o.position === route.length));
+      if (tail) return tail;
+    }
+  }
+  return bestSlot(allowed);
+};
+
 // --- Modifiche alle pratiche ---
 
 export interface AppointmentPatch {
@@ -342,6 +414,7 @@ export const removeFromRoute = (
     // al rientro nel giro partirebbe una chiamata mai approvata
     autoCall: undefined,
     autoCallNotBefore: undefined,
+    autoSlot: undefined,
     ...changes,
   };
 

@@ -3,6 +3,7 @@ import { computeAlternativeSlots, inferChosenAlternative, resolveAlternative } f
 import {
   type PlanningFallback,
   type SlotOption,
+  allowedByReturnRule,
   dateAtMinutes,
   dayContextFor,
   durationOf,
@@ -583,7 +584,11 @@ const backfillSlot = (all: Appointment[], freed: FreedSlot, leftId: string, ctx:
     const options = findFeasibleSlots(route, day, cand.coords, durationOf(cand), {
       notBefore: freed.start - 30,
       notAfter: freed.start + 120,
-    }).filter(o => dateAtMinutes(freed.date, o.start).getTime() >= minStartAbs);
+    })
+      .filter(o => dateAtMinutes(freed.date, o.start).getTime() >= minStartAbs)
+      // regola del rientro: in coda al giro solo chi è più vicino alla base
+      // dell'ultima tappa (o se il tecnico rientra comunque entro fine giornata)
+      .filter(o => allowedByReturnRule(o, route, day, cand.coords));
 
     for (const option of options) {
       const score =

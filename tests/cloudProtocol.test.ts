@@ -40,6 +40,19 @@ describe('diffAppointments', () => {
     ]);
   });
 
+  it('la firma dello slot dello smistamento (autoSlot) viaggia come gli altri campi', () => {
+    const b = base();
+    const signed = [{ ...b[0], autoSlot: `${D}|09:00|tech-1` }, b[1], b[2]];
+    const set = diffAppointments(b, signed);
+    expect(set).toEqual([{ op: 'patch', id: 'a', set: { autoSlot: `${D}|09:00|tech-1` }, unset: [] }]);
+    expect(byId(applyAppointmentChanges(wire(b), wire(set)), 'a')!.autoSlot).toBe(`${D}|09:00|tech-1`);
+    // bozza scalzata e rimessa in attesa: la firma si toglie
+    const cleared = [{ ...signed[0], autoSlot: undefined }, b[1], b[2]];
+    const unset = diffAppointments(signed, cleared);
+    expect(unset).toEqual([{ op: 'patch', id: 'a', set: {}, unset: ['autoSlot'] }]);
+    expect('autoSlot' in byId(applyAppointmentChanges(wire(signed), wire(unset)), 'a')!).toBe(false);
+  });
+
   it('applicare le differenze alla versione di partenza riproduce l\'elenco locale', () => {
     const b = base();
     const current = [

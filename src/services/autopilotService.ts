@@ -464,8 +464,10 @@ export const reduceCallOutcome = (
           list = replaceById(list, {
             ...base,
             phone: outcome.newContactPhone,
+            // Senza nome resta il segnaposto in testa (anche con il ruolo):
+            // la chiamata al referente lo riconosce e non lo pronuncia
             contactPerson:
-              [outcome.newContactName, outcome.newContactRole].filter(Boolean).join(' — ') || 'Referente indicato dal cliente',
+              [outcome.newContactName || 'Referente indicato dal cliente', outcome.newContactRole].filter(Boolean).join(' — '),
             referredBy: a.referredBy || a.title,
             callStatus: undefined,
             callId: undefined,

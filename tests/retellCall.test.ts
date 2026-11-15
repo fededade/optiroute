@@ -3,6 +3,7 @@ import {
   buildCallData,
   formatAlternativeSpoken,
   formatDateItalian,
+  nomeParlato,
   parseAlternatives,
 } from '../api/retell-call';
 
@@ -120,6 +121,86 @@ describe('buildCallData', () => {
     const { callScript, dynamicVariables } = buildCallData({ ...BASE, alternatives: [{ label: 'Z' }, 42] });
     expect(callScript).not.toContain('SLOT ALTERNATIVI');
     expect(dynamicVariables.ha_alternative).toBe('no');
+  });
+
+  it('apertura: prima chiede della persona per nome, la presentazione viene dopo', () => {
+    const { callScript, dynamicVariables } = buildCallData(BASE);
+    expect(dynamicVariables.presentazione).toBe('Buongiorno, parlo con Mario Rossi?');
+    expect(dynamicVariables.presentazione).not.toContain('Effetre');
+    expect(dynamicVariables.motivo_chiamata).toContain('per la perizia sull\'immobile di Milano in Via Roma 10');
+    // La presentazione (motivo) e la proposta arrivano solo dopo la conferma
+    const apertura = callScript.indexOf('"Buongiorno, parlo con Mario Rossi?"');
+    const motivo = callScript.indexOf(`"${dynamicVariables.motivo_chiamata}"`);
+    const proposta = callScript.indexOf(`"${dynamicVariables.proposta}"`);
+    expect(apertura).toBeGreaterThan(-1);
+    expect(motivo).toBeGreaterThan(apertura);
+    expect(proposta).toBeGreaterThan(motivo);
+    expect(callScript).toContain('NON presentarti e NON dire perché chiami prima che l\'interlocutore abbia risposto');
+  });
+
+  it('se non è la persona cercata: prima spiega chi è e perché chiama, poi chiede il contatto', () => {
+    const { callScript } = buildCallData(BASE);
+    expect(callScript).toMatch(/Se NON è la persona cercata → PRIMA presentati e spiega perché chiami/);
+    expect(callScript).toContain('NON chiedere nomi o numeri prima di aver spiegato chi sei e perché chiami');
+  });
+
+  it('nomi tutti in maiuscolo diventano pronunciabili', () => {
+    expect(nomeParlato('FERRO MATTEO')).toBe('Ferro Matteo');
+    expect(nomeParlato("  D'ANGELO   ANNA-MARIA ")).toBe("D'Angelo Anna-Maria");
+    expect(nomeParlato('De Luca Paolo')).toBe('De Luca Paolo');
+    expect(nomeParlato(undefined)).toBe('');
+    expect(buildCallData({ ...BASE, clientName: 'FERRO MATTEO' }).dynamicVariables.presentazione)
+      .toBe('Buongiorno, parlo con Ferro Matteo?');
+  });
+
+  it('senza nome: presentazione breve e domanda sull\'intestatario', () => {
+    const { callScript, dynamicVariables } = buildCallData({ ...BASE, clientName: '' });
+    expect(dynamicVariables.presentazione).toMatch(/^Buongiorno, sono .+, per conto di .+ Parlo con l'intestatario della pratica\?$/);
+    expect(callScript).toContain('ti sei già presentata nell\'apertura');
+  });
+
+  it('il titolo che in realtà è l\'indirizzo non viene chiesto come nome', () => {
+    for (const clientName of ['Via Roma 10', 'VIA ROMA 10', 'Via Roma', 'Piazza Duomo 1', 'Corso Italia']) {
+      const { dynamicVariables } = buildCallData({ ...BASE, clientName });
+      expect(dynamicVariables.presentazione, clientName).toMatch(/^Buongiorno, sono .+ Parlo con l'intestatario della pratica\?$/);
+    }
+    // dall'indirizzo esteso (titolo = primo pezzo dell'indirizzo geocodificato)
+    const { dynamicVariables } = buildCallData({
+      clientName: 'Viale Monza', address: 'Viale Monza, Milano, 20125', date: '2026-11-12', startTime: '09:30',
+    });
+    expect(dynamicVariables.presentazione).not.toContain('parlo con Viale Monza');
+  });
+
+  it('dopo "chi parla?" la presentazione non si ripete alla conferma', () => {
+    const { callScript } = buildCallData(BASE);
+    expect(callScript).toContain('se ti sei GIÀ presentata in questa chiamata');
+    expect(callScript).toContain('Se PRIMA di confermare chiede "chi parla?"');
+  });
+
+  it('referente con ruolo o senza nome: si chiede solo il nome vero, mai il segnaposto', () => {
+    const conRuolo = buildCallData({ ...BASE, contactPerson: 'Luca Bianchi — geometra', referredBy: 'Mario Rossi' });
+    expect(conRuolo.dynamicVariables.presentazione).toBe('Buongiorno, parlo con Luca Bianchi?');
+
+    const conParentesi = buildCallData({ ...BASE, contactPerson: 'Sig.ra Bianchi (figlia)', referredBy: 'Mario Rossi' });
+    expect(conParentesi.dynamicVariables.presentazione).toBe('Buongiorno, parlo con Sig.ra Bianchi?');
+
+    // segnaposto dell'autopilota: da solo o con il ruolo
+    for (const contactPerson of ['Referente indicato dal cliente', 'Referente indicato dal cliente — geometra']) {
+      const r = buildCallData({ ...BASE, contactPerson, referredBy: 'Mario Rossi' });
+      expect(r.dynamicVariables.presentazione)
+        .toMatch(/^Buongiorno, sono .+ Parlo con la persona di riferimento per il sopralluogo\?$/);
+      expect(r.callScript).not.toContain('Referente indicato dal cliente?');
+    }
+  });
+
+  it('referente: si chiede del referente per nome e il contesto arriva dopo la conferma', () => {
+    const { callScript, dynamicVariables } = buildCallData({
+      ...BASE, contactPerson: 'GIANNI VERDI', referredBy: 'Mario Rossi',
+    });
+    expect(dynamicVariables.presentazione).toBe('Buongiorno, parlo con Gianni Verdi?');
+    expect(callScript).toContain('CONTESTO REFERENTE');
+    expect(callScript).toContain('indicato da Mario Rossi');
+    expect(callScript.indexOf('CONTESTO REFERENTE')).toBeGreaterThan(callScript.indexOf('"Buongiorno, parlo con Gianni Verdi?"'));
   });
 
   it('variabili dinamiche: tutte stringhe, anche con input strani', () => {

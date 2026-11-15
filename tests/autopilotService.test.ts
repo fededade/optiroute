@@ -112,6 +112,10 @@ describe('reduceCallOutcome: mappatura esiti (pilota spento)', () => {
       startTime: '10:00',
     });
     expect(off.autoCall).toBeUndefined();
+    // Senza nome il segnaposto resta in testa anche con il ruolo
+    const soloRuolo = outcome('altro_referente', { newContactRole: 'geometra', newContactPhone: '+390233333333' });
+    expect(byId(reduceCallOutcome(world({ callAttempts: 1 }), 'x', soloRuolo, 'c1', OFF), 'x').contactPerson)
+      .toBe('Referente indicato dal cliente — geometra');
     const on = byId(reduceCallOutcome(world(), 'x', o, 'c1', ON), 'x');
     expect(on.autoCall).toBe('route');
     const before = world();

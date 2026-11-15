@@ -133,6 +133,10 @@ describe('inferChosenAlternative', () => {
     expect(parseTimeText('alle 15.30')).toBe(930);
     expect(parseTimeText('verso le 15 e 30')).toBe(930);
     expect(parseTimeText('ore 9')).toBe(540);
+    expect(parseTimeText('alle 15 e 5')).toBe(905);
+    expect(parseTimeText('alle 9 e mezza')).toBe(570);
+    expect(parseTimeText('alle 9 e un quarto')).toBe(555);
+    expect(parseTimeText('alle 10 meno un quarto')).toBe(585);
     expect(parseTimeText('9')).toBe(540);
     expect(parseTimeText('nel pomeriggio')).toBeNull();
     expect(parseTimeText(undefined)).toBeNull();

@@ -229,6 +229,23 @@ ogni pezzo risponde.
    l'intestatario della pratica?". I nomi tutti in maiuscolo ("FERRO MATTEO") vengono
    pronunciati come "Ferro Matteo".
 
+   **Altri casi della conversazione.** Tutto ciò che l'agente pronuncia ha i numeri in
+   lettere ("lunedì sedici novembre alle quindici e venti", "Via Leopardi nove"): la voce
+   ElevenLabs Flash storpia le cifre in italiano; i numeri di telefono si ripetono cifra
+   per cifra. Se chi risponde dice che il numero è sbagliato o non conosce la persona,
+   l'agente si scusa e chiude subito (esito `numero_errato`). Se il cliente chiede di
+   anticipare o posticipare di pochi minuti, l'agente non usa la frase sull'agenda piena:
+   chiede la puntualità e al massimo concede dieci minuti; l'esito è `confermato` con
+   `nuovo_orario_richiesto` (l'orario concordato) e OptiRoute sposta l'orario della pratica
+   (al massimo dieci minuti, stessa data, durata invariata) annotandolo; se il giro del
+   tecnico non regge lo spostamento, l'orario resta quello del giro e una nota avvisa
+   l'operatore. Chi dice "io non c'entro, se ne occupa mio marito" non è un numero
+   sbagliato: l'agente chiede il contatto giusto. Se risponde l'agente immobiliare
+   che ha in gestione l'immobile (o il referente indicato è un agente immobiliare),
+   è la persona giusta: l'agente usa `{{spiegazione_agenzia}}` ("La chiamo per la pratica
+   di mutuo di ... per l'immobile che avete in gestione in Via ... a ...") e propone
+   l'appuntamento.
+
 I numeri italiani senza prefisso internazionale vengono normalizzati automaticamente a `+39`.
 
 ### Esito automatico della chiamata → stato della pratica
@@ -262,7 +279,9 @@ aggiungi questi campi custom:
 2. `data_rientro` — tipo *Text* — *"Se il cliente ha indicato quando richiamarlo o quando i
    lavori saranno finiti: AAAA-MM-GG (accettato anche GG/MM); altrimenti vuoto"*
 3. `nuova_data_richiesta` e `nuovo_orario_richiesto` — tipo *Text* — data/orario preferiti se
-   chiede di riprogrammare (testo libero)
+   chiede di riprogrammare (testo libero). Se il cliente conferma con un piccolo aggiustamento
+   di pochi minuti, `nuovo_orario_richiesto` = l'orario **concordato** (HH:MM) e
+   `nuova_data_richiesta` vuota; vuoti entrambi se conferma l'orario proposto così com'è
 4. `nuovo_referente_nome`, `nuovo_referente_telefono`, `nuovo_referente_ruolo` — tipo *Text* —
    compilati se il cliente indica un'altra persona da contattare
 5. `note_cliente` — tipo *Text* — annotazioni utili raccolte in chiamata
@@ -292,6 +311,9 @@ aggiungi questi campi custom:
      (vedi sotto). Senza questi due campi prova comunque a capirlo dagli altri testi
      (`data_rientro`, `nuovo_orario_richiesto`, `note_cliente`: "tra dieci minuti", "alle 17:30",
      "domani alle 10"...); se non ci riesce decide l'operatore, come prima
+
+Anche il *Call Summary* di Retell (usato quando manca `riassunto`) va istruito a scrivere
+**in italiano**: altrimenti Retell lo scrive in inglese.
 
 Lo script inviato all'agente istruisce già l'operatore a chiedere e annotare queste
 informazioni. Senza i campi custom l'automazione resta prudente: classifica solo i segnali

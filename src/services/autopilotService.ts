@@ -1,5 +1,6 @@
 import type { AlternativeSlot, Appointment, CallOutcome, CallOutcomeResult, Technician } from '../types';
-import { computeAlternativeSlots, inferChosenAlternative, resolveAlternative } from './alternativesService';
+import { computeAlternativeSlots, inferChosenAlternative, parseTimeText, resolveAlternative } from './alternativesService';
+import { parseFollowUpDate } from './callService';
 import {
   type PlanningFallback,
   type SlotOption,
@@ -10,10 +11,13 @@ import {
   findFeasibleSlots,
   getDayRoute,
   isInRoute,
+  LUNCH_MINUTES,
   localDateStr,
   placeAppointment,
   removeFromRoute,
+  toHHMM,
   toMin,
+  travelMinutes,
 } from './slotService';
 
 // Pilota automatico delle chiamate: riduttori PURI sull'elenco delle pratiche.
@@ -360,6 +364,111 @@ interface FreedSlot {
   title: string;
 }
 
+// Conferma con un PICCOLO aggiustamento d'orario: il cliente ha chiesto pochi
+// minuti prima o dopo e l'agente ne ha concessi al massimo dieci (lo script
+// lo chiede puntuale). Nuovo orario di inizio (HH:MM) se l'esito indica un
+// orario entro dieci minuti da quello proposto e nessuna data diversa;
+// altrimenti undefined (la pratica resta com'è).
+const SMALL_SHIFT_MAX_MIN = 10;
+
+const GIORNI_TESTO = ['domenica', 'lunedi', 'martedi', 'mercoledi', 'giovedi', 'venerdi', 'sabato'];
+const MESI_TESTO = [
+  'gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno',
+  'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre',
+];
+const senzaAccenti = (t: string) => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+// La data scritta nell'esito indica lo STESSO giorno dell'appuntamento? Le
+// date in cifre si confrontano; il testo libero ("lunedì 16 novembre",
+// "lunedì sedici novembre") va bene finché non nomina un altro giorno della
+// settimana, un altro mese, un altro numero o un giorno relativo.
+export const sameDayText = (text: string, date: string): boolean => {
+  const [y, m, d] = date.split('-').map(n => parseInt(n, 10));
+  // "13/11" senza anno: basta giorno e mese (parseFollowUpDate sceglierebbe
+  // la prossima occorrenza futura, che per una data passata è l'anno dopo)
+  const gm = /^\s*(\d{1,2})\/(\d{1,2})\s*$/.exec(text);
+  if (gm) return parseInt(gm[1], 10) === d && parseInt(gm[2], 10) === m;
+  const parsed = parseFollowUpDate(text);
+  if (parsed) return parsed === date;
+  const day = new Date(y, m - 1, d);
+  const t = senzaAccenti(text);
+  if (GIORNI_TESTO.some((g, i) => i !== day.getDay() && t.includes(g))) return false;
+  if (MESI_TESTO.some((mese, i) => i !== m - 1 && t.includes(mese))) return false;
+  if ((t.match(/\d+/g) || []).some(n => ![d, m, y].includes(parseInt(n, 10)))) return false;
+  if (/domani|dopodomani|settimana|prossim/.test(t)) return false;
+  return true;
+};
+
+export const smallTimeShift = (
+  a: Pick<Appointment, 'date' | 'startTime'>,
+  outcome: Pick<CallOutcome, 'requestedDate' | 'requestedTime'>
+): string | undefined => {
+  if (!a.date || !a.startTime) return undefined;
+  const nuovo = sameDayRequestedTime(a, outcome);
+  if (nuovo === undefined) return undefined;
+  const delta = nuovo - toMin(a.startTime);
+  if (delta === 0 || Math.abs(delta) > SMALL_SHIFT_MAX_MIN) return undefined;
+  return toHHMM(nuovo);
+};
+
+// Orario preciso (minuti) indicato nell'esito per lo STESSO giorno, oppure
+// undefined: le fasce ("tra le 9 e le 10", "verso le 9", "9-10") non valgono.
+const sameDayRequestedTime = (
+  a: Pick<Appointment, 'date' | 'startTime'>,
+  outcome: Pick<CallOutcome, 'requestedDate' | 'requestedTime'>
+): number | undefined => {
+  if (!a.date || !a.startTime || !outcome.requestedTime) return undefined;
+  if (/\b(tra|fra|dalle|verso|circa|oppure|o)\b|\d\s*-\s*\d/i.test(outcome.requestedTime)) return undefined;
+  const requested = parseTimeText(outcome.requestedTime);
+  if (requested === null) return undefined;
+  if (outcome.requestedDate && !sameDayText(outcome.requestedDate, a.date)) return undefined;
+  return requested;
+};
+
+// Conferma con un orario dello stesso giorno diverso da quello proposto ma
+// oltre i dieci minuti: non si sposta nulla, ma l'operatore deve saperlo.
+export const confirmedTimeMismatch = (
+  a: Pick<Appointment, 'date' | 'startTime'>,
+  outcome: Pick<CallOutcome, 'requestedDate' | 'requestedTime'>
+): string | undefined => {
+  const nuovo = sameDayRequestedTime(a, outcome);
+  if (nuovo === undefined) return undefined;
+  const delta = nuovo - toMin(a.startTime as string);
+  return Math.abs(delta) > SMALL_SHIFT_MAX_MIN ? toHHMM(nuovo) : undefined;
+};
+
+// Il giro del tecnico regge l'orario aggiustato? Dalla tappa prima si deve
+// arrivare in tempo e dopo si deve raggiungere la tappa successiva.
+// Stesse regole dello smistamento: pausa pranzo, orario di lavoro, partenza
+// dalla base e rientro.
+const shiftFitsRoute = (
+  all: Appointment[],
+  a: Appointment,
+  newStart: number,
+  newEnd: number,
+  day: ReturnType<typeof dayContextFor>
+): boolean => {
+  if (!a.date || !a.startTime || !a.coords) return true;
+  if (!day) return false; // il tecnico quel giorno non lavora: meglio non toccare
+  const oldStart = toMin(a.startTime);
+  const route = getDayRoute(all, a.technicianId, a.date, a.id);
+  const prev = route.filter(s => s.start < oldStart).pop();
+  const next = route.find(s => s.start >= oldStart);
+  const pausaPrima = a.hasLunchBreakBefore ? LUNCH_MINUTES : 0;
+  if (prev?.coords) {
+    if (prev.end + travelMinutes(prev.coords, a.coords) + pausaPrima > newStart) return false;
+  } else if (day.windowStart + (day.base ? travelMinutes(day.base, a.coords) : 0) > newStart) {
+    return false;
+  }
+  if (next?.coords) {
+    const pausaDopo = next.lunchBefore ? LUNCH_MINUTES : 0;
+    if (newEnd + travelMinutes(a.coords, next.coords) + pausaDopo > next.start) return false;
+  } else if (newEnd + (day.base ? travelMinutes(a.coords, day.base) : 0) > day.windowEnd) {
+    return false;
+  }
+  return true;
+};
+
 const ALTERNATIVE_RESULTS: CallOutcomeResult[] = ['confermato', 'riprogrammare', 'da_richiamare', 'sconosciuto'];
 
 // Applica l'esito della conversazione alla pratica (porta ed estende la
@@ -474,13 +583,47 @@ export const reduceCallOutcome = (
   } else {
     // 2) Mappatura esito -> stato
     switch (outcome.result) {
-      case 'confermato':
+      case 'confermato': {
+        // Pochi minuti prima o dopo, concordati in chiamata: si sposta l'orario
+        // (la durata resta la stessa) e lo si annota sulla pratica
+        // Se il giro non lo regge l'orario resta quello del giro e una nota
+        // avvisa l'operatore che al cliente è stato concesso un altro orario.
+        const nuovoInizio = smallTimeShift(a, outcome);
+        const delta = nuovoInizio ? toMin(nuovoInizio) - toMin(a.startTime as string) : 0;
+        const vecchiaFine = a.endTime ? toMin(a.endTime) : toMin(a.startTime as string) + durationOf(a);
+        const regge = !!nuovoInizio && shiftFitsRoute(
+          list, a, toMin(nuovoInizio), vecchiaFine + delta,
+          dayContextFor(techById(ctx.technicians, a.technicianId), a.date as string, ctx.fallback)
+        );
+        const oltreLimite = confirmedTimeMismatch(a, outcome);
         list = replaceById(list, {
           ...base,
+          ...(nuovoInizio && regge
+            ? {
+                startTime: nuovoInizio,
+                endTime: a.endTime ? toHHMM(toMin(a.endTime) + delta) : a.endTime,
+                notes: addNote(a.notes, `Orario aggiustato su richiesta del cliente: ${nuovoInizio} (era ${a.startTime})`),
+              }
+            : nuovoInizio
+            ? {
+                notes: addNote(
+                  a.notes,
+                  `ATTENZIONE: in chiamata al cliente sono state concesse le ${nuovoInizio} (proposto ${a.startTime}), ma il giro non lo consente: avvisare il cliente o il tecnico`
+                ),
+              }
+            : oltreLimite
+            ? {
+                notes: addNote(
+                  a.notes,
+                  `ATTENZIONE: confermato ma l'esito riporta le ${oltreLimite} (proposto ${a.startTime}): verificare l'orario con il cliente`
+                ),
+              }
+            : {}),
           status: a.status === 'proposed' ? 'confirmed' : base.status,
           callAttempts: 0,
         });
         break;
+      }
       case 'riprogrammare': {
         // Se la data richiesta è interpretabile diventa "rientro": lo
         // smistamento non propone prima

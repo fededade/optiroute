@@ -125,4 +125,15 @@ describe('api/call-status', () => {
       .toMatchObject({ pending: false, outcome: { result: 'non_risposto', summary: 's' } });
     expect(interpretRetellCall(null)).toMatchObject({ callStatus: 'unknown' });
   });
+
+  it('interpretRetellCall: il riassunto in italiano (campo riassunto) vince su quello di Retell', () => {
+    const analysis = (custom: Record<string, string>) => ({
+      call_status: 'ended',
+      call_analysis: { call_summary: 'The agent called the client.', custom_analysis_data: { esito_appuntamento: 'confermato', ...custom } },
+    });
+    expect(interpretRetellCall(analysis({ riassunto: 'Il cliente ha confermato lunedì alle quindici e venti.' })))
+      .toMatchObject({ outcome: { summary: 'Il cliente ha confermato lunedì alle quindici e venti.' } });
+    // senza il campo resta quello di Retell
+    expect(interpretRetellCall(analysis({}))).toMatchObject({ outcome: { summary: 'The agent called the client.' } });
+  });
 });

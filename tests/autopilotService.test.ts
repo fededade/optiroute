@@ -67,6 +67,67 @@ describe('reduceCallOutcome: mappatura esiti (pilota spento)', () => {
     expect(x).toMatchObject({ status: 'confirmed', callAttempts: 0, callStatus: 'called', callSummary: 'ok', startTime: '10:00' });
   });
 
+  it('confermato con pochi minuti di aggiustamento: orario spostato, durata uguale, nota sulla pratica', () => {
+    const before = world();
+    const after = reduceCallOutcome(before, 'x', outcome('confermato', { requestedTime: '10:10' }), 'c1', OFF);
+    const x = byId(after, 'x');
+    expect(x).toMatchObject({ status: 'confirmed', date: D, startTime: '10:10', endTime: '10:30' });
+    expect(x.notes).toContain('Orario aggiustato su richiesta del cliente: 10:10 (era 10:00)');
+    expectFixedTimes(before, after, ['s1', 's3']);
+    // anche in anticipo, con la stessa data scritta per esteso
+    const prima = byId(reduceCallOutcome(world(), 'x', outcome('confermato', { requestedDate: D, requestedTime: '09:50' }), 'c1', OFF), 'x');
+    expect([prima.startTime, prima.endTime]).toEqual(['09:50', '10:10']);
+  });
+
+  it('confermato con aggiustamento: la data scritta a parole va bene se è lo stesso giorno', () => {
+    for (const requestedDate of ['venerdì 13 novembre', 'venerdi tredici novembre', '13/11', 'stesso giorno']) {
+      const x = byId(reduceCallOutcome(world(), 'x', outcome('confermato', { requestedDate, requestedTime: '10:10' }), 'c1', OFF), 'x');
+      expect(x.startTime, requestedDate).toBe('10:10');
+    }
+    for (const requestedDate of ['sabato 14 novembre', 'venerdì 20 novembre', 'domani', 'venerdì 13 dicembre']) {
+      const x = byId(reduceCallOutcome(world(), 'x', outcome('confermato', { requestedDate, requestedTime: '10:10' }), 'c1', OFF), 'x');
+      expect(x.startTime, requestedDate).toBe('10:00');
+    }
+  });
+
+  it('confermato con aggiustamento che il giro non regge: orario invariato e nota per l\'operatore', () => {
+    // la tappa dopo inizia subito: dieci minuti in più non ci stanno
+    const stretto = world().map(a => (a.id === 's3' ? { ...a, startTime: '10:35', endTime: '10:55' } : a));
+    const x = byId(reduceCallOutcome(stretto, 'x', outcome('confermato', { requestedTime: '10:10' }), 'c1', OFF), 'x');
+    expect([x.status, x.startTime, x.endTime]).toEqual(['confirmed', '10:00', '10:20']);
+    expect(x.notes).toContain('in chiamata al cliente sono state concesse le 10:10');
+  });
+
+  it('confermato con aggiustamento: pausa pranzo, fine giornata e fasce orarie non si forzano', () => {
+    // la tappa dopo ha la pausa pranzo prima: dieci minuti in più la accorcerebbero
+    const pranzo = world().map(a => (a.id === 's3' ? { ...a, startTime: '11:20', endTime: '11:40', hasLunchBreakBefore: true } : a));
+    const p = byId(reduceCallOutcome(pranzo, 'x', outcome('confermato', { requestedTime: '10:10' }), 'c1', OFF), 'x');
+    expect(p.startTime).toBe('10:00');
+    expect(p.notes).toContain('il giro non lo consente');
+    // ultima tappa a fine giornata: non si sfora l'orario di lavoro
+    const sera = [stop('x', D, '17:40', '18:00', P.portaVenezia, { callStatus: 'called', callId: 'c1' })];
+    const s = byId(reduceCallOutcome(sera, 'x', outcome('confermato', { requestedTime: '17:50' }), 'c1', OFF), 'x');
+    expect(s.startTime).toBe('17:40');
+    // una fascia non è un orario concordato
+    const fascia = byId(reduceCallOutcome(world(), 'x', outcome('confermato', { requestedTime: 'tra le 10 e le 11' }), 'c1', OFF), 'x');
+    expect(fascia.startTime).toBe('10:00');
+    expect(fascia.notes ?? '').not.toContain('ATTENZIONE');
+  });
+
+  it('confermato con un orario oltre i dieci minuti: pratica invariata ma nota per l\'operatore', () => {
+    const x = byId(reduceCallOutcome(world(), 'x', outcome('confermato', { requestedTime: '10:15' }), 'c1', OFF), 'x');
+    expect(x.startTime).toBe('10:00');
+    expect(x.notes).toContain('ATTENZIONE: confermato ma l\'esito riporta le 10:15');
+  });
+
+  it('confermato: un orario lontano o un\'altra data non spostano la pratica', () => {
+    for (const extra of [{ requestedTime: '10:30' }, { requestedTime: '10:15' }, { requestedTime: '10:10', requestedDate: '2026-11-14' }, { requestedTime: 'mattina' }]) {
+      const x = byId(reduceCallOutcome(world(), 'x', outcome('confermato', extra), 'c1', OFF), 'x');
+      expect([x.startTime, x.endTime], JSON.stringify(extra)).toEqual(['10:00', '10:20']);
+      expect(x.notes ?? '').not.toContain('Orario aggiustato');
+    }
+  });
+
   it('riprogrammare', () => {
     const out = reduceCallOutcome(
       world(),

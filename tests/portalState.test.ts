@@ -16,6 +16,7 @@ import {
   isPortalExcluded,
   portalExclusions,
   suspensionFingerprint,
+  suspensionAwaitingNote,
   suspensionState,
 } from '../src/services/portalState';
 import { describeImport } from '../src/hooks/useBridgeInbox';
@@ -449,6 +450,55 @@ describe('applicazione delle sospensioni del portale', () => {
     const third = run(second.list, [sosp('820001', 'cliente da richiamare il 20/11')]);
     expect(third.applied).toEqual([]);
     expect(third.list).toBe(second.list);
+  });
+
+  it('sospesa senza nota dalla versione precedente (solo impronta): con la nota vera si classifica', () => {
+    // com'era salvata: da richiamare senza data, riga di allora, impronta vuota e nessuno stato dato
+    const legacy = appt({ id: 'v1', periziaCode: '844787', status: 'issue', issueType: 'callback', portalSuspension: '-', notes: 'Scala B\nSospesa sul portale (nessuna nota).' });
+    expect(suspensionAwaitingNote(legacy)).toBe(true);
+    const r = run([legacy], [sosp('844787', 'chiamare dopo il 19')]);
+    const a = byId(r.list, 'v1');
+    expect(a).toMatchObject({ status: 'issue', issueType: 'callback', followUpDate: '2026-11-19', portalSuspension: 'chiamare dopo il 19', portalSuspensionState: 'issue|callback|2026-11-19' });
+    expect(a.notes).toBe('Scala B\nSospesa sul portale: chiamare dopo il 19');
+    expect(r.applied).toEqual([{ id: 'v1', codice: '844787', kind: 'richiamo', date: '2026-11-19', statusChanged: true }]);
+    // idempotente, e da qui in poi vale lo stato dato
+    expect(run(r.list, [sosp('844787', 'chiamare dopo il 19')]).list).toBe(r.list);
+    // verso "in attesa dal ...", anche senza la riga di allora
+    const legacy2 = appt({ id: 'v2', periziaCode: '844788', status: 'issue', issueType: 'callback', portalSuspension: '-' });
+    const b = byId(run([legacy2], [sosp('844788', 'cliente disponibile solo dal 25/11')]).list, 'v2');
+    expect(b).toMatchObject({ status: 'pending', followUpDate: '2026-11-25', portalSuspensionState: 'pending||2026-11-25' });
+    expect(b.issueType).toBeUndefined();
+    expect(b.notes).toBe('Sospesa sul portale: cliente disponibile solo dal 25/11');
+    // nota ancora vuota: niente da fare (stessa impronta)
+    expect(run([legacy], [sosp('844787', '')]).list[0]).toBe(legacy);
+  });
+
+  it('sospesa dalla versione precedente ma toccata dall\'operatore, o con una nota già scritta: solo riga e impronta', () => {
+    const cases = [
+      // data di richiamo messa a mano
+      appt({ id: 'v3', periziaCode: '844789', status: 'issue', issueType: 'callback', followUpDate: '2026-11-30', portalSuspension: '-' }),
+      // altra problematica, stand-by
+      appt({ id: 'v4', periziaCode: '844790', status: 'issue', issueType: 'wrong_phone', portalSuspension: '-' }),
+      appt({ id: 'v5', periziaCode: '844791', status: 'standby', portalSuspension: '-' }),
+      // aveva già una nota vera: non è il caso "senza nota"
+      appt({ id: 'v6', periziaCode: '844792', status: 'issue', issueType: 'callback', portalSuspension: 'nota di prima', notes: 'Sospesa sul portale: nota di prima' }),
+    ];
+    expect(cases.map(suspensionAwaitingNote)).toEqual([false, false, false, false]);
+    const r = run(cases, cases.map(c => sosp(c.periziaCode!, 'chiamare dopo il 19')));
+    expect(byId(r.list, 'v3')).toMatchObject({ status: 'issue', issueType: 'callback', followUpDate: '2026-11-30' });
+    expect(byId(r.list, 'v4')).toMatchObject({ status: 'issue', issueType: 'wrong_phone' });
+    expect(byId(r.list, 'v4').followUpDate).toBeUndefined();
+    expect(byId(r.list, 'v5').status).toBe('standby');
+    expect(byId(r.list, 'v6')).toMatchObject({ status: 'issue', issueType: 'callback', notes: 'Sospesa sul portale: chiamare dopo il 19' });
+    expect(byId(r.list, 'v6').followUpDate).toBeUndefined();
+    for (const id of ['v3', 'v4', 'v5', 'v6']) {
+      expect(byId(r.list, id).portalSuspension).toBe('chiamare dopo il 19');
+      expect('portalSuspensionState' in byId(r.list, id)).toBe(false);
+    }
+    expect(r.applied.every(c => !c.statusChanged)).toBe(true);
+    // confermata o con la chiamata in corso: mai toccata, anche se senza nota
+    const conf = appt({ id: 'v7', periziaCode: '844793', status: 'confirmed', portalSuspension: '-' });
+    expect(run([conf], [sosp('844793', 'chiamare dopo il 19')]).list[0]).toBe(conf);
   });
 
   it('nota cambiata con pratica intatta: riclassificata; la riga resta al suo posto, le altre note no', () => {

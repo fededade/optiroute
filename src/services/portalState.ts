@@ -316,6 +316,15 @@ export const suspensionState = (a: Pick<Appointment, 'status' | 'issueType' | 'f
 export const suspensionUntouched = (a: Appointment): boolean =>
   !!a.portalSuspensionState && suspensionState(a) === a.portalSuspensionState;
 
+// Sospesa quando la nota non era ancora disponibile (impronta vuota) e senza
+// lo stato dato: sono le pratiche sospese dalla versione precedente, che non
+// lo salvava. Se la pratica è ancora "da richiamare" senza data è rimasta
+// com'era stata messa: quando arriva la nota vera va classificata come le
+// altre (non c'è una scelta dell'operatore da proteggere). Vale solo finché
+// resta sospesa: per riportarla in attesa serve lo stato dato.
+export const suspensionAwaitingNote = (a: Appointment): boolean =>
+  a.portalSuspensionState === undefined && a.portalSuspension === '-' && suspensionState(a) === 'issue|callback|';
+
 // Stato della pratica (in attesa o proposta) secondo la nota
 export const suspensionChanges = (cls: SuspensionClass): Partial<Appointment> => {
   switch (cls.kind) {
@@ -369,8 +378,10 @@ const withoutSuspension = (a: Appointment): Appointment => {
 // "sospesa" (pratiche appena importate comprese: sono in attesa).
 //  - in attesa o proposte, oppure ancora ESATTAMENTE nello stato che le aveva
 //    dato la sospensione (nessuno l'ha toccata: es. prima la nota vuota, poi
-//    quella vera): stato dalla nota (proposta: esce dal giro; chiamata in
-//    coda tolta) + riga nelle note + impronta + stato dato (portalSuspensionState);
+//    quella vera; comprese quelle sospese senza nota dalla versione precedente,
+//    vedi suspensionAwaitingNote): stato dalla nota (proposta: esce dal giro;
+//    chiamata in coda tolta) + riga nelle note + impronta + stato dato
+//    (portalSuspensionState);
 //  - cambiate dall'operatore (problematiche, stand-by, annullate): solo riga
 //    e impronta;
 //  - confermate e con una chiamata in corso: mai toccate.
@@ -428,7 +439,7 @@ export const applyPortalSuspensions = (
     const notes = withLine(a.notes, suspensionNoteLine(nota));
     const cls = classifySuspension(nota, today);
     const change = { id: a.id, codice: p.codice, kind: cls.kind, ...(cls.date ? { date: cls.date } : {}) };
-    if (a.status === 'pending' || a.status === 'proposed' || suspensionUntouched(a)) {
+    if (a.status === 'pending' || a.status === 'proposed' || suspensionUntouched(a) || suspensionAwaitingNote(a)) {
       // Come quando la pratica esce dal giro: slot liberato, giro ricalcolato,
       // coda delle chiamate svuotata
       const ctx = a.date ? opts.dayBase?.(a.technicianId, a.date) : undefined;

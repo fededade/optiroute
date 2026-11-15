@@ -274,6 +274,24 @@ describe('pilota: ogni giorno solo in prova', () => {
     }
   });
 
+  it('impostazioni del browser salvate col vecchio retryMinutes: 120 -> 15 minuti, e il vecchio campo sparisce', () => {
+    const { noAnswerRetryMinutes: _nuovo, ...vecchie } = DEFAULT_AUTOPILOT_SETTINGS;
+    safeLocalStorage.setItem('optiroute_settings_v1', JSON.stringify({ autopilot: { ...vecchie, retryMinutes: 120 } }));
+    try {
+      const loaded = loadAutopilotSettings();
+      expect(loaded.noAnswerRetryMinutes).toBe(15);
+      expect('retryMinutes' in loaded).toBe(false);
+    } finally {
+      safeLocalStorage.removeItem('optiroute_settings_v1');
+    }
+    safeLocalStorage.setItem('optiroute_settings_v1', JSON.stringify({ autopilot: { ...DEFAULT_AUTOPILOT_SETTINGS, noAnswerRetryMinutes: 40 } }));
+    try {
+      expect(loadAutopilotSettings().noAnswerRetryMinutes).toBe(40);
+    } finally {
+      safeLocalStorage.removeItem('optiroute_settings_v1');
+    }
+  });
+
   const config = (over: Partial<AutopilotSettings> = {}): CloudConfig => ({
     technicians: [tech()],
     autopilot: { ...DEFAULT_AUTOPILOT_SETTINGS, enabled: true, ...over },

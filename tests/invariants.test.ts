@@ -144,7 +144,7 @@ const genWorld = (r: Rng, seed: number, today: string): { world: World; all: App
     callWindowEnd: degenerate ? r.pick(['19:00', '09:00']) : r.pick(['13:00', '18:00', '19:30', '21:00']),
     callSaturday: r.chance(0.4),
     maxAttempts: r.pick([0, 1, 2, 3, 3, 5]),
-    retryMinutes: r.pick([0, 15, 60, 120, 120, 240]),
+    noAnswerRetryMinutes: r.pick([0, 5, 15, 15, 60, 120]),
     offerAlternatives: r.chance(0.85),
     backfill: r.chance(0.85),
     minLeadHours: r.pick([0, 1, 3, 3, 6]),

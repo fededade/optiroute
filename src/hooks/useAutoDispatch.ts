@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Appointment, Coordinates, Technician } from '../types';
 import { computeDispatch } from '../services/dispatchService';
 import { applyPatches, addDaysStr, isDraftStop, isInRoute, localDateStr } from '../services/slotService';
-import { approveForCalling, nextCallWindowStart, type AutopilotSettings } from '../services/autopilotService';
+import { approveForCalling, approveRequestedCallbacks, nextCallWindowStart, type AutopilotSettings } from '../services/autopilotService';
 
 // Smistamento automatico (pilota acceso + "smistamento automatico"): le
 // pratiche in attesa con telefono vengono smistate da sole in giri proposti,
@@ -203,6 +203,8 @@ export const useAutoDispatch = ({
           let next = all.map(a => (a.status === 'pending' && byId.has(a.id) ? { ...a, ...planningOf(byId.get(a.id)!) } : a));
           next = applyPatches(next, proposal.patches);
           if (s.autoApprove && placedIds.length > 0) next = approveForCalling(next, placedIds, now);
+          // Richiamo chiesto dal cliente: in coda anche senza "chiama senza approvazione"
+          next = approveRequestedCallbacks(next, placedIds, now);
           return next;
         });
         // Pratiche da smistare che il calcolo non ha visto in questa forma

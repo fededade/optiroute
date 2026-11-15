@@ -45,8 +45,15 @@ Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con 
    - Se **rifiuta, rimanda o risulta irreperibile**, lo slot liberato viene **riempito**
      con un'altra pratica (in attesa, o anticipata da un giorno successivo), che viene
      chiamata a sua volta.
-   - Chi **non risponde** viene richiamato (di default dopo 2 ore, fino a 3 tentativi,
-     e mai a ridosso dell'appuntamento).
+   - Chi **chiede di essere richiamato** ("sentitemi tra dieci minuti", "richiamate alle 17")
+     viene richiamato da solo a quell'ora (sempre nella fascia chiamate). Se l'orario è oggi e
+     prima della scadenza dello slot la tappa resta proposta nel giro; altrimenti lo slot si
+     libera e la pratica torna in attesa per il giorno del richiamo: quando lo smistamento
+     automatico la ricolloca, la chiamata parte da sola non prima dell'orario chiesto. Alla
+     terza richiesta di fila decide l'operatore ("Da richiamare").
+   - Chi **non risponde** viene richiamato (di default dopo 15 minuti, modificabile
+     dall'ingranaggio, fino a 3 tentativi, e mai a ridosso dell'appuntamento); se il
+     richiamo cadrebbe fuori dalla fascia chiamate, parte alla prossima apertura.
 5. **Solo le eccezioni arrivano all'operatore**, nella sezione "Da gestire": esiti non
    chiari, numeri errati, irreperibili, rifiuti, pratiche senza telefono o senza tecnico.
 
@@ -269,6 +276,22 @@ aggiungi questi campi custom:
      con la corrispondenza lettera → slot)
    - accettati anche gli alias `alternativa_accettata`, `alternativa`, `slot_scelto`,
      `chosen_alternative`; valori come "alternativa B" o "opzione c" vengono normalizzati
+7. `riassunto` — tipo *Text* — descrizione da incollare: *"Riassunto della telefonata in
+   ITALIANO, in 2-3 frasi: cosa è stato proposto, cosa ha risposto la persona, cosa è stato
+   concordato."*
+   - è il riassunto mostrato sulla pratica; **senza questo campo resta quello in inglese**
+     che Retell scrive da sé (`call_summary`)
+   - accettati anche gli alias `riassunto_chiamata`, `sintesi`, `riepilogo`
+8. `richiamo_tra_minuti` — tipo *Number*, facoltativo — descrizione da incollare: *"Se la persona
+   chiede di essere richiamata dopo un certo tempo (es. "tra dieci minuti", "tra un'ora"), il
+   numero di minuti. Altrimenti lascia vuoto."* (alias: `minuti_richiamo`, `callback_minutes`)
+9. `orario_richiamo` — tipo *Text*, facoltativo — descrizione da incollare: *"Se la persona chiede
+   di essere richiamata a un orario o in un giorno preciso, scrivilo (es. "oggi alle 17:30",
+   "domani alle 10"). Altrimenti lascia vuoto."* (alias: `quando_richiamare`, `callback_time`)
+   - con esito `da_richiamare` e il pilota acceso, OptiRoute richiama da solo all'orario chiesto
+     (vedi sotto). Senza questi due campi prova comunque a capirlo dagli altri testi
+     (`data_rientro`, `nuovo_orario_richiesto`, `note_cliente`: "tra dieci minuti", "alle 17:30",
+     "domani alle 10"...); se non ci riesce decide l'operatore, come prima
 
 Lo script inviato all'agente istruisce già l'operatore a chiedere e annotare queste
 informazioni. Senza i campi custom l'automazione resta prudente: classifica solo i segnali

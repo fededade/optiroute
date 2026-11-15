@@ -6,7 +6,7 @@ import type { Appointment } from '../types';
 import { CallStatus } from '../Components/AutopilotBadges';
 import { Menu, MenuItem } from '../ui/Menu';
 import type { Workspace } from './types';
-import { containsText, dayLabel, displayCode, displayNotes, formatPhone, placeLabel, prettyCode, shortStreet, titleIsAddress } from './format';
+import { callbackLabel, containsText, dayLabel, displayCode, displayNotes, formatPhone, placeLabel, prettyCode, shortStreet, titleIsAddress } from './format';
 import { ISSUE_LABEL, STATUS_META, actionsFor } from './praticaActions';
 import { phoneMissing } from './praticheTable';
 
@@ -172,7 +172,12 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
                 <MapPin size={12} strokeWidth={2} aria-hidden />Posizione approssimativa
               </span>
             )}
-            {appt.followUpDate && (appt.status === 'issue' || appt.status === 'pending') && (
+            {appt.callbackAt && appt.status === 'pending' ? (
+              <span className="chip chip-warn" title="Il cliente ha chiesto di essere richiamato a quest'ora: lo smistamento non proporrà date precedenti" data-testid="pratica-callback">
+                <Bell size={12} strokeWidth={2} aria-hidden />
+                Richiamo {callbackLabel(appt.callbackAt).day} alle {callbackLabel(appt.callbackAt).time}
+              </span>
+            ) : appt.followUpDate && (appt.status === 'issue' || appt.status === 'pending') && (
               <span className="chip chip-warn" title="Data di rientro: lo smistamento non proporrà date precedenti">
                 <Bell size={12} strokeWidth={2} aria-hidden />
                 {appt.status === 'issue' ? ISSUE_LABEL[appt.issueType || 'callback'].reentry : 'Rientro'} {dayLabel(appt.followUpDate)}

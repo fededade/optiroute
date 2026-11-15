@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { Appointment } from '../src/types';
+import type { Appointment, CallOutcome } from '../src/types';
 import { computeAlternativeSlots } from '../src/services/alternativesService';
 import {
   alternativesForCall,
   approveForCalling,
+  approveRequestedCallbacks,
+  MAX_CALLBACK_REQUESTS,
   attentionItems,
   autopilotStats,
   cancelAutoCalls,
@@ -16,6 +18,7 @@ import {
   reduceCallStarted,
   reservedOfferStops,
   DEFAULT_AUTOPILOT_SETTINGS,
+  type AutopilotSettings,
 } from '../src/services/autopilotService';
 import { getDayRoute, isInRoute, toMin, travelMinutes } from '../src/services/slotService';
 import { FALLBACK, P, appt, at, outcome, planning, snapshot, stop, tech } from './fixtures';
@@ -194,14 +197,28 @@ describe('reduceCallOutcome: alternative accettate', () => {
 });
 
 describe('reduceCallOutcome: tentativi e irreperibili (pilota acceso)', () => {
-  it('nuovo tentativo dentro la fascia', () => {
+  it('nuovo tentativo dentro la fascia: di default dopo 15 minuti', () => {
+    expect(DEFAULT_AUTOPILOT_SETTINGS.noAnswerRetryMinutes).toBe(15);
     const x = byId(reduceCallOutcome(world(), 'x', outcome('non_risposto'), 'c1', ON), 'x');
     expect(x).toMatchObject({ autoCall: 'retry', callAttempts: 1, status: 'proposed', startTime: '10:00' });
-    expect(new Date(x.autoCallNotBefore!).getTime()).toBe(at('2026-11-11', '12:00').getTime());
+    expect(new Date(x.autoCallNotBefore!).getTime()).toBe(at('2026-11-11', '10:15').getTime());
+  });
+
+  it('impostazioni salvate col vecchio retryMinutes: 120 -> si richiama comunque dopo 15 minuti', () => {
+    const { noAnswerRetryMinutes: _nuovo, ...vecchie } = DEFAULT_AUTOPILOT_SETTINGS;
+    const salvate = { ...vecchie, enabled: true, retryMinutes: 120 } as unknown as Partial<AutopilotSettings>;
+    const x = byId(reduceCallOutcome(world(), 'x', outcome('non_risposto'), 'c1', planning(NOW, salvate)), 'x');
+    expect(new Date(x.autoCallNotBefore!).getTime()).toBe(at('2026-11-11', '10:15').getTime());
+  });
+
+  it('minuti cambiati dall\'operatore: rispettati', () => {
+    const ctx = planning(NOW, { noAnswerRetryMinutes: 45 });
+    const x = byId(reduceCallOutcome(world(), 'x', outcome('non_risposto'), 'c1', ctx), 'x');
+    expect(new Date(x.autoCallNotBefore!).getTime()).toBe(at('2026-11-11', '10:45').getTime());
   });
 
   it('nuovo tentativo fuori fascia: riportato all\'apertura successiva', () => {
-    const ctx = planning(at('2026-11-11', '18:30'));
+    const ctx = planning(at('2026-11-11', '19:20'));
     const x = byId(reduceCallOutcome(world(), 'x', outcome('non_risposto'), 'c1', ctx), 'x');
     expect(x.autoCall).toBe('retry');
     expect(new Date(x.autoCallNotBefore!).getTime()).toBe(at('2026-11-12', '09:00').getTime());
@@ -218,8 +235,9 @@ describe('reduceCallOutcome: tentativi e irreperibili (pilota acceso)', () => {
   });
 
   it('irreperibile se il prossimo tentativo cadrebbe troppo a ridosso dello slot', () => {
-    // giovedì sera, slot venerdì alle 10:00: il tentativo di venerdì 9:00 è oltre (10:00 − 3h)
-    const ctx = planning(at('2026-11-12', '18:30'));
+    // giovedì sera, slot venerdì alle 10:00: il richiamo (19:35) è fuori fascia e
+    // il tentativo di venerdì 9:00 è oltre (10:00 − 3h)
+    const ctx = planning(at('2026-11-12', '19:20'));
     const x = byId(reduceCallOutcome(world(), 'x', outcome('non_risposto'), 'c1', ctx), 'x');
     expect(x).toMatchObject({ status: 'issue', issueType: 'callback', callAttempts: 1 });
   });
@@ -570,5 +588,130 @@ describe('slot offerti in chiamate in corso', () => {
     // e l'alternativa resta confermabile per "y"
     const done = reduceCallOutcome(out, 'y', outcome('riprogrammare', { chosenAlternative: 'A' }), 'c2', ON);
     expect(byId(done, 'y')).toMatchObject({ status: 'confirmed', date: D, startTime: '09:35' });
+  });
+});
+
+describe('reduceCallOutcome: richiamo chiesto dal cliente (da_richiamare con orario)', () => {
+  const T = '2026-11-11';
+  const asked = (hhmm: string, date = T, over: Partial<CallOutcome> = {}) =>
+    outcome('da_richiamare', { callbackAt: at(date, hhmm).toISOString(), ...over });
+
+  it('"tra 10 minuti": lo slot resta, in coda all\'orario chiesto, tentativi invariati', () => {
+    const all = world({ callAttempts: 1, notes: 'Citofono 3' });
+    const out = reduceCallOutcome(all, 'x', asked('10:10'), 'c1', ON);
+    const x = byId(out, 'x');
+    expect(x).toMatchObject({
+      status: 'proposed', date: D, startTime: '10:00', autoCall: 'retry', callAttempts: 1, callbackRequests: 1,
+      autoCallNotBefore: at(T, '10:10').toISOString(),
+    });
+    expect(x.callbackAt).toBeUndefined();
+    expect(x.notes).toBe('Citofono 3 · Richiamo chiesto dal cliente: 11/11/2026 alle 10:10');
+    expect(byId(out, 'near').status).toBe('pending'); // nessun rimpiazzo: lo slot non si è liberato
+    expectFixedTimes(all, out, ['s1', 'x', 's3']);
+  });
+
+  it('il pilota rilancia la chiamata all\'ora giusta e applica il nuovo esito', () => {
+    let list = reduceCallOutcome(world(), 'x', asked('10:10'), 'c1', ON);
+    expect(nextDueCall(list, planning(at(T, '10:09')))).toBeNull();
+    const ctx = planning(at(T, '10:10'));
+    expect(nextDueCall(list, ctx)?.id).toBe('x');
+    list = reduceCallStarted(list, 'x', [], ctx.now);
+    list = reduceCallLaunchResult(list, 'x', { ok: true, callId: 'c2' }, ctx.now);
+    expect(byId(list, 'x')).toMatchObject({ callStatus: 'called', callId: 'c2', autoCall: undefined, callOutcome: undefined });
+    list = reduceCallOutcome(list, 'x', outcome('confermato'), 'c2', planning(at(T, '10:14')));
+    expect(byId(list, 'x')).toMatchObject({ status: 'confirmed', date: D, startTime: '10:00' });
+    expect(byId(list, 'x').callbackRequests).toBeUndefined();
+  });
+
+  it('orario chiesto fuori fascia (stesso giorno): parte all\'apertura', () => {
+    const x = byId(reduceCallOutcome(world(), 'x', asked('08:40'), 'c1', planning(at(T, '08:30'))), 'x');
+    expect(x).toMatchObject({ status: 'proposed', autoCall: 'retry', autoCallNotBefore: at(T, '09:00').toISOString() });
+  });
+
+  it('orario già passato: adesso', () => {
+    const x = byId(reduceCallOutcome(world(), 'x', asked('09:50'), 'c1', ON), 'x');
+    expect(x.autoCallNotBefore).toBe(NOW.toISOString());
+  });
+
+  it('richiamo in un altro giorno: torna in attesa per quel giorno, senza data rifiutata, slot riempito', () => {
+    const all = world({ declinedDates: ['2026-11-20'] });
+    const out = reduceCallOutcome(all, 'x', asked('11:00', '2026-11-12'), 'c1', ON);
+    const x = byId(out, 'x');
+    expect(x).toMatchObject({
+      status: 'pending', date: undefined, startTime: undefined, issueType: undefined, autoCall: undefined,
+      followUpDate: '2026-11-12', callbackAt: at('2026-11-12', '11:00').toISOString(), callbackRequests: 1,
+      declinedDates: ['2026-11-20'],
+    });
+    expect(x.notes).toContain('Richiamo chiesto dal cliente: 12/11/2026 alle 11:00');
+    expect(byId(out, 'near')).toMatchObject({ status: 'proposed', date: D, backfillOf: 'Cliente X' });
+  });
+
+  it('richiamo fuori fascia la sera: il giorno dopo, quindi in attesa', () => {
+    const x = byId(reduceCallOutcome(world(), 'x', asked('19:40'), 'c1', planning(at(T, '19:20'))), 'x');
+    expect(x).toMatchObject({ status: 'pending', followUpDate: '2026-11-12', callbackAt: at(T, '19:40').toISOString() });
+  });
+
+  it('richiamo oltre la scadenza dello slot (inizio − anticipo minimo): in attesa', () => {
+    const all = [stop('y', T, '12:00', '12:20', P.milano, { callStatus: 'called', callId: 'c1' })];
+    const y = byId(reduceCallOutcome(all, 'y', asked('10:10'), 'c1', ON), 'y');
+    expect(y).toMatchObject({ status: 'pending', followUpDate: T, date: undefined });
+    expect(y.declinedDates).toBeUndefined();
+  });
+
+  it('tappa già confermata: non resta, torna in attesa', () => {
+    const x = byId(reduceCallOutcome(world({ status: 'confirmed' }), 'x', asked('10:10'), 'c1', ON), 'x');
+    expect(x).toMatchObject({ status: 'pending', followUpDate: T });
+  });
+
+  it('senza orario o a pilota spento: come prima (problema "Da richiamare")', () => {
+    const senza = byId(reduceCallOutcome(world(), 'x', outcome('da_richiamare', { followUpDate: '2026-11-12' }), 'c1', ON), 'x');
+    expect(senza).toMatchObject({ status: 'issue', issueType: 'callback', followUpDate: '2026-11-12', date: undefined, autoCall: undefined });
+    const spento = byId(reduceCallOutcome(world(), 'x', asked('10:10'), 'c1', OFF), 'x');
+    expect(spento).toMatchObject({ status: 'issue', issueType: 'callback', date: undefined, autoCall: undefined });
+    expect(spento.callbackAt).toBeUndefined();
+  });
+
+  it('terza richiesta di fila: fra i problemi; un esito diverso azzera la serie', () => {
+    expect(MAX_CALLBACK_REQUESTS).toBe(3);
+    const seconda = byId(reduceCallOutcome(world({ callbackRequests: 1 }), 'x', asked('10:10'), 'c1', ON), 'x');
+    expect(seconda).toMatchObject({ status: 'proposed', autoCall: 'retry', callbackRequests: 2 });
+    const terza = byId(reduceCallOutcome(world({ callbackRequests: 2 }), 'x', asked('10:10'), 'c1', ON), 'x');
+    expect(terza).toMatchObject({ status: 'issue', issueType: 'callback', autoCall: undefined });
+    expect(terza.callbackRequests).toBeUndefined();
+    const altro = byId(reduceCallOutcome(world({ callbackRequests: 2 }), 'x', outcome('non_risposto'), 'c1', ON), 'x');
+    expect(altro.callbackRequests).toBeUndefined();
+    expect(altro.autoCall).toBe('retry');
+  });
+});
+
+describe('approveRequestedCallbacks (smistamento automatico)', () => {
+  const T = '2026-11-11';
+  // pratica tornata in attesa per un richiamo e appena ricollocata dallo smistamento
+  const placed = (callbackAt: string | undefined, id = 'x') =>
+    stop(id, D, '10:00', '10:20', P.portaVenezia, {
+      phone: '+390233330000', callStatus: 'called', callId: 'c1', callbackAt,
+      callOutcome: outcome('da_richiamare', { callbackAt }),
+    });
+
+  it('in coda subito, non prima dell\'ora chiesta, e il campo si toglie', () => {
+    const want = at('2026-11-12', '11:00').toISOString();
+    const out = approveRequestedCallbacks([placed(want)], ['x'], NOW);
+    expect(out[0]).toMatchObject({ autoCall: 'route', autoCallNotBefore: want, callAttempts: 0 });
+    expect(out[0].callbackAt).toBeUndefined();
+    expect(nextDueCall(out, planning(at('2026-11-12', '10:59')))).toBeNull();
+    expect(nextDueCall(out, planning(at('2026-11-12', '11:00')))?.id).toBe('x');
+  });
+
+  it('ora chiesta già passata: subito', () => {
+    const out = approveRequestedCallbacks([placed(at(T, '09:00').toISOString())], ['x'], NOW);
+    expect(out[0]).toMatchObject({ autoCall: 'route', autoCallNotBefore: undefined, callbackAt: undefined });
+  });
+
+  it('le altre pratiche collocate non si approvano da sole', () => {
+    const all = [placed(undefined, 'y'), placed(at('2026-11-12', '11:00').toISOString(), 'x')];
+    expect(approveRequestedCallbacks(all, ['y'], NOW)).toBe(all);
+    const out = approveRequestedCallbacks(all, ['x', 'y'], NOW);
+    expect(out[0]).toBe(all[0]);
+    expect(out[1].autoCall).toBe('route');
   });
 });

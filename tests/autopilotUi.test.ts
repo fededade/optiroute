@@ -15,6 +15,8 @@ import { slotSignature } from '../src/services/slotService';
 import { autopilotQueueKey } from '../src/hooks/useAutopilot';
 import { DEFAULT_AUTOPILOT_SETTINGS } from '../src/services/autopilotService';
 import { appt, at, stop, tech, P } from './fixtures';
+import { callLineFor, callbackWhen } from '../src/Components/AutopilotBadges';
+import { appointmentText } from '../src/layout/praticheTable';
 
 const S = { ...DEFAULT_AUTOPILOT_SETTINGS, enabled: true };
 
@@ -179,5 +181,37 @@ describe('smistamento automatico: bozze e firma dello slot', () => {
     const bozza = { ...s, autoSlot: slotSignature(s) };
     expect(routeSignature([{ ...bozza, autoCall: 'route' }])).not.toBe(routeSignature([bozza]));
     expect(routeSignature([{ ...bozza, notes: 'altro' }])).toBe(routeSignature([bozza]));
+  });
+});
+
+describe('etichette del richiamo chiesto dal cliente', () => {
+  const now = new Date();
+  const hm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const soon = new Date(now.getTime() + 10 * 60000);
+  const domani = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 11, 0);
+  const asked = { result: 'da_richiamare' as const, receivedAt: now.toISOString(), callbackAt: soon.toISOString() };
+
+  it('in coda: "Richiamo chiesto dal cliente alle HH:MM", distinta da chi non risponde', () => {
+    const inCoda = stop('x', '2026-11-13', '10:00', '10:20', P.milano, {
+      status: 'proposed', autoCall: 'retry', autoCallNotBefore: soon.toISOString(), callOutcome: asked,
+    });
+    const atteso = soon.toDateString() === now.toDateString()
+      ? `Richiamo chiesto dal cliente alle ${hm(soon)}`
+      : `Richiamo chiesto dal cliente ${callbackWhen(soon.toISOString(), now)}`;
+    expect(callLineFor(inCoda, 3, false)?.text).toBe(atteso);
+    const nonRisponde = { ...inCoda, callOutcome: { ...asked, result: 'non_risposto' as const } };
+    expect(callLineFor(nonRisponde, 3, false)?.text).toMatch(/^Non risponde · Richiamo alle /);
+  });
+
+  it('un altro giorno: con il giorno', () => {
+    expect(callbackWhen(domani.toISOString(), now)).toMatch(/^\S+ \d+ \S+ alle 11:00$/);
+  });
+
+  it('tornata in attesa: l\'orario chiesto al posto del rientro', () => {
+    const a = appt({ id: 'p', status: 'pending', followUpDate: '2026-11-12', callbackAt: domani.toISOString(), callOutcome: asked });
+    expect(callLineFor(a, 3, false)?.text).toMatch(/^Richiamo chiesto dal cliente \S+ \d+ \S+ alle 11:00$/);
+    expect(appointmentText(a)).toMatchObject({ kind: 'followup', time: '11:00' });
+    expect(appointmentText(a).day).toMatch(/^Richiamo /);
+    expect(appointmentText({ ...a, callbackAt: undefined }).day).toMatch(/^Rientro /);
   });
 });

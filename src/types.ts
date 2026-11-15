@@ -47,6 +47,7 @@ export interface CallOutcome {
   requestedTime?: string;    // orario chiesto dal cliente
   chosenAlternative?: AlternativeLabel; // alternativa accettata in chiamata (A/B/C)
   followUpDate?: string;     // data di rientro normalizzata YYYY-MM-DD, se estraibile
+  callbackAt?: string;       // ISO: quando richiamare, se il cliente l'ha chiesto (solo con da_richiamare)
   clientNotes?: string;      // annotazioni raccolte in chiamata
   newContactName?: string;   // referente alternativo indicato dal cliente
   newContactPhone?: string;
@@ -113,6 +114,11 @@ export interface Appointment {
   offeredAlternatives?: AlternativeSlot[]; // alternative offerte nell'ultima chiamata
   declinedDates?: string[];       // date rifiutate dal cliente: non riproporle
   backfillOf?: string;            // "rimpiazza <cliente>": slot liberato che sta coprendo
+  // Richiamo chiesto dal cliente con la pratica tornata in attesa (lo slot non
+  // si poteva tenere): l'orario chiesto (ISO). Quando lo smistamento automatico
+  // la ricolloca, la chiamata parte da sola non prima di questo istante.
+  callbackAt?: string;
+  callbackRequests?: number;      // richiami chiesti di fila dal cliente (al terzo decide l'operatore)
 
   // Smistamento: slot scritto dallo smistamento ("data|inizio|tecnico"). Se
   // coincide ancora con lo slot attuale e la tappa non è mai stata approvata

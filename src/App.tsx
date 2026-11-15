@@ -622,7 +622,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
           // Anche a finestra scaduta si tenta UN recupero reale: l'esito su
           // Retell è spesso già pronto (es. app riaperta il giorno dopo).
           // Solo se ancora pending si chiude a "sconosciuto".
-          const poll = await fetchCallOutcome(appt.callId!);
+          const poll = await fetchCallOutcome(appt.callId!, { callWindowStart: autopilotRef.current.callWindowStart });
           if (cancelled) return;
           if (!poll.pending && poll.outcome) {
             applyCallOutcome(appt.id, poll.outcome, appt.callId);

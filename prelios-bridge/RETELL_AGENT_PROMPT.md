@@ -103,6 +103,14 @@ personalizzati (nome ESATTO, tipo testo salvo diversa indicazione):
 | `nuovo_referente_ruolo` | (se contattare_altro) ruolo (geometra, agente, familiare...) |
 | `note_cliente` | eventuali note/richieste particolari |
 | `alternativa_scelta` | (consigliato) tipo Selector `A`, `B`, `C`, `nessuna` — *"Se il cliente ha accettato uno degli slot alternativi offerti in chiamata, la sua lettera; altrimenti nessuna"* |
+| `riassunto` | (consigliato) tipo *Text* — *"Riassunto della telefonata in ITALIANO, in 2-3 frasi: cosa è stato proposto, cosa ha risposto la persona, cosa è stato concordato."* È il riassunto mostrato sulla pratica: senza questo campo resta quello in inglese di Retell |
+| `richiamo_tra_minuti` | (facoltativo) tipo *Number* — *"Se la persona chiede di essere richiamata dopo un certo tempo (es. "tra dieci minuti", "tra un'ora"), il numero di minuti. Altrimenti lascia vuoto."* |
+| `orario_richiamo` | (facoltativo) tipo *Text* — *"Se la persona chiede di essere richiamata a un orario o in un giorno preciso, scrivilo (es. "oggi alle 17:30", "domani alle 10"). Altrimenti lascia vuoto."* |
+
+Con esito `da_richiamare` e il pilota acceso, OptiRoute richiama da solo
+all'orario chiesto dal cliente. Senza `richiamo_tra_minuti` e `orario_richiamo`
+prova comunque a capirlo dagli altri testi (`data_rientro`,
+`nuovo_orario_richiesto`, `note_cliente`); se non ci riesce decide l'operatore.
 
 Se il cliente accetta uno slot alternativo, `nuova_data_richiesta` e
 `nuovo_orario_richiesto` vanno compilati con data (AAAA-MM-GG) e ora (HH:MM)

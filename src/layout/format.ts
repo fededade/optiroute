@@ -24,6 +24,12 @@ export const longDayLabel = (iso?: string): string => {
 
 export const isoDate = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
+// Richiamo chiesto dal cliente: "gio 12 nov alle 10:15" (dall'istante ISO)
+export const callbackLabel = (iso: string): { day: string; time: string } => {
+  const d = new Date(iso);
+  return { day: dayLabel(isoDate(d)), time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+};
+
 export const addDays = (iso: string, n: number): string => {
   const d = new Date(`${iso}T00:00:00`);
   d.setDate(d.getDate() + n);

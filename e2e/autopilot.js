@@ -550,10 +550,70 @@ async function scenarioF(browser) {
   await context.close();
 }
 
+// ---------------------------------------------------------------------------
+// Il cliente chiede di essere richiamato tra 10 minuti: la tappa resta
+// proposta nel giro, con l'etichetta dedicata, e la chiamata riparte da sola
+// all'ora giusta (non prima)
+async function scenarioG(browser) {
+  const D = '2026-11-13';
+  const seed = {
+    optiroute_appointments_v1: [
+      stop('r1', 'Cliente Richiamo', D, '10:00', '10:20', P.portaVenezia, { sequenceOrder: 1, autoCall: 'route' }),
+    ],
+    optiroute_settings_v1: { ...settings({}, { enabled: true }), autopilotIntroSeen: true },
+  };
+  const { context, page, net } = await newPage(browser, { time: ROME_10, seed });
+  const callsTo = () => net.calls.filter(c => c.clientName === 'Cliente Richiamo');
+  await waitFor(() => callsTo().length === 1, 'prima chiamata', 30000);
+  // Esito come arriva da /api/call-status, senza i campi nuovi: l'orario si
+  // ricava dalle note raccolte in chiamata
+  net.outcomes[callsTo()[0].callId] = {
+    result: 'da_richiamare',
+    clientNotes: 'Sentitemi tra dieci minuti, devo chiedere all\'inquilino',
+    summary: 'Il cliente chiede di essere richiamato tra dieci minuti.',
+  };
+  const r1 = await waitFor(async () => {
+    const s = await state(page);
+    const x = byTitle(s, 'Cliente Richiamo');
+    return x.autoCall === 'retry' && x;
+  }, 'richiamo in coda', 60000);
+  assert.equal(r1.status, 'proposed', 'resta proposta');
+  assert.equal(r1.date, D, 'stesso giorno');
+  assert.equal(r1.startTime, '10:00', 'stesso orario');
+  assert.equal(r1.callAttempts || 0, 0, 'i tentativi senza risposta non aumentano');
+  assert.equal(r1.callbackRequests, 1);
+  assert.match(r1.notes || '', /Richiamo chiesto dal cliente: 11\/11\/2026 alle 10:\d\d/);
+  const due = new Date(r1.autoCallNotBefore);
+  const arrived = new Date(r1.callOutcome.receivedAt);
+  const delay = Math.round((due - arrived) / 60000);
+  assert.equal(delay, 10, `richiamo 10 minuti dopo l'esito (${delay})`);
+  const hhmm = due.toLocaleTimeString('it-IT', { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit' });
+  await goSection(page, 'proposte'); // la tappa proposta sta nella sezione Proposte
+  await page.getByText(`Richiamo chiesto dal cliente alle ${hhmm}`).first().waitFor();
+  await shot(page, 'g1-richiamo-chiesto.png');
+
+  // Prima dell'ora chiesta non parte niente
+  await page.clock.fastForward('05:00');
+  await sleep(6000);
+  assert.equal(callsTo().length, 1, 'nessuna chiamata prima dell\'ora chiesta');
+  // All'ora chiesta riparte da sola
+  await page.clock.fastForward('06:00');
+  await waitFor(() => callsTo().length === 2, 'richiamo partito', 40000);
+  const started = callsTo()[1].at;
+  log('Richiamo chiesto alle', hhmm, '- partito');
+  const after = byTitle(await state(page), 'Cliente Richiamo');
+  assert.equal(after.autoCall, undefined, 'uscito dalla coda');
+  assert.equal(after.status, 'proposed');
+  assert.ok(started, 'chiamata registrata');
+  await shot(page, 'g2-richiamo-partito.png');
+  results.push(`g) OK: "tra dieci minuti" -> resta proposta, "Richiamo chiesto dal cliente alle ${hhmm}", nessuna chiamata prima, richiamo partito da solo`);
+  await context.close();
+}
+
 (async () => {
   const browser = await chromium.launch();
   const only = process.argv[2];
-  const all = { a: scenarioA, b: scenarioB, c: scenarioC, d: scenarioD, e: scenarioE, f: scenarioF };
+  const all = { a: scenarioA, b: scenarioB, c: scenarioC, d: scenarioD, e: scenarioE, f: scenarioF, g: scenarioG };
   let failed = false;
   for (const [k, fn] of Object.entries(all)) {
     if (only && !only.includes(k)) continue;

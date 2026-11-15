@@ -126,7 +126,7 @@ const TableRow: React.FC<RowCommon & { layout: TableLayout }> = ({ appt, ws, q, 
           </span>
         )}
         {appt.contactPerson && (
-          <span className="flex items-center gap-1 text-xs text-ink-500 min-w-0" title={appt.referredBy ? `Indicato da ${appt.referredBy}` : 'Referente da contattare'}>
+          <span className="flex items-center gap-1 text-xs text-ink-500 min-w-0" title={appt.referredBy ? `Indicato da ${appt.referredBy}` : 'Referente da contattare'} data-testid="row-contact">
             <UserRound size={11} strokeWidth={2} className="shrink-0" aria-hidden />
             <span className="truncate"><Hl text={appt.contactPerson} q={q} /></span>
           </span>
@@ -229,6 +229,13 @@ const CompactRow: React.FC<RowCommon & { narrow: boolean }> = ({ appt, ws, q, na
           {phoneMissing(appt) && <>{sep}<span className="inline-flex items-center gap-1 shrink-0 font-medium text-amber-800" title="Senza telefono il pilota non può chiamare"><PhoneOff size={12} strokeWidth={2} aria-hidden />manca tel.</span></>}
           <CallStatusInline appt={appt} maxAttempts={ws.maxAttempts} awaitingOutcome={ws.awaitingOutcome(appt)} className="ml-auto pl-2 shrink min-w-0" emptyDash={false} />
         </div>
+        {appt.contactPerson && (
+          // referente da chiamare al posto dell'intestatario (riga in più solo se c'è)
+          <span className="mt-0.5 flex items-center gap-1 text-xs text-ink-500 min-w-0" title={appt.referredBy ? `Indicato da ${appt.referredBy}` : 'Referente da contattare'} data-testid="row-contact">
+            <UserRound size={11} strokeWidth={2} className="shrink-0" aria-hidden />
+            <span className="truncate"><Hl text={appt.contactPerson} q={q} /></span>
+          </span>
+        )}
       </div>
       <Actions appt={appt} ws={ws} />
     </li>

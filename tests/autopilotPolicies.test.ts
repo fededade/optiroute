@@ -93,8 +93,9 @@ describe('avvio di una nuova chiamata', () => {
 
 describe('irreperibili e pratiche senza telefono', () => {
   it('un solo tentativo: "1 tentativo"', () => {
-    // slot domani alle 9:00, chiamata la sera prima: non c'è più tempo per riprovare
-    const now = at('2026-11-12', '19:00');
+    // slot domani alle 9:00, chiamata la sera prima: il richiamo (dopo 15
+    // minuti) cade fuori fascia e non c'è più tempo per riprovare
+    const now = at('2026-11-12', '19:20');
     const all = [stop('x', D, '09:00', '09:20', P.milano, { callStatus: 'called', callId: 'k' })];
     const x = byId(reduceCallOutcome(all, 'x', outcome('non_risposto'), 'k', planning(now)), 'x');
     expect(x).toMatchObject({ status: 'issue', issueType: 'callback' });

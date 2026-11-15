@@ -145,6 +145,21 @@ describe('init, pull, push', () => {
     expect(back.body.appointments.find((a: Appointment) => a.id === 's1').autoSlot).toBeUndefined();
   });
 
+  it('push: referente e impronta della nota di contatto (contactNote) passano dal cloud', async () => {
+    const t = make();
+    await t.init();
+    const set = { contactPerson: 'Luca Bianchi — agente immobiliare', referredBy: 'Cliente X', contactNote: 'ag. imm. Luca Bianchi 3335550111', phone: '+393335550111' };
+    const res = await t.call('push', { method: 'POST', body: { device: 'dev-a', changes: [{ op: 'patch', id: 'near', set, unset: [] }] } });
+    expect(res.statusCode).toBe(200);
+    const pulled = await t.call('pull', { query: { rev: '0', configRev: '0' } });
+    expect(pulled.body.appointments.find((a: Appointment) => a.id === 'near')).toMatchObject(set);
+    // l'operatore toglie il referente: l'impronta resta
+    const back = await t.call('push', { method: 'POST', body: { device: 'dev-a', changes: [{ op: 'patch', id: 'near', set: {}, unset: ['contactPerson', 'referredBy'] }] } });
+    const near = back.body.appointments.find((a: Appointment) => a.id === 'near');
+    expect(near.contactPerson).toBeUndefined();
+    expect(near.contactNote).toBe(set.contactNote);
+  });
+
   it('push vuoto senza config: nessuna scrittura; con config: nuova configRev', async () => {
     const t = make();
     await t.init();

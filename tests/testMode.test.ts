@@ -274,6 +274,24 @@ describe('pilota: ogni giorno solo in prova', () => {
     }
   });
 
+  it('impostazioni del browser salvate col vecchio retryMinutes: 120 -> 15 minuti, e il vecchio campo sparisce', () => {
+    const { noAnswerRetryMinutes: _nuovo, ...vecchie } = DEFAULT_AUTOPILOT_SETTINGS;
+    safeLocalStorage.setItem('optiroute_settings_v1', JSON.stringify({ autopilot: { ...vecchie, retryMinutes: 120 } }));
+    try {
+      const loaded = loadAutopilotSettings();
+      expect(loaded.noAnswerRetryMinutes).toBe(15);
+      expect('retryMinutes' in loaded).toBe(false);
+    } finally {
+      safeLocalStorage.removeItem('optiroute_settings_v1');
+    }
+    safeLocalStorage.setItem('optiroute_settings_v1', JSON.stringify({ autopilot: { ...DEFAULT_AUTOPILOT_SETTINGS, noAnswerRetryMinutes: 40 } }));
+    try {
+      expect(loadAutopilotSettings().noAnswerRetryMinutes).toBe(40);
+    } finally {
+      safeLocalStorage.removeItem('optiroute_settings_v1');
+    }
+  });
+
   const config = (over: Partial<AutopilotSettings> = {}): CloudConfig => ({
     technicians: [tech()],
     autopilot: { ...DEFAULT_AUTOPILOT_SETTINGS, enabled: true, ...over },
@@ -358,14 +376,40 @@ describe('pratiche di prova', () => {
     const test = load().appointments;
     expect(test.filter(a => a.urgent)).toHaveLength(1);
     const ref = test.filter(a => a.contactPerson);
-    expect(ref).toHaveLength(1);
-    expect(ref[0].contactPerson).toMatch(/^.+ — .+$/);
-    expect(ref[0].referredBy).toBeTruthy();
+    expect(ref).toHaveLength(3);
+    for (const a of ref) {
+      expect(a.contactPerson).toMatch(/^.+ — .+$/);
+      expect(a.referredBy).toBe(a.title);
+      // il numero resta quello di chi prova (chiamate solo ai numeri ammessi)
+      expect(a.phone).toBe(ALLOWED);
+    }
+    // quella scritta a mano resta com'è
+    expect(test.find(a => a.contactPerson === 'Paolo Ricci — geometra')?.contactNote).toBeUndefined();
     expect(test.some(a => /[A-Z]/.test(a.title) && a.title === a.title.toUpperCase() && !/\d/.test(a.title))).toBe(true);
     const noOwner = test.filter(a => a.title === a.shortAddress);
     expect(noOwner).toHaveLength(1);
-    expect(test.filter(a => a.notes)).toHaveLength(2);
+    expect(test.filter(a => a.notes)).toHaveLength(4);
     expect(test.filter(a => a.durationMinutes === 40)).toHaveLength(1);
+  });
+
+  it('referenti dalla nota del portale: uno per gruppo, letti dallo stesso servizio dell\'import', () => {
+    const test = load().appointments;
+    const groups = testPraticheGroups();
+    const fromNote = test.filter(a => a.contactNote);
+    expect(fromNote).toHaveLength(2);
+    expect(new Set(fromNote.map(a => groups.find(g => g.id === a.id)!.group))).toEqual(new Set(['pavia', 'milano']));
+    const agente = fromNote.find(a => /AG\. IMM\./.test(a.notes || ''))!;
+    expect(agente.notes).toBe(`PROVA | Contatto Prelios: CONTATTARE AG. IMM. SIG. ROBERTO NERI ${ALLOWED}`);
+    expect(agente).toMatchObject({ contactPerson: 'Roberto Neri — agente immobiliare', referredBy: 'Giuseppe Marino', phone: ALLOWED });
+    const agenzia = fromNote.find(a => a !== agente)!;
+    expect(agenzia).toMatchObject({ contactPerson: 'Referente indicato dal cliente — agenzia immobiliare Girasole', referredBy: 'Elena De Luca', phone: ALLOWED });
+    // con un numero di cellulare (scritto come lo scrive la banca) vale lo stesso
+    const mobile = loadTestScenario([], defaultTechnicians(), '333 555 0109');
+    if (!mobile.ok) throw new Error(mobile.error);
+    expect(mobile.appointments.filter(a => a.contactNote).map(a => a.contactPerson)).toEqual([
+      'Roberto Neri — agente immobiliare',
+      'Referente indicato dal cliente — agenzia immobiliare Girasole',
+    ]);
   });
 
   it('due gruppi a due tecnici diversi con i tecnici predefiniti (che ricevono la base)', () => {
@@ -414,7 +458,37 @@ describe('pratiche di prova', () => {
     expect(removeTestPratiche(none)).toBe(none);
   });
 
+  it('senza «Parti da zero»: le altre pratiche restano e nessuna è contata come eliminata', () => {
+    const others = [
+      appt({ id: 'vecchia-1', phone: '+390255500201', status: 'confirmed', date: '2026-11-17', startTime: '09:00' }),
+      appt({ id: 'vecchia-2', phone: '+390255500202' }),
+    ];
+    const r = load([...others, ...load().appointments]);
+    expect(r.removedOthers).toBe(0);
+    expect(r.appointments).toHaveLength(18);
+    expect(r.appointments.slice(0, 2)).toEqual(others);
+    expect(loadTestScenario(others, defaultTechnicians(), PHONE_RAW, { wipeAll: false })).toMatchObject({ ok: true, removedOthers: 0 });
+  });
+
+  it('con «Parti da zero»: restano SOLO le 16 nuove in attesa, con il conto delle altre eliminate', () => {
+    const others = [
+      appt({ id: 'vecchia-1', phone: '+390255500201', status: 'confirmed', date: '2026-11-17', startTime: '09:00' }),
+      appt({ id: 'vecchia-2', phone: '+390255500202', status: 'proposed', date: '2026-11-18', startTime: '10:00' }),
+      appt({ id: 'vecchia-3', phone: '+390255500203' }),
+    ];
+    const oldTest = load().appointments.map(a => (a.id === 'prova-01' ? { ...a, status: 'confirmed' as const } : a));
+    const r = loadTestScenario([...others, ...oldTest], defaultTechnicians(), PHONE_RAW, { wipeAll: true });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.removedOthers).toBe(3);   // le pratiche di prova non contano
+    expect(r.appointments).toHaveLength(TEST_PRATICHE_COUNT);
+    expect(r.appointments.every(a => isTestPratica(a) && a.status === 'pending')).toBe(true);
+    // niente da eliminare: conto a zero
+    const empty = loadTestScenario([], defaultTechnicians(), PHONE_RAW, { wipeAll: true });
+    expect(empty).toMatchObject({ ok: true, removedOthers: 0 });
+  });
+
   it('numero non valido: niente modifiche', () => {
+    expect(loadTestScenario([appt({ id: 'vecchia-1' })], defaultTechnicians(), 'abc', { wipeAll: true }).ok).toBe(false);
     expect(loadTestScenario([], defaultTechnicians(), 'abc').ok).toBe(false);
     expect(loadTestScenario([], defaultTechnicians(), '').ok).toBe(false);
   });

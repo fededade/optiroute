@@ -1,5 +1,5 @@
 import type { Appointment, AppointmentStatus } from '../types';
-import { dayLabel, displayCode, placeLabel, shortStreet, titleIsAddress } from './format';
+import { callbackLabel, dayLabel, displayCode, placeLabel, shortStreet, titleIsAddress } from './format';
 
 // "Tutte le pratiche": funzioni pure della tabella (filtro per stato,
 // ordinamento, colonne, testo dell'appuntamento, evidenziazione della
@@ -155,6 +155,10 @@ export const tableLayoutFor = (width: number): TableLayout =>
 export const appointmentText = (a: Appointment): { day: string; time: string; kind: 'slot' | 'followup' | 'none' } => {
   if ((a.status === 'confirmed' || a.status === 'proposed') && a.date) {
     return { day: dayLabel(a.date), time: a.startTime ? `${a.startTime}–${a.endTime || ''}`.replace(/–$/, '') : '', kind: 'slot' };
+  }
+  if (a.callbackAt && a.status === 'pending') {
+    const c = callbackLabel(a.callbackAt);
+    return { day: `Richiamo ${c.day}`, time: c.time, kind: 'followup' };
   }
   if (a.followUpDate) return { day: `Rientro ${dayLabel(a.followUpDate)}`, time: '', kind: 'followup' };
   return { day: '—', time: '', kind: 'none' };

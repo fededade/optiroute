@@ -297,8 +297,8 @@ var nomeDaChiamare = (raw, luogo = {}) => {
   const low = name.toLowerCase();
   if (low === REFERENTE_SENZA_NOME) return "";
   if (/\d/.test(name) || PAROLE_INDIRIZZO.test(name)) return "";
-  const norm = (v) => (typeof v === "string" ? v : "").split(",")[0].replace(/\s+/g, " ").trim().toLowerCase();
-  const indirizzi = [norm(luogo.shortAddress), norm(luogo.address)].filter(Boolean);
+  const norm2 = (v) => (typeof v === "string" ? v : "").split(",")[0].replace(/\s+/g, " ").trim().toLowerCase();
+  const indirizzi = [norm2(luogo.shortAddress), norm2(luogo.address)].filter(Boolean);
   if (indirizzi.some((a) => low === a || low.startsWith(a) || a.startsWith(low))) return "";
   return name;
 };
@@ -1653,8 +1653,127 @@ var removeFromRoute = (all, id, changes, ctx) => {
   return wasInRoute && a.date ? resequenceDay(result, a.technicianId, a.date, ctx) : result;
 };
 
-// src/services/callService.ts
+// src/services/callbackTime.ts
 var pad = (n2) => String(n2).padStart(2, "0");
+var dayStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+var addDays = (d, n2) => dayStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n2));
+var at = (day, h, m) => {
+  const [y, mo, d] = day.split("-").map(Number);
+  return new Date(y, mo - 1, d, h, m, 0, 0);
+};
+var norm = (s2) => s2.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/['’`´]/g, " ").replace(/\s+/g, " ").trim();
+var WORDS = {
+  un: 1,
+  uno: 1,
+  una: 1,
+  due: 2,
+  tre: 3,
+  quattro: 4,
+  cinque: 5,
+  sei: 6,
+  sette: 7,
+  otto: 8,
+  nove: 9,
+  dieci: 10,
+  undici: 11,
+  dodici: 12,
+  quindici: 15,
+  venti: 20,
+  trenta: 30,
+  quaranta: 40,
+  quarantacinque: 45,
+  cinquanta: 50,
+  sessanta: 60,
+  novanta: 90
+};
+var WORD_RE = Object.keys(WORDS).sort((x, y) => y.length - x.length).join("|");
+var NUM = `(\\d{1,3}|${WORD_RE})`;
+var toNum = (s2) => /^\d+$/.test(s2) ? parseInt(s2, 10) : WORDS[s2];
+var TRA = "\\b(?:tra|fra)\\s+(?:circa\\s+)?";
+var relativeMinutes = (text) => {
+  const t = norm(text);
+  if (new RegExp(`${TRA}un quarto d\\s?ora\\b`).test(t)) return 15;
+  if (new RegExp(`${TRA}(?:una\\s+)?mezz\\s?ora\\b`).test(t)) return 30;
+  if (new RegExp(`${TRA}un paio d\\s?ore\\b`).test(t)) return 120;
+  let m = new RegExp(`${TRA}${NUM}\\s+(?:minuti|minuto|min)\\b`).exec(t);
+  if (m) return toNum(m[1]);
+  m = new RegExp(`${TRA}(un|${NUM.slice(1, -1)})\\s+(?:ora|ore)(\\s+e\\s+mezz[ao])?\\b`).exec(t);
+  if (m) return toNum(m[1]) * 60 + (m[2] ? 30 : 0);
+  return void 0;
+};
+var WEEKDAYS = ["domenica", "lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato"];
+var dayInText = (t, ref) => {
+  const explicit = parseFollowUpDate(t);
+  if (explicit) return explicit;
+  if (/\bdopodomani\b/.test(t)) return addDays(ref, 2);
+  if (/\bdomani\b/.test(t)) return addDays(ref, 1);
+  if (/\b(?:oggi|stamattina|stamani|stasera)\b/.test(t)) return dayStr(ref);
+  for (let i = 0; i < WEEKDAYS.length; i++) {
+    if (new RegExp(`\\b${WEEKDAYS[i]}\\b`).test(t)) {
+      const diff = (i - ref.getDay() + 7) % 7 || 7;
+      return addDays(ref, diff);
+    }
+  }
+  return void 0;
+};
+var HOUR_WORDS = "una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici";
+var timeInText = (t) => {
+  const re = new RegExp(`\\b(?:alle|all|ore|verso le|verso l|dopo le|dopo l|per le|per l|dalle|dall)\\s+(\\d{1,2}|${HOUR_WORDS})(?:\\s*[:.]\\s*(\\d{2})|\\s+e\\s+(mezza|mezzo|un quarto|quarantacinque|trenta|quindici))?\\b`);
+  const m = re.exec(t);
+  if (!m) return void 0;
+  let h = /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : WORDS[m[1]];
+  let min = 0;
+  if (m[2]) min = parseInt(m[2], 10);
+  else if (m[3]) min = m[3].startsWith("mezz") || m[3] === "trenta" ? 30 : m[3] === "quarantacinque" ? 45 : 15;
+  if (h >= 1 && h <= 7) h += 12;
+  if (h > 23 || min > 59) return void 0;
+  return { h, m: min };
+};
+var parseCallbackText = (text, ref, contextDay) => {
+  if (!text || !text.trim()) return {};
+  const minutes = relativeMinutes(text);
+  if (minutes !== void 0 && minutes > 0) return { at: new Date(ref.getTime() + minutes * 6e4) };
+  const t = norm(text);
+  const today = dayStr(ref);
+  const ownDay = dayInText(t, ref);
+  const day = ownDay || contextDay;
+  const time = timeInText(t);
+  if (time) {
+    const d = at(day || today, time.h, time.m);
+    return d.getTime() > ref.getTime() ? { at: d } : {};
+  }
+  if (!day || day === today) {
+    const part = /\b(?:nel pomeriggio|oggi pomeriggio|questo pomeriggio|di pomeriggio)\b/.test(t) ? 15 : /\b(?:stasera|in serata|questa sera)\b/.test(t) ? 18 : void 0;
+    if (part !== void 0) {
+      const d = at(today, part, 0);
+      return d.getTime() > ref.getTime() ? { at: d } : {};
+    }
+  }
+  return ownDay ? { day: ownDay } : {};
+};
+var MAX_MINUTES = 14 * 24 * 60;
+var computeCallbackAt = (src) => {
+  const { ref } = src;
+  const n2 = typeof src.minutes === "number" ? src.minutes : typeof src.minutes === "string" && /^\s*\d+(?:[.,]\d+)?\s*$/.test(src.minutes) ? parseFloat(src.minutes.replace(",", ".")) : NaN;
+  if (Number.isFinite(n2) && n2 > 0 && n2 <= MAX_MINUTES) return new Date(ref.getTime() + Math.round(n2) * 6e4).toISOString();
+  let day = src.followUpDate;
+  let dayFromText;
+  for (const text of src.texts) {
+    if (!text) continue;
+    const p = parseCallbackText(text, ref, dayFromText || day);
+    if (p.at) return p.at.toISOString();
+    if (p.day && !dayFromText) dayFromText = p.day;
+  }
+  day = dayFromText || day;
+  if (day && day > dayStr(ref)) {
+    const [h, m] = (src.callWindowStart || "09:00").split(":").map(Number);
+    return at(day, h || 0, m || 0).toISOString();
+  }
+  return void 0;
+};
+
+// src/services/callService.ts
+var pad2 = (n2) => String(n2).padStart(2, "0");
 var parseFollowUpDate = (raw) => {
   if (!raw) return void 0;
   const iso = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
@@ -1663,7 +1782,7 @@ var parseFollowUpDate = (raw) => {
     const m2 = parseInt(iso[2], 10);
     const d2 = parseInt(iso[3], 10);
     const date2 = new Date(y2, m2 - 1, d2);
-    if (date2.getMonth() === m2 - 1 && date2.getDate() === d2) return `${y2}-${pad(m2)}-${pad(d2)}`;
+    if (date2.getMonth() === m2 - 1 && date2.getDate() === d2) return `${y2}-${pad2(m2)}-${pad2(d2)}`;
     return void 0;
   }
   const dmy = /(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/.exec(raw);
@@ -1684,17 +1803,27 @@ var parseFollowUpDate = (raw) => {
   }
   const date = new Date(y, m - 1, d);
   if (date.getMonth() !== m - 1 || date.getDate() !== d) return void 0;
-  return `${y}-${pad(m)}-${pad(d)}`;
+  return `${y}-${pad2(m)}-${pad2(d)}`;
 };
-var toCallOutcome = (o, now = /* @__PURE__ */ new Date()) => {
+var toCallOutcome = (o, now = /* @__PURE__ */ new Date(), opts = {}) => {
   const followUpDate = parseFollowUpDate(`${o.followUpRaw || ""}`) || (o.result === "da_richiamare" || o.result === "lavori_non_ultimati" || o.result === "riprogrammare" ? parseFollowUpDate(`${o.requestedDate || ""}`) : void 0);
   const chosenAlternative = o.chosenAlternative === "A" || o.chosenAlternative === "B" || o.chosenAlternative === "C" ? o.chosenAlternative : void 0;
+  const ended = typeof o.endedAt === "string" ? new Date(o.endedAt) : null;
+  const ref = ended && !isNaN(ended.getTime()) ? ended : now;
+  const callbackAt = o.result === "da_richiamare" ? computeCallbackAt({
+    minutes: o.callbackMinutes,
+    texts: [o.callbackTimeRaw, o.followUpRaw, o.requestedTime, o.clientNotes].map((t) => typeof t === "string" ? t : void 0),
+    followUpDate,
+    ref,
+    callWindowStart: opts.callWindowStart
+  }) : void 0;
   return {
     result: o.result || "sconosciuto",
     requestedDate: o.requestedDate || void 0,
     requestedTime: o.requestedTime || void 0,
     chosenAlternative,
     followUpDate,
+    ...callbackAt ? { callbackAt } : {},
     clientNotes: o.clientNotes || void 0,
     newContactName: o.newContactName || void 0,
     newContactPhone: o.newContactPhone || void 0,
@@ -1814,7 +1943,7 @@ var DEFAULT_AUTOPILOT_SETTINGS = {
   callWindowEnd: "19:30",
   callSaturday: false,
   maxAttempts: 3,
-  retryMinutes: 120,
+  noAnswerRetryMinutes: 15,
   offerAlternatives: true,
   backfill: true,
   minLeadHours: 3,
@@ -1861,6 +1990,8 @@ var formatDate = (date) => {
   const [y, m, d] = date.split("-");
   return `${d}/${m}/${y}`;
 };
+var formatDateTime = (d) => `${formatDate(localDateStr(d))} alle ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+var MAX_CALLBACK_REQUESTS = 3;
 var replaceById = (all, updated) => all.map((a) => a.id === updated.id ? updated : a);
 var techById = (technicians, id) => id ? technicians.find((t) => t.id === id) : void 0;
 var baseFor = (ctx, technicianId, date) => {
@@ -1932,6 +2063,8 @@ var reduceCallStarted = (all, id, alternatives, now) => all.map(
     autoCallNotBefore: void 0,
     callOutcome: void 0,
     callSummary: void 0,
+    callbackAt: void 0,
+    // il richiamo chiesto dal cliente è questa chiamata
     offeredAlternatives: alternatives.length > 0 ? alternatives : void 0
   } : a
 );
@@ -1968,7 +2101,11 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
     ...a,
     callOutcome: outcome,
     callSummary: outcome.summary || a.callSummary,
-    callStatus: outcome.result === "non_risposto" ? "failed" : "called"
+    callStatus: outcome.result === "non_risposto" ? "failed" : "called",
+    // Un esito nuovo supera il richiamo chiesto prima; un esito diverso da
+    // "da richiamare" interrompe la serie di richiami chiesti di fila
+    ...a.callbackAt ? { callbackAt: void 0 } : {},
+    ...a.callbackRequests && outcome.result !== "da_richiamare" ? { callbackRequests: void 0 } : {}
   };
   let list = replaceById(all, base);
   let liberato = false;
@@ -2037,9 +2174,42 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
         );
         break;
       }
-      case "da_richiamare":
-        leaveRoute({ status: "issue", issueType: "callback", followUpDate: outcome.followUpDate || a.followUpDate });
+      case "da_richiamare": {
+        const requests = (a.callbackRequests || 0) + 1;
+        const asked = outcome.callbackAt ? new Date(outcome.callbackAt) : null;
+        if (pilot && asked && !isNaN(asked.getTime()) && requests < MAX_CALLBACK_REQUESTS) {
+          const when = nextCallWindowStart(new Date(Math.max(asked.getTime(), ctx.now.getTime())), s2);
+          const nota = `Richiamo chiesto dal cliente: ${formatDateTime(asked)}`;
+          const slotStart = slotStartOf(a);
+          const keepSlot = eraNelGiro && a.status === "proposed" && !!slotStart && localDateStr(when) === localDateStr(ctx.now) && when.getTime() < slotStart.getTime() - s2.minLeadHours * 36e5;
+          if (keepSlot) {
+            list = replaceById(list, {
+              ...base,
+              autoCall: "retry",
+              autoCallNotBefore: when.toISOString(),
+              callbackRequests: requests,
+              notes: addNote(a.notes, nota)
+            });
+          } else {
+            leaveRoute({
+              status: "pending",
+              issueType: void 0,
+              followUpDate: localDateStr(when),
+              callbackAt: asked.toISOString(),
+              callbackRequests: requests,
+              notes: addNote(a.notes, nota)
+            });
+          }
+          break;
+        }
+        leaveRoute({
+          status: "issue",
+          issueType: "callback",
+          followUpDate: outcome.followUpDate || a.followUpDate,
+          callbackRequests: void 0
+        });
         break;
+      }
       case "numero_errato":
         leaveRoute({ status: "issue", issueType: "wrong_phone" });
         break;
@@ -2085,7 +2255,7 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
           list = replaceById(list, { ...base, callAttempts: attempts });
           break;
         }
-        const retryAt = nextCallWindowStart(new Date(ctx.now.getTime() + s2.retryMinutes * 6e4), s2);
+        const retryAt = nextCallWindowStart(new Date(ctx.now.getTime() + s2.noAnswerRetryMinutes * 6e4), s2);
         const slotStart = slotStartOf(a);
         const deadline = slotStart.getTime() - s2.minLeadHours * 36e5;
         if (attempts < s2.maxAttempts && retryAt.getTime() < deadline) {
@@ -2228,8 +2398,8 @@ var planningFrom = (config, now, env = {}) => ({
   settings: effectiveAutopilotSettings({ ...DEFAULT_AUTOPILOT_SETTINGS, ...config.autopilot || {} }, { testMode: env.testMode === true }),
   now
 });
-var pad2 = (n2) => String(n2).padStart(2, "0");
-var localDay = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+var pad3 = (n2) => String(n2).padStart(2, "0");
+var localDay = (d) => `${d.getFullYear()}-${pad3(d.getMonth() + 1)}-${pad3(d.getDate())}`;
 var keepIfSame = (before, after) => after.length === before.length && after.every((a, i) => a === before[i]) ? before : after;
 var recoverInterruptedLaunches = (all, now) => keepIfSame(
   all,
@@ -2403,7 +2573,7 @@ var runTick = async (deps, source, opts = {}) => {
         const lookup = await deps.retell.getCall(callId, Math.max(1e3, Math.min(8e3, remaining())));
         const now = deps.now();
         if (lookup.kind === "done") {
-          found.push({ id: appt.id, callId, outcome: toCallOutcome(lookup.outcome, now) });
+          found.push({ id: appt.id, callId, outcome: toCallOutcome(lookup.outcome, now, { callWindowStart: planningFrom(cfg, now, deps).settings.callWindowStart }) });
           return;
         }
         if (lookup.kind === "error" && lookup.transient) return;
@@ -2525,6 +2695,17 @@ var pickString = (obj, keys) => {
   }
   return void 0;
 };
+var pickCallbackMinutes = (obj) => {
+  if (!obj) return void 0;
+  for (const k of Object.keys(obj)) {
+    const key = k.toLowerCase().replace(/[\s-]+/g, "_");
+    if (key !== "richiamo_tra_minuti" && key !== "minuti_richiamo" && key !== "callback_minutes") continue;
+    const v = obj[k];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return void 0;
+};
 var normalizeChosenAlternative = (raw) => {
   if (typeof raw !== "string") return void 0;
   const v = raw.trim().toLowerCase();
@@ -2601,8 +2782,13 @@ var interpretRetellCall = (raw) => {
       newContactName,
       newContactPhone,
       newContactRole,
-      summary: typeof analysis.call_summary === "string" ? analysis.call_summary : void 0,
-      sentiment: typeof analysis.user_sentiment === "string" ? analysis.user_sentiment : void 0
+      // Riassunto in italiano (campo personalizzato), altrimenti quello in inglese di Retell
+      summary: pickString(custom, ["riassunto", "riassunto_chiamata", "sintesi", "riepilogo"]) ?? (typeof analysis.call_summary === "string" ? analysis.call_summary : void 0),
+      sentiment: typeof analysis.user_sentiment === "string" ? analysis.user_sentiment : void 0,
+      // Richiamo chiesto dal cliente (campi facoltativi, vedi README)
+      callbackMinutes: pickCallbackMinutes(custom),
+      callbackTimeRaw: pickString(custom, ["orario_richiamo", "quando_richiamare", "callback_time"]),
+      endedAt: typeof data.end_timestamp === "number" && data.end_timestamp > 0 ? new Date(data.end_timestamp).toISOString() : void 0
     }
   };
 };
@@ -2809,7 +2995,7 @@ var identifyStaff = async (token, d, service) => {
     throw err;
   }
 };
-var romeToday = (at) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+var romeToday = (at2) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit" }).format(at2);
 var OPS = {
   ping: "GET",
   status: "GET",

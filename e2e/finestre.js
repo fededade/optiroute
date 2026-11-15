@@ -89,7 +89,7 @@ async function waitFor(fn, what, timeout = 30000) {
 }
 const dialog = page => page.getByRole('dialog');
 
-async function newPage(browser, viewport, settingsOver = {}) {
+async function newPage(browser, viewport, settingsOver = {}, appointments = null) {
   const context = await browser.newContext({ timezoneId: 'Europe/Rome', locale: 'it-IT', viewport, deviceScaleFactor: 1 });
   const page = await context.newPage();
   const net = { calls: [], retell: { delay: 0, fail: null }, directionsDelay: 0, cloud: [] };
@@ -143,7 +143,7 @@ async function newPage(browser, viewport, settingsOver = {}) {
   }, {
     optiroute_technicians_v1: TECHS,
     optiroute_base_v1: { coords: P.milano, address: 'Piazza Duomo, Milano' },
-    optiroute_appointments_v1: seedAppointments(),
+    optiroute_appointments_v1: appointments || seedAppointments(),
     optiroute_settings_v1: settings(settingsOver),
   });
   await page.goto(ORIGIN);
@@ -331,6 +331,20 @@ async function tour(browser, viewport) {
   await dialog(page).getByLabel('Categoria / Problematica').selectOption('works_pending');
   await dialog(page).getByLabel('Data prevista fine lavori').fill('2026-12-01');
   await dialog(page).getByLabel('Note').fill('Cantiere in corso: richiamare a fine lavori.');
+  // referente da contattare al posto dell'intestatario: due campi affiancati
+  // (a 390 px uno sotto l'altro), tutti dentro la finestra
+  const refName = dialog(page).getByLabel('Da contattare (se non è l\'intestatario)');
+  const refRole = dialog(page).getByLabel('Ruolo', { exact: true });
+  assert.equal(await refName.inputValue(), '');
+  await refName.fill('Luca Bianchi');
+  await refRole.fill('agente immobiliare');
+  const nameBox = await refName.boundingBox();
+  const roleBox = await refRole.boundingBox();
+  for (const b of [nameBox, roleBox]) assert.ok(b.x >= dlgBox.x && b.x + b.width <= dlgBox.x + dlgBox.width + 0.5, 'campo del referente dentro la finestra');
+  if (viewport.width >= 1000) assert.ok(Math.abs(nameBox.y - roleBox.y) < 2 && roleBox.x > nameBox.x, 'nome e ruolo affiancati');
+  else assert.ok(roleBox.y > nameBox.y + nameBox.height, 'nome e ruolo uno sotto l\'altro');
+  assert.ok(await dialog(page).evaluate(d => { const f = d.querySelector('form'); return !f || f.scrollWidth <= f.clientWidth + 1; }), 'nessuno scorrimento orizzontale');
+  await refName.scrollIntoViewIfNeeded();
   await shot(page, 'pratica-modifica');
   await page.getByRole('button', { name: 'Salva Modifiche' }).click();
   await dialog(page).waitFor({ state: 'detached' });
@@ -340,7 +354,10 @@ async function tour(browser, viewport) {
   assert.equal(g4.issueType, 'works_pending');
   assert.equal(g4.followUpDate, '2026-12-01');
   assert.equal(g4.date, undefined);
+  assert.equal(g4.contactPerson, 'Luca Bianchi — agente immobiliare');
+  assert.equal(g4.referredBy, 'Cliente Delta');
   ok('pratica: modifica -> problematica "lavori da ultimare" con data di rientro');
+  ok('pratica: referente scritto a mano nella finestra (nome e ruolo, per conto dell\'intestatario)', g4.contactPerson);
 
   // ===== 6. Smistamento (menu Pianifica) =====
   await pianifica(page, /Smista pratiche per zona/);
@@ -515,6 +532,127 @@ async function tour(browser, viewport) {
   await intro.page.getByText('Attivare il pilota automatico?').waitFor({ state: 'detached' });
   ok('pilota: finestra di prima attivazione apribile e richiudibile');
   await intro.context.close();
+
+  // ===== 11. Calendario dei giorni e colore per giorno =====
+  await calendario(browser, viewport, ok, shot);
+}
+
+// Giri noti: oggi (mer 11/11) 3 confermate (2 di Tecnico Uno, 1 di Tecnica Due),
+// gio 12/11 2 confermate + 1 proposta (Tecnica Due), ven 13/11 le 4 proposte di sempre
+const TODAY = '2026-11-11';
+const D12 = '2026-11-12';
+const confirmedStop = (id, title, date, start, coords, techId, seqOrder) => ({
+  id, title, address: `Via Giro ${id}, Milano`, coords, status: 'confirmed', date, startTime: start,
+  endTime: `${start.slice(0, 3)}20`, technicianId: techId, province: 'MI', comune: 'Milano', sequenceOrder: seqOrder,
+});
+const calendarSeed = () => [
+  ...seedAppointments(),
+  confirmedStop('c1', 'Giro Oggi Uno', TODAY, '09:00', P.navigli, 'tech-1', 1),
+  confirmedStop('c2', 'Giro Oggi Due', TODAY, '10:00', P.cityLife, 'tech-1', 2),
+  confirmedStop('c3', 'Giro Oggi Tre', TODAY, '09:30', P.sesto, 'tech-2', 1),
+  confirmedStop('c4', 'Giro Domani Uno', D12, '09:00', P.portaVenezia, 'tech-1', 1),
+  confirmedStop('c5', 'Giro Domani Due', D12, '10:00', P.navigli, 'tech-1', 2),
+  { ...confirmedStop('c6', 'Proposta Domani', D12, '11:00', P.pavia, 'tech-2', 1), status: 'proposed' },
+];
+
+async function calendario(browser, viewport, ok, shot) {
+  const mobile = viewport.width < 768;
+  const { context, page, net } = await newPage(browser, viewport, {}, calendarSeed());
+  const counts = async date => {
+    const cell = page.getByTestId(`calendar-day-${date}`);
+    const conf = cell.locator('[data-kind="confirmed"]');
+    const prop = cell.locator('[data-kind="proposed"]');
+    return {
+      confirmed: (await conf.count()) ? (await conf.innerText()).trim() : '',
+      proposed: (await prop.count()) ? (await prop.innerText()).trim() : '',
+    };
+  };
+  await goSection(page, 'agenda');
+  await page.getByTestId('calendar-open').click();
+  await page.getByTestId('calendar').waitFor();
+  assert.match(await page.getByTestId('calendar-month').innerText(), /Novembre 2026/);
+  assert.deepEqual(await counts(TODAY), { confirmed: '3', proposed: '' });
+  assert.deepEqual(await counts(D12), { confirmed: '2', proposed: '+1' });
+  assert.deepEqual(await counts(D), { confirmed: '', proposed: '+4' });
+  assert.deepEqual(await counts('2026-11-14'), { confirmed: '', proposed: '' });
+  assert.equal(await page.getByTestId(`calendar-day-${TODAY}`).getAttribute('aria-pressed'), 'true');
+  await shot(page, 'calendario');
+  ok('calendario: numeri per giorno (confermate piene, proposte "+N")', 'oggi 3 · 12/11 2 +1 · 13/11 +4');
+
+  // tastiera: le frecce spostano il fuoco, Esc chiude e torna al bottone
+  await page.getByTestId(`calendar-day-${TODAY}`).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-date')), D12);
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-date')), '2026-11-19');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('calendar').waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-testid')), 'calendar-open');
+  ok('calendario: frecce fra i giorni, Esc chiude');
+
+  // filtro del tecnico: i numeri seguono il tecnico scelto
+  await page.getByTestId('tech-filter').click();
+  await page.getByRole('menuitem', { name: /Tecnica Due/ }).click();
+  await page.getByTestId('calendar-open').click();
+  assert.deepEqual(await counts(TODAY), { confirmed: '1', proposed: '' });
+  assert.deepEqual(await counts(D12), { confirmed: '', proposed: '+1' });
+  assert.deepEqual(await counts(D), { confirmed: '', proposed: '' });
+  await page.keyboard.press('Escape');
+  await page.getByTestId('tech-filter').click();
+  await page.getByRole('menuitem', { name: /Tutti i tecnici/ }).click();
+  ok('calendario: i numeri rispettano il filtro del tecnico');
+
+  // un clic: un giorno solo (il calendario si chiude)
+  await page.getByTestId('calendar-open').click();
+  await page.getByTestId(`calendar-day-${D12}`).click();
+  await page.getByTestId('calendar').waitFor({ state: 'detached' });
+  await page.getByText('Giro Domani Uno').first().waitFor();
+  assert.equal(await page.getByText('Giro Oggi Uno').count(), 0);
+  ok('calendario: un clic sceglie un giorno, l\'agenda lo segue');
+
+  // "Più giorni": oggi e domani insieme
+  await page.getByTestId('calendar-open').click();
+  await page.getByTestId('calendar-multi').click();
+  assert.equal(await page.getByTestId('calendar-multi').getAttribute('aria-checked'), 'true');
+  await page.getByTestId(`calendar-day-${TODAY}`).click();
+  const c11 = await page.getByTestId(`calendar-day-${TODAY}`).getAttribute('data-color');
+  const c12 = await page.getByTestId(`calendar-day-${D12}`).getAttribute('data-color');
+  assert.ok(c11 && c12 && c11 !== c12, `due giorni attivi con colori diversi (${c11} / ${c12})`);
+  await shot(page, 'calendario-piu-giorni');
+  await page.getByTestId('calendar-done').click();
+  await page.getByTestId('calendar').waitFor({ state: 'detached' });
+  assert.match(await page.getByTestId('calendar-open').innerText(), /2 giorni/);
+  // Agenda raggruppata per giorno, intestazioni col colore del giorno
+  const groups = page.locator('[data-testid="agenda-day"]');
+  assert.equal(await groups.count(), 2);
+  assert.deepEqual(await groups.evaluateAll(els => els.map(e => [e.dataset.day, e.dataset.color])), [[TODAY, c11], [D12, c12]]);
+  ok('più giorni: Agenda raggruppata per giorno, col colore del giorno', `${c11} · ${c12}`);
+
+  // Mappa: segnaposto e legenda col colore del giorno
+  if (mobile) await page.getByTestId('show-map').click();
+  const legend = page.getByTestId('map-day-legend');
+  await legend.waitFor();
+  const legendColors = await legend.locator('li').evaluateAll(els => els.map(e => [e.dataset.testid, e.dataset.color]));
+  assert.deepEqual(legendColors, [[`map-day-legend-${TODAY}`, c11], [`map-day-legend-${D12}`, c12]]);
+  await page.waitForFunction(() => document.querySelectorAll('[data-route-marker]').length === 5);
+  const markers = await page.$$eval('[data-route-marker]', els => els.map(e => `${e.dataset.day}|${e.dataset.color}`));
+  assert.deepEqual([...new Set(markers)].sort(), [`${TODAY}|${c11}`, `${D12}|${c12}`]);
+  // linee dei giri: una per (tecnico, giorno), col colore del giorno
+  await page.waitForFunction(() => document.querySelectorAll('path.leaflet-interactive').length === 3, null, { timeout: 20000 });
+  const strokes = await page.$$eval('path.leaflet-interactive', els => els.map(e => e.getAttribute('stroke')));
+  assert.deepEqual([...new Set(strokes)].sort(), [c11, c12].sort());
+  await shot(page, 'calendario-mappa-due-giorni');
+  ok('più giorni: sulla mappa due colori (segnaposto e legenda)', `${markers.length} segnaposto`);
+  if (mobile) await page.getByTestId('hide-map').click();
+
+  // "Solo oggi": di nuovo un giorno solo, colori dei tecnici
+  await page.getByTestId('active-days-reset').click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="agenda-day"]').length === 0);
+  assert.equal(await page.getByTestId('map-day-legend').count(), 0);
+  assert.doesNotMatch(await page.getByTestId('calendar-open').innerText(), /giorni/);
+  ok('"Solo oggi" riporta a un giorno solo');
+  await context.close();
+  if (net.pageErrors) throw new Error(`${net.pageErrors} errori JavaScript nella pagina`);
 }
 
 (async () => {

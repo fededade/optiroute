@@ -204,7 +204,14 @@ ogni pezzo risponde.
    si presenta con `{{motivo_chiamata}}` ("Sono {nome} di {società}, per conto di
    {mandante}, per la perizia sull'immobile di ...") e propone l'appuntamento con
    `{{proposta}}`. Se la persona non è quella cercata, l'agente spiega prima chi è e
-   perché chiama e solo dopo chiede il contatto giusto. Quando non c'è un nome vero
+   perché chiama e solo dopo chiede il contatto giusto. Se, dopo aver confermato, la
+   persona chiede di cosa si tratta, l'agente usa `{{spiegazione_motivo}}` ("La chiamata
+   è relativa alla richiesta di mutuo effettuata per l'immobile di Via ... a ...: per
+   procedere con la lavorazione della perizia è necessario effettuare il sopralluogo
+   interno presso l'immobile"); il mutuo non viene mai citato a chi non ha confermato di
+   essere la persona cercata. Solo se glielo chiedono spiega come si svolge il sopralluogo
+   con `{{info_sopralluogo}}` (rilievi fotografici e metrici con misure a campione, circa
+   15 minuti per un appartamento e 25 per una villa). Quando non c'è un nome vero
    (pratica senza intestatario, il cui titolo è l'indirizzo, o referente indicato senza
    nome) l'apertura è direttamente la presentazione breve seguita da "Parlo con
    l'intestatario della pratica?". I nomi tutti in maiuscolo ("FERRO MATTEO") vengono

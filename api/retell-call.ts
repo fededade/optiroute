@@ -315,6 +315,18 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
     `Sono ${AGENT_NAME} di ${COMPANY_NAME}, per conto di ${MANDANTE}, ` +
     `per la perizia sull'immobile ${luogoImmobile}.`;
 
+  // SPIEGAZIONE del motivo, per chi chiede "di cosa si tratta?" DOPO aver
+  // confermato di essere la persona cercata (cita il mutuo: mai a terzi)
+  const immobileViaComune = shortAddress && comune ? `${shortAddress} a ${comune}` : luogoBreve;
+  const spiegazioneMotivo =
+    `La chiamata è relativa alla richiesta di mutuo effettuata per l'immobile di ${immobileViaComune}: ` +
+    `per procedere con la lavorazione della perizia è necessario effettuare il sopralluogo interno presso l'immobile.`;
+
+  // Come si svolge il sopralluogo: da dire SOLO se lo chiedono
+  const infoSopralluogo =
+    `Il sopralluogo si svolge con rilievi fotografici e metrici, con misure a campione. ` +
+    `Dura circa 15 minuti se si tratta di un appartamento, circa 25 minuti se si tratta di una villa.`;
+
   // APERTURA: prima si verifica la persona chiamandola per nome (chi si sente
   // chiamare per nome non riaggancia pensando a un venditore), POI ci si
   // presenta. Senza un nome vero non c'è niente da verificare: presentazione breve.
@@ -371,6 +383,8 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
     ``,
     `   Se PRIMA di confermare chiede "chi parla?" o "per cosa?" → rispondi presentandoti: "${motivoChiamata}", poi chiedi di nuovo se parli con ${interlocutore || chiCerchiamo}.`,
     `   Se NON è la persona cercata → ${interlocutore ? `PRIMA presentati e spiega perché chiami ("${motivoChiamata}"), SOLO DOPO` : 'senza ripetere la presentazione,'} chiedi se può passarti ${interlocutore || chiCerchiamo} oppure chi è la persona giusta da contattare per il sopralluogo. NON chiedere nomi o numeri prima di aver spiegato chi sei e perché chiami.`,
+    `   Se DOPO aver confermato chi è chiede "di cosa si tratta?" o dice di non aver capito → NON chiedere di nuovo con chi parli (lo sai già): spiega con questa frase "${spiegazioneMotivo}" e poi riprendi la proposta.`,
+    `   Il MUTUO citalo SOLO a chi ha confermato di essere ${interlocutore || chiCerchiamo}: a chiunque altro di' solo chi sei e che chiami per la perizia sull'immobile.`,
     ``,
     `3. GESTIONE DELLA RISPOSTA:`,
     `- ACCETTA giorno e orario → ripeti chiaramente data e ora, ringrazia e saluta.`,
@@ -378,6 +392,10 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
     ...gestioneSpostamento,
     `- RIFIUTA / la perizia non serve più → prendi atto cortesemente e chiudi.`,
     `- NON è lui la persona da contattare (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → dopo aver spiegato chi sei e perché chiami, fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
+    ``,
+    `## DOMANDE SUL SOPRALLUOGO (rispondi SOLO se te lo chiedono, con parole tue e in breve):`,
+    `- Come si svolge / cosa fa il perito / quanto dura → "${infoSopralluogo}"`,
+    `- Se dalla conversazione sai che è un appartamento o una villa, di' solo la durata che corrisponde; altrimenti dille tutte e due.`,
     ``,
     ...buildAlternativesSection(alternatives),
     `## AGENDA DEL GIORNO (solo per tua consultazione — NON elencarla al cliente, non citare altri clienti):`,
@@ -416,6 +434,8 @@ export const buildCallData = (input: CallScriptInput): { callScript: string; dyn
     mandante: MANDANTE,
     presentazione: presentazione,
     motivo_chiamata: motivoChiamata,
+    spiegazione_motivo: spiegazioneMotivo,
+    info_sopralluogo: infoSopralluogo,
     proposta: proposta,
     agenda_giorno: daySchedule || '',
     immobile: luogoBreve,

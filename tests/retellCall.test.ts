@@ -171,6 +171,30 @@ describe('buildCallData', () => {
     expect(dynamicVariables.presentazione).not.toContain('parlo con Viale Monza');
   });
 
+  it('"di cosa si tratta?" dopo la conferma: spiega il mutuo e il sopralluogo interno, senza richiedere chi è', () => {
+    const { callScript, dynamicVariables } = buildCallData(BASE);
+    expect(dynamicVariables.spiegazione_motivo).toBe(
+      'La chiamata è relativa alla richiesta di mutuo effettuata per l\'immobile di Via Roma 10 a Milano: ' +
+      'per procedere con la lavorazione della perizia è necessario effettuare il sopralluogo interno presso l\'immobile.',
+    );
+    expect(callScript).toContain('Se DOPO aver confermato chi è chiede "di cosa si tratta?"');
+    expect(callScript).toContain('NON chiedere di nuovo con chi parli');
+    expect(callScript).toContain(`"${dynamicVariables.spiegazione_motivo}"`);
+    // il mutuo solo a chi ha confermato
+    expect(callScript).toContain('Il MUTUO citalo SOLO a chi ha confermato di essere Mario Rossi');
+  });
+
+  it('domande sul sopralluogo: rilievi e durata per appartamento e villa, solo se chiesto', () => {
+    const { callScript, dynamicVariables } = buildCallData(BASE);
+    expect(dynamicVariables.info_sopralluogo).toContain('rilievi fotografici e metrici, con misure a campione');
+    expect(dynamicVariables.info_sopralluogo).toContain('circa 15 minuti se si tratta di un appartamento');
+    expect(dynamicVariables.info_sopralluogo).toContain('circa 25 minuti se si tratta di una villa');
+    expect(callScript).toContain('## DOMANDE SUL SOPRALLUOGO (rispondi SOLO se te lo chiedono');
+    // senza via/comune separati si usa il luogo breve
+    expect(buildCallData({ ...BASE, shortAddress: '', comune: '', address: 'Via Po 3, Torino' })
+      .dynamicVariables.spiegazione_motivo).toContain('per l\'immobile di Via Po 3');
+  });
+
   it('dopo "chi parla?" la presentazione non si ripete alla conferma', () => {
     const { callScript } = buildCallData(BASE);
     expect(callScript).toContain('se ti sei GIÀ presentata in questa chiamata');

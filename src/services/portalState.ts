@@ -306,6 +306,11 @@ export const suspensionNoteLine = (nota: string | undefined): string => {
 // Riga scritta da noi (anche nelle forme di prima, es. "(nessuna nota).")
 const isSuspensionLine = (line: string): boolean => /^Sospesa sul portale(?::\s| \()/.test(line.trim());
 
+// Al posto dello stato dato quando della sospensione è stata scritta solo la
+// riga, perché la pratica era in uno stato scelto dall'operatore: non
+// coincide mai con uno stato vero, quindi la pratica non risulta mai "intatta"
+export const SUSPENSION_LINE_ONLY = '*';
+
 // Stato che la sospensione ha dato alla pratica, in forma compatta
 // ("issue|callback|2026-11-20", "pending||2026-11-25")
 export const suspensionState = (a: Pick<Appointment, 'status' | 'issueType' | 'followUpDate'>): string =>
@@ -314,7 +319,18 @@ export const suspensionState = (a: Pick<Appointment, 'status' | 'issueType' | 'f
 // La pratica è ancora ESATTAMENTE nello stato che le aveva dato la
 // sospensione: nessuno l'ha toccata
 export const suspensionUntouched = (a: Appointment): boolean =>
-  !!a.portalSuspensionState && suspensionState(a) === a.portalSuspensionState;
+  !!a.portalSuspensionState && a.portalSuspensionState !== SUSPENSION_LINE_ONLY && suspensionState(a) === a.portalSuspensionState;
+
+// Mai classificata: nessuno stato dato (nemmeno il segnaposto) e pratica "da
+// richiamare" senza data. Sono le pratiche sospese dalla versione precedente,
+// che non salvava lo stato dato, e quelle passate da una pagina rimasta
+// aperta con la versione precedente, che scrive la riga senza classificare
+// (anche con l'impronta già uguale alla nota). Un "da richiamare" generico
+// non contiene una scelta da proteggere: la nota del portale è più precisa.
+// Vale solo finché la pratica resta sospesa: per riportarla in attesa serve
+// lo stato dato.
+export const suspensionNeverClassified = (a: Appointment): boolean =>
+  a.portalSuspensionState === undefined && suspensionState(a) === 'issue|callback|';
 
 // Stato della pratica (in attesa o proposta) secondo la nota
 export const suspensionChanges = (cls: SuspensionClass): Partial<Appointment> => {
@@ -369,13 +385,17 @@ const withoutSuspension = (a: Appointment): Appointment => {
 // "sospesa" (pratiche appena importate comprese: sono in attesa).
 //  - in attesa o proposte, oppure ancora ESATTAMENTE nello stato che le aveva
 //    dato la sospensione (nessuno l'ha toccata: es. prima la nota vuota, poi
-//    quella vera): stato dalla nota (proposta: esce dal giro; chiamata in
-//    coda tolta) + riga nelle note + impronta + stato dato (portalSuspensionState);
-//  - cambiate dall'operatore (problematiche, stand-by, annullate): solo riga
-//    e impronta;
+//    quella vera), oppure mai classificate e "da richiamare" senza data
+//    (vedi suspensionNeverClassified): stato dalla nota (proposta: esce dal
+//    giro; chiamata in coda tolta) + riga nelle note + impronta + stato dato
+//    (portalSuspensionState);
+//  - in uno stato scelto dall'operatore (altre problematiche, richiamo con
+//    la data, stand-by, annullate) o cambiate dopo: solo riga e impronta,
+//    con il segnaposto al posto dello stato dato;
 //  - confermate e con una chiamata in corso: mai toccate.
 // La riga non si accumula: quella scritta prima viene sostituita.
-// Stessa impronta = niente (le scelte successive dell'operatore restano);
+// Stessa impronta = niente (le scelte successive dell'operatore restano),
+// salvo le mai classificate, che si classificano una volta;
 // nota cambiata sul portale = si riapplica. Pratica nello snapshot ma non più
 // sospesa: se è ancora nello stato che le avevamo dato torna in attesa (senza
 // la data e senza la nostra riga, in `restored`); altrimenti si tolgono solo
@@ -421,14 +441,15 @@ export const applyPortalSuspensions = (
 
     const nota = p.sospensione?.nota || '';
     const fingerprint = suspensionFingerprint(nota);
-    if (a.portalSuspension === fingerprint) continue;
+    const never = suspensionNeverClassified(a);
+    if (a.portalSuspension === fingerprint && !never) continue;
     if (a.status === 'confirmed') continue;
     if (isCallInFlight(a, opts.now)) continue;
 
     const notes = withLine(a.notes, suspensionNoteLine(nota));
     const cls = classifySuspension(nota, today);
     const change = { id: a.id, codice: p.codice, kind: cls.kind, ...(cls.date ? { date: cls.date } : {}) };
-    if (a.status === 'pending' || a.status === 'proposed' || suspensionUntouched(a)) {
+    if (a.status === 'pending' || a.status === 'proposed' || suspensionUntouched(a) || never) {
       // Come quando la pratica esce dal giro: slot liberato, giro ricalcolato,
       // coda delle chiamate svuotata
       const ctx = a.date ? opts.dayBase?.(a.technicianId, a.date) : undefined;
@@ -437,8 +458,9 @@ export const applyPortalSuspensions = (
       list = removeFromRoute(list, a.id, { ...changes, notes, portalSuspension: fingerprint, portalSuspensionState: state }, ctx);
       applied.push({ ...change, statusChanged: true });
     } else {
-      // Cambiata dall'operatore: solo riga e impronta (nessuno stato dato)
-      list = list.map(x => (x.id === a.id ? { ...withoutSuspension(x), notes, portalSuspension: fingerprint } : x));
+      // Stato scelto dall'operatore: solo riga e impronta; il segnaposto dice
+      // che la sospensione è stata vista e la pratica non va riclassificata
+      list = list.map(x => (x.id === a.id ? { ...x, notes, portalSuspension: fingerprint, portalSuspensionState: SUSPENSION_LINE_ONLY } : x));
       applied.push({ ...change, statusChanged: false });
     }
   }

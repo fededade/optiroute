@@ -58,7 +58,7 @@ except ImportError:
 import prelios  # noqa: E402
 import stato_portale as sp  # noqa: E402
 import struttura_elenco as se  # noqa: E402
-from bridge_cache import BridgeCache  # noqa: E402
+from bridge_cache import BridgeCache, VERSIONE_LETTURA_SOSPENSIONE  # noqa: E402
 from bridge_server import BridgeState  # noqa: E402
 from excel_pratiche import Pratica, load_pratiche, parse_grid_rows, parse_rows  # noqa: E402
 from portals import PortalAdapter, PreliosAdapter  # noqa: E402
@@ -458,6 +458,30 @@ def test_riletture_nota() -> None:
     p = _sospese(20)[15]
     cache.registra_sospensione("prelios", p, "", False, adesso=T0)
     assert cache.sospensioni_da_rileggere("prelios", [p], adesso=T0 + timedelta(hours=2)) == []
+    # ...ma se a fallire è stato un bridge PRECEDENTE (che leggeva la nota in
+    # un altro modo, o non segnava la versione) si ritenta subito: dopo un
+    # aggiornamento le note arrivano al primo giro, non dopo 24 ore
+    sosp = cache.data["pratiche"][cache.chiave("prelios", p.codice)]["sospensione"]
+    assert sosp["versione"] == VERSIONE_LETTURA_SOSPENSIONE and sosp["letta"] is False
+    for vecchia in (None, 1, "1", "x", VERSIONE_LETTURA_SOSPENSIONE - 1):
+        if vecchia is None:
+            sosp.pop("versione", None)
+        else:
+            sosp["versione"] = vecchia
+        assert cache.sospensioni_da_rileggere("prelios", [p], adesso=T0 + timedelta(minutes=5)) == [p], vecchia
+    # e passano davanti a quelle scadute, insieme alle mai lette
+    lista = cache.sospensioni_da_rileggere("prelios", pr + [p], adesso=T0 + timedelta(hours=25))
+    assert lista[0].codice == p.codice and len(lista) == 10, [x.codice for x in lista]
+    # riletta dal bridge di adesso (anche se fallisce ancora): si torna alle 24 ore
+    cache.registra_sospensione("prelios", p, "", False, adesso=T0 + timedelta(minutes=6))
+    assert cache.sospensioni_da_rileggere("prelios", [p], adesso=T0 + timedelta(hours=2)) == []
+    # una nota LETTA da un bridge precedente resta valida fino alle 24 ore
+    q = pr[5]
+    letta = cache.data["pratiche"][cache.chiave("prelios", q.codice)]["sospensione"]
+    assert letta["letta"] is True and letta["nota"] == "nota finta"
+    letta.pop("versione")
+    assert cache.sospensioni_da_rileggere("prelios", [q], adesso=T0 + timedelta(hours=2)) == []
+    assert cache.sospensioni_da_rileggere("prelios", [q], adesso=T0 + timedelta(hours=25)) == [q]
     # le non sospese non si rileggono mai
     assert cache.sospensioni_da_rileggere("prelios", parse_grid_rows(
         [HEADER, riga(0)], oggi=OGGI), adesso=T0) == []
@@ -594,6 +618,34 @@ def test_servizio_riletture_dopo_telefoni() -> None:
     _ciclo(s2)
     assert len(a2.aperte) == 1 and len(a2.riletture) == 2
     print("OK test_servizio_riletture_dopo_telefoni")
+
+
+def test_servizio_dopo_aggiornamento() -> None:
+    # Cache lasciata dal bridge PRECEDENTE: telefoni già letti e, per ogni
+    # sospesa, un tentativo di lettura della nota FALLITO da poco (record
+    # senza versione). Il bridge aggiornato le rilegge al PRIMO ciclo, senza
+    # aspettare le 24 ore del tentativo fallito.
+    righe = [HEADER] + [riga(i, Sospensione="10/11/2026") for i in range(3)]
+    a = AdapterStato(righe, note={"700100": "chiamare dopo il 19"},
+                     non_raggiunte={"700102"})
+    s = _servizio(a)
+    for p in parse_grid_rows(righe, oggi=OGGI):
+        s.cache.registra("prelios", p, "+390255500001", "OK")
+        s.cache.registra_sospensione("prelios", p, "", False)
+        s.cache.data["pratiche"][s.cache.chiave("prelios", p.codice)]["sospensione"].pop("versione")
+    esito, out = _ciclo(s)
+    assert esito == "ok", out
+    assert a.aperte == [] and sorted(a.riletture) == ["700100", "700101", "700102"], \
+        (a.aperte, a.riletture)
+    assert "note di sospensione da rileggere: 3" in out, out
+    snap = {r["codice"]: r for r in s.state.snapshot()["pratiche"]}
+    assert snap["700100"]["sospensione"]["nota"] == "chiamare dopo il 19"
+    # Ciclo dopo: quelle lette restano lette; quella che il bridge di ADESSO
+    # non ha raggiunto non si riapre a ogni ciclo (si riprova dopo 24 ore)
+    a.riletture.clear()
+    esito, out = _ciclo(s)
+    assert esito == "ok" and a.riletture == [] and a.aperte == [], (a.riletture, a.aperte, out)
+    print("OK test_servizio_dopo_aggiornamento")
 
 
 def test_servizio_descrive_una_perizia() -> None:
@@ -1250,6 +1302,7 @@ def main() -> int:
     test_riletture_nota()
     test_servizio_non_apre_fissate()
     test_servizio_riletture_dopo_telefoni()
+    test_servizio_dopo_aggiornamento()
     test_servizio_descrive_una_perizia()
     test_adapter_prelios()
     test_nota_da_sospesi()

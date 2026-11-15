@@ -218,7 +218,10 @@ Regole dei cicli (cache `bridge_cache.json` nella cartella del bridge):
 - per le **sospese**, oltre al telefono si legge la nota di sospensione
   (pagina «Sospesi» della perizia). La nota si rilegge quando cambia la
   data di sospensione o dopo 24 ore, al massimo 10 riletture per ciclo
-  (prima i telefoni mancanti, poi le note);
+  (prima i telefoni mancanti, poi le note). Dopo un **aggiornamento del
+  bridge** che cambia il modo di leggere la nota, quelle che la versione
+  precedente non era riuscita a leggere si ritentano subito, al primo
+  giro, senza aspettare le 24 ore;
 - una perizia **sospesa** arriva a OptiRoute solo **dopo il primo
   tentativo di lettura della sua nota** (riuscito o no): così non compare
   prima "senza nota" e poi "con la nota". Quelle non ancora tentate (oltre

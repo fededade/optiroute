@@ -195,10 +195,20 @@ ogni pezzo risponde.
    - `RETELL_AGENT_ID` — (opzionale) per forzare un agente specifico
    - `RETELL_COMPANY_NAME` — nome della società che chiama (default "Effetre Properties")
    - `RETELL_AGENT_NAME` — nome dell'operatrice AI (default "Misi")
-   - `RETELL_MANDANTE` — mandante citato nella presentazione ufficiale (default
-     "Prelios - Banca Intesa"): l'apertura è sempre "sono {nome} di {società}, incaricata
-     per conto di {mandante} per la perizia relativa all'immobile di ..." — così la
-     presentazione è coerente in ogni chiamata
+   - `RETELL_MANDANTE` — mandante citato nella presentazione (default
+     "Prelios - Banca Intesa")
+
+   **Apertura della chiamata** (variabile `{{presentazione}}`, da usare come *Welcome
+   Message* dell'agente, "AI speaks first"): prima si verifica la persona chiamandola
+   per nome — "Buongiorno, parlo con Mario Rossi?" — e solo dopo la conferma l'agente
+   si presenta con `{{motivo_chiamata}}` ("Sono {nome} di {società}, per conto di
+   {mandante}, per la perizia sull'immobile di ...") e propone l'appuntamento con
+   `{{proposta}}`. Se la persona non è quella cercata, l'agente spiega prima chi è e
+   perché chiama e solo dopo chiede il contatto giusto. Quando non c'è un nome vero
+   (pratica senza intestatario, il cui titolo è l'indirizzo, o referente indicato senza
+   nome) l'apertura è direttamente la presentazione breve seguita da "Parlo con
+   l'intestatario della pratica?". I nomi tutti in maiuscolo ("FERRO MATTEO") vengono
+   pronunciati come "Ferro Matteo".
 
 I numeri italiani senza prefisso internazionale vengono normalizzati automaticamente a `+39`.
 

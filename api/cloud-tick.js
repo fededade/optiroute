@@ -133,6 +133,26 @@ var oraParlata = (hhmm) => {
   if (m === 30) return `${h} e mezza`;
   return `${h} e ${m}`;
 };
+var nomeParlato = (raw) => {
+  const name = (typeof raw === "string" ? raw : "").replace(/\s+/g, " ").trim();
+  if (!name || name !== name.toUpperCase()) return name;
+  return name.toLowerCase().replace(new RegExp("(^|[\\s'’-])(\\p{L})", "gu"), (_, sep, ch) => sep + ch.toUpperCase());
+};
+var REFERENTE_SENZA_NOME = "referente indicato dal cliente";
+var PAROLE_INDIRIZZO = /^(via|viale|v\.le|piazza|p\.za|piazzale|corso|c\.so|largo|strada|vicolo|contrada|localit[aà]|loc\.|frazione|fraz\.)\s/i;
+var nomeDaChiamare = (raw, luogo = {}) => {
+  const name = nomeParlato(
+    typeof raw === "string" ? raw.split(/\s+[—–]\s+/)[0].replace(/\s*\([^)]*\)\s*/g, " ") : ""
+  );
+  if (!name) return "";
+  const low = name.toLowerCase();
+  if (low === REFERENTE_SENZA_NOME) return "";
+  if (/\d/.test(name) || PAROLE_INDIRIZZO.test(name)) return "";
+  const norm = (v) => (typeof v === "string" ? v : "").split(",")[0].replace(/\s+/g, " ").trim().toLowerCase();
+  const indirizzi = [norm(luogo.shortAddress), norm(luogo.address)].filter(Boolean);
+  if (indirizzi.some((a) => low === a || low.startsWith(a) || a.startsWith(low))) return "";
+  return name;
+};
 var MAX_ALTERNATIVES = 3;
 var isHHMM = (v) => {
   if (typeof v !== "string") return false;
@@ -210,8 +230,10 @@ var buildCallData = (input) => {
   const isUrgent = urgent === true || urgent === "true";
   const luogoBreve = shortAddress || comune ? [shortAddress, comune].filter(Boolean).join(", ") : address ? cleanDisplayName(address) : "indirizzo da comunicare";
   const luogoImmobile = comune && shortAddress ? `di ${comune} in ${shortAddress}` : `in ${luogoBreve}`;
-  const interlocutore = isReferral ? contactPerson : clientName || "";
-  const presentazione = `Buongiorno, sono ${AGENT_NAME} di ${COMPANY_NAME}, società incaricata per conto di ${MANDANTE} per la perizia relativa all'immobile ${luogoImmobile}.` + (interlocutore ? ` Parlo con ${interlocutore}?` : ` Parlo con l'intestatario della pratica?`);
+  const interlocutore = nomeDaChiamare(isReferral ? contactPerson : clientName, { address, shortAddress, comune });
+  const chiCerchiamo = isReferral ? "la persona di riferimento per il sopralluogo" : "l'intestatario della pratica";
+  const motivoChiamata = `Sono ${AGENT_NAME} di ${COMPANY_NAME}, per conto di ${MANDANTE}, per la perizia sull'immobile ${luogoImmobile}.`;
+  const presentazione = interlocutore ? `Buongiorno, parlo con ${interlocutore}?` : `Buongiorno, s${motivoChiamata.slice(1)} Parlo con ${chiCerchiamo}?`;
   const proposta = dateSpoken && startTime ? `La chiamavo per proporle la data del sopralluogo del perito: avremmo disponibilità per ${dateSpoken} alle ${oraParlata(startTime)}. Può andarle bene?` : `La chiamavo per concordare la data del sopralluogo del perito: prendo nota delle sue disponibilità e verrà ricontattato con la proposta di giorno e orario.`;
   const gestioneSpostamento = hasAlternatives ? [
     `  * passa agli SLOT ALTERNATIVI (sezione qui sotto): offrili uno alla volta e, se ne accetta uno, fissalo.`,
@@ -229,20 +251,25 @@ var buildCallData = (input) => {
     ``,
     `## SEQUENZA DELLA CHIAMATA — rispetta questo ORDINE, senza anticipare domande:`,
     ``,
-    `1. APERTURA — appena rispondono, pronuncia ESATTAMENTE questa frase:`,
+    `1. APERTURA — appena rispondono, pronuncia ESATTAMENTE questa frase e poi ASPETTA la risposta:`,
     `"${presentazione}"`,
-    `   NON chiedere "con chi ho il piacere di parlare?" a freddo: prima ti presenti e spieghi chi sei e perché chiami, POI verifichi l'interlocutore.`,
+    interlocutore ? `   NON presentarti e NON dire perché chiami prima che l'interlocutore abbia risposto: la prima frase serve SOLO a verificare con chi parli.` : null,
     ``,
-    isReferral ? `2. CONTESTO REFERENTE — NON stai chiamando l'intestatario: stai chiamando ${contactPerson}, indicato da ${referredBy || "l'intestatario della pratica"} come persona di riferimento per il sopralluogo. Dopo l'apertura, spiega che l'appuntamento riguarda l'immobile dell'intestatario${clientName ? ` (${clientName})` : ""} e che sei stata indirizzata a lui/lei.` : null,
-    `${isReferral ? "3" : "2"}. PROPOSTA — quando l'interlocutore ha confermato di essere la persona giusta, PROPONI l'appuntamento. Non darlo MAI per già confermato: l'operatrice propone, il cliente conferma. Usa questa frase:`,
+    `2. PRESENTAZIONE E PROPOSTA — quando l'interlocutore conferma di essere la persona giusta, in UN'UNICA risposta:`,
+    interlocutore ? `   a) presentati e spiega perché chiami: "${motivoChiamata}" — ma se ti sei GIÀ presentata in questa chiamata (perché ha chiesto chi parla o per cosa), NON ripeterlo: passa direttamente al punto b).` : `   a) ti sei già presentata nell'apertura: NON ripetere la presentazione.`,
+    isReferral ? `      CONTESTO REFERENTE — NON stai chiamando l'intestatario: stai chiamando ${interlocutore || "la persona di riferimento"}, il cui numero ti è stato indicato da ${referredBy || "l'intestatario della pratica"} come riferimento per il sopralluogo. Spiega in breve che l'appuntamento riguarda l'immobile dell'intestatario${clientName ? ` (${nomeParlato(clientName)})` : ""} e che sei stata indirizzata a lui/lei.` : null,
+    `   b) PROPONI l'appuntamento con questa frase (non darlo MAI per già confermato: l'operatrice propone, il cliente conferma):`,
     `"${proposta}"`,
     ``,
-    `${isReferral ? "4" : "3"}. GESTIONE DELLA RISPOSTA:`,
+    `   Se PRIMA di confermare chiede "chi parla?" o "per cosa?" → rispondi presentandoti: "${motivoChiamata}", poi chiedi di nuovo se parli con ${interlocutore || chiCerchiamo}.`,
+    `   Se NON è la persona cercata → ${interlocutore ? `PRIMA presentati e spiega perché chiami ("${motivoChiamata}"), SOLO DOPO` : "senza ripetere la presentazione,"} chiedi se può passarti ${interlocutore || chiCerchiamo} oppure chi è la persona giusta da contattare per il sopralluogo. NON chiedere nomi o numeri prima di aver spiegato chi sei e perché chiami.`,
+    ``,
+    `3. GESTIONE DELLA RISPOSTA:`,
     `- ACCETTA giorno e orario → ripeti chiaramente data e ora, ringrazia e saluta.`,
     `- È TITUBANTE o chiede di spostare → l'obiettivo è CONSERVARE l'appuntamento proposto: fai UN SOLO tentativo, gentile ma deciso, es.: "Guardi, le dico la verità: ci verrebbe difficile riprogrammare, l'agenda è pressoché piena e spostare il sopralluogo potrebbe allungare i tempi della sua pratica. È sicuro di non riuscire a esserci? In alternativa può anche delegare qualcuno: un familiare, l'agente immobiliare, il geometra...". Se delega qualcuno, raccogli NOME, TELEFONO e RUOLO del delegato (e ripeti il numero per conferma). Se invece insiste per spostare, NON forzare oltre — accondiscendi con garbo e procedi:`,
     ...gestioneSpostamento,
     `- RIFIUTA / la perizia non serve più → prendi atto cortesemente e chiudi.`,
-    `- NON è lui la persona da contattare (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
+    `- NON è lui la persona da contattare (geometra di cantiere, agente immobiliare, familiare con le chiavi...) → dopo aver spiegato chi sei e perché chiami, fatti dare NOME, NUMERO DI TELEFONO e RUOLO della persona corretta; RIPETI il numero per conferma; comunica che quella persona verrà contattata a breve.`,
     ``,
     ...buildAlternativesSection(alternatives),
     `## AGENDA DEL GIORNO (solo per tua consultazione — NON elencarla al cliente, non citare altri clienti):`,
@@ -278,6 +305,7 @@ var buildCallData = (input) => {
     agent_name: AGENT_NAME,
     mandante: MANDANTE,
     presentazione,
+    motivo_chiamata: motivoChiamata,
     proposta,
     agenda_giorno: daySchedule || "",
     immobile: luogoBreve,
@@ -1623,7 +1651,9 @@ var reduceCallOutcome = (all, id, outcome, expectedCallId, ctx) => {
           list = replaceById(list, {
             ...base,
             phone: outcome.newContactPhone,
-            contactPerson: [outcome.newContactName, outcome.newContactRole].filter(Boolean).join(" — ") || "Referente indicato dal cliente",
+            // Senza nome resta il segnaposto in testa (anche con il ruolo):
+            // la chiamata al referente lo riconosce e non lo pronuncia
+            contactPerson: [outcome.newContactName || "Referente indicato dal cliente", outcome.newContactRole].filter(Boolean).join(" — "),
             referredBy: a.referredBy || a.title,
             callStatus: void 0,
             callId: void 0,

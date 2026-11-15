@@ -146,6 +146,12 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name), fullP
 const sidebar = page => page.locator('aside');
 
 const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+// Distanza in linea d'aria (km), come calculateDistance dell'app
+const km = (a, b) => {
+  const r = x => (x * Math.PI) / 180;
+  const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
 function overlaps(all) {
   const groups = {};
   for (const a of all) {
@@ -413,33 +419,67 @@ async function scenarioD(browser) {
     await page.getByRole('button', { name: 'Calcola proposta' }).click();
     await page.getByRole('button', { name: /Applica:/ }).click();
   };
+  const addPending = async newOnes => {
+    await page.evaluate(list => {
+      const s = JSON.parse(localStorage.getItem('optiroute_appointments_v1'));
+      localStorage.setItem('optiroute_appointments_v1', JSON.stringify([...s, ...list]));
+    }, newOnes);
+    await page.reload();
+    await page.waitForSelector('[data-testid="autopilot-bar"]');
+  };
+  const slotOf = a => `${a.date} ${a.startTime}-${a.endTime}`;
+  // Regola del rientro: in ogni giorno l'ultima tappa è la più vicina alla base
+  const expectReturnRule = all => {
+    for (const date of new Set(all.filter(a => a.date).map(a => a.date))) {
+      const day = all.filter(a => a.date === date && a.startTime).sort((x, y) => toMin(x.startTime) - toMin(y.startTime));
+      if (day.length < 2) continue;
+      const d = day.map(a => km(TECH.baseCoords, a.coords));
+      assert.ok(d[d.length - 1] <= Math.min(...d) + 1e-9, `${date}: l'ultima tappa (${day[day.length - 1].title}) non è la più vicina alla base`);
+    }
+  };
+
   await runDispatch();
   let all = await waitFor(async () => { const s = await state(page); return s.filter(a => a.status === 'proposed').length === 3 && s; }, '1° smistamento');
-  const first = Object.fromEntries(all.filter(a => a.status === 'proposed').map(a => [a.id, `${a.date} ${a.startTime}-${a.endTime}`]));
+  const first = Object.fromEntries(all.filter(a => a.status === 'proposed').map(a => [a.id, slotOf(a)]));
   log('1° smistamento', first);
-  // Nuove pratiche in attesa (stesso tecnico, stessa zona)
-  await page.evaluate(newOnes => {
-    const s = JSON.parse(localStorage.getItem('optiroute_appointments_v1'));
-    localStorage.setItem('optiroute_appointments_v1', JSON.stringify([...s, ...newOnes]));
-  }, [pend('q1', 'Seconda Uno', P.navigli), pend('q2', 'Seconda Due', P.cityLife), pend('q3', 'Seconda Tre', P.segrate)]);
-  await page.reload();
-  await page.waitForSelector('[data-testid="autopilot-bar"]');
+  expectReturnRule(all);
+  assert.ok(all.filter(a => a.status === 'proposed').every(a => a.autoSlot === `${a.date}|${a.startTime}|tech-1`), 'firma dello slot sulle proposte');
+
+  // Nuove pratiche in attesa (stesso tecnico, stessa zona, una più lontana).
+  // Le tre proposte sono ancora bozze (mai approvate né toccate): il giorno si
+  // ripianifica da capo e possono slittare, sempre senza sovrapposizioni e con
+  // l'ultima tappa più vicina alla base.
+  await addPending([pend('q1', 'Seconda Uno', P.navigli), pend('q2', 'Seconda Due', P.cityLife), pend('q3', 'Seconda Tre', P.segrate)]);
   await runDispatch();
   all = await waitFor(async () => { const s = await state(page); return s.filter(a => a.status === 'proposed').length === 6 && s; }, '2° smistamento');
-  const bad = overlaps(all);
+  let bad = overlaps(all);
   assert.deepEqual(bad, [], `sovrapposizioni: ${bad.join('; ')}`);
-  for (const [id, when] of Object.entries(first)) {
-    const a = all.find(x => x.id === id);
-    assert.equal(`${a.date} ${a.startTime}-${a.endTime}`, when, `orario di ${a.title} invariato`);
-  }
+  expectReturnRule(all);
+  const moved = Object.keys(first).filter(id => slotOf(all.find(x => x.id === id)) !== first[id]);
   const seq = all.filter(a => a.date === T).sort((x, y) => x.sequenceOrder - y.sequenceOrder).map(a => `${a.sequenceOrder}.${a.startTime} ${a.title}`);
-  log('Giro del 12/11 dopo il 2° smistamento:', seq);
+  log('Giro del 12/11 dopo il 2° smistamento:', seq, 'bozze risistemate:', moved);
+  assert.ok(all.every(a => a.status !== 'proposed' || a.autoSlot === `${a.date}|${a.startTime}|tech-1`), 'firma dello slot aggiornata');
+
+  // L'operatore conferma il giro: un nuovo smistamento non sposta più nessuna tappa
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('optiroute_appointments_v1'));
+    localStorage.setItem('optiroute_appointments_v1', JSON.stringify(s.map(a => (a.status === 'proposed' ? { ...a, status: 'confirmed' } : a))));
+  });
+  const confirmed = Object.fromEntries(all.filter(a => a.status === 'proposed').map(a => [a.id, slotOf(a)]));
+  await addPending([pend('q4', 'Terza Uno', P.portaVenezia)]);
+  await runDispatch();
+  all = await waitFor(async () => { const s = await state(page); return s.filter(a => a.status === 'proposed').length === 1 && s; }, '3° smistamento');
+  bad = overlaps(all);
+  assert.deepEqual(bad, [], `sovrapposizioni: ${bad.join('; ')}`);
+  for (const [id, when] of Object.entries(confirmed)) {
+    const a = all.find(x => x.id === id);
+    assert.equal(slotOf(a), when, `orario di ${a.title} (confermata) invariato`);
+  }
   await shot(page, 'd-smistamento-ripetuto.png');
-  results.push(`d) OK: secondo smistamento senza sovrapposizioni, orari delle 3 tappe esistenti invariati. Giro 12/11: ${seq.join(' | ')}`);
+  results.push(`d) OK: 2° smistamento su un giorno di bozze ripianificato senza sovrapposizioni e con l'ultima tappa più vicina alla base (risistemate: ${moved.length}); 3° smistamento: orari delle tappe confermate invariati. Giro 12/11: ${seq.join(' | ')}`);
   await context.close();
 }
 
-// ---------------------------------------------------------------------------
 async function scenarioE(browser) {
   const D = '2026-11-13';
   const seed = {

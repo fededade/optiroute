@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Appointment } from '../src/types';
 import { computeDispatch, type DispatchParams } from '../src/services/dispatchService';
 import { applyPatches, getDayRoute, isInRoute, toMin, travelMinutes } from '../src/services/slotService';
-import { calculateSchedule, nearestNeighborChain } from '../src/utils/geo';
+import { calculateSchedule, optimizeRoute } from '../src/utils/geo';
 import { P, appt, stop, tech } from './fixtures';
 
 const MON = '2026-11-16';
@@ -36,21 +36,21 @@ const expectNoOverlap = (all: Appointment[]) => {
 };
 
 describe('computeDispatch', () => {
-  it('giorno vuoto: catena del più vicino, orari tondi ai 5 minuti', async () => {
+  it('giorno vuoto: si parte dalla più lontana e si finisce sulla più vicina alla base, orari tondi ai 5 minuti', async () => {
     const pending = pendingBatch('p', ['sesto', 'assago', 'rho', 'navigli', 'segrate'], {});
     pending[3].urgent = true;
 
-    // Algoritmo del giorno vuoto, ricostruito: catena nearest-neighbor +
-    // calculateSchedule con gli inizi arrotondati per eccesso ai 5 minuti
+    // Algoritmo del giorno vuoto, ricostruito: le pratiche (qui entrano tutte)
+    // ordinate con optimizeRoute (dalla più lontana alla più vicina alla base)
+    // + calculateSchedule con gli inizi arrotondati per eccesso ai 5 minuti
     // (orari "tondi" da proporre al telefono)
-    const urgents = nearestNeighborChain(pending.filter(a => a.urgent), P.milano);
-    const normals = nearestNeighborChain(pending.filter(a => !a.urgent), urgents[urgents.length - 1].coords);
-    const expected = await calculateSchedule([...urgents, ...normals], P.milano, 8, 30, 18, 20, {
+    const expected = await calculateSchedule(optimizeRoute(pending, P.milano), P.milano, 8, 30, 18, 20, {
       useEstimates: true,
       startFromBase: true,
       maxEndTimeMinutes: 0,
       roundToMinutes: 5,
     });
+    expect(expected.overflow).toEqual([]);
 
     const res = await computeDispatch(pending, [T], null, params);
     const resWithOthers = await computeDispatch(pending, [T], null, params, undefined, [

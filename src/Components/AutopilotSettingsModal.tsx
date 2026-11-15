@@ -247,7 +247,7 @@ const AutopilotSettingsModal: React.FC<AutopilotSettingsModalProps> = ({
               <h3 className="section-title mb-1">Smistamento</h3>
               <p className="mb-3 text-[13px] text-ink-500">Le pratiche in attesa diventano giri proposti, da approvare prima delle chiamate.</p>
               <SettingGroup>
-                {check('autoDispatch', 'Smistamento automatico', 'Le pratiche in attesa con telefono vengono smistate da sole in giri proposti, senza toccare gli orari dei giri esistenti.')}
+                {check('autoDispatch', 'Smistamento automatico', 'Le pratiche in attesa con telefono vengono smistate da sole in giri proposti, con l\'ultima tappa più vicina alla base. Gli orari delle tappe approvate, chiamate o confermate non cambiano.')}
                 <SettingRow label="Orizzonte (giorni)" hint="Quanti giorni avanti pianificare." htmlFor="ap-horizon">
                   <input id="ap-horizon" type="number" min={1} max={60} value={nums.dispatchHorizonDays} onChange={e => setNums(n => ({ ...n, dispatchHorizonDays: e.target.value }))} className={numInput} />
                 </SettingRow>

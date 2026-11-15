@@ -30,8 +30,11 @@ Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con 
    `http://127.0.0.1:8765`. L'app le scarica ogni 5 minuti, le geocodifica e assegna il
    tecnico. L'import da Excel resta disponibile.
 2. **I giri si formano da soli.** Le pratiche in attesa con telefono vengono smistate in giri
-   proposti, inserite negli spazi liberi dei giri esistenti senza mai spostare l'orario di
-   una tappa già fissata. Le date che un cliente ha rifiutato non gli vengono riproposte.
+   proposti, con la **regola del rientro**: l'ultimo sopralluogo del giorno è il più vicino
+   alla base del tecnico (se finisce tardi, almeno il rientro è breve). Le proposte non ancora
+   approvate (bozze) possono essere risistemate quando arrivano pratiche nuove; l'orario di una
+   tappa approvata, chiamata o confermata non si sposta mai. Le date che un cliente ha
+   rifiutato non gli vengono riproposte.
 3. **L'operatore approva il giro**: un clic su "Approva e chiama" nella sezione Proposte (per giro o per tutti).
 4. **Il pilota chiama.** Dentro la fascia oraria impostata chiama i clienti uno alla volta.
    - Se il cliente **non può**, l'agente gli offre subito fino a 3 **slot alternativi reali**
@@ -167,7 +170,7 @@ ogni pezzo risponde.
   - Preconfigurati: *Omar Afifi* (province di Milano e Novara) e *Federica Sala* (provincia di Pavia, comuni attorno a Stradella/Broni/Varzi entro 15 km). Tutto modificabile dalla scheda.
   - Le pratiche nuove o importate vengono **assegnate automaticamente** al tecnico competente (per provincia da Excel/geocoding, o per raggio dalle zone); assegnazione modificabile a mano dal form di modifica.
   - Il filtro "Tutti i tecnici" nella barra in alto restringe elenchi e mappa a un tecnico; i colori di segnaposto e percorsi corrispondono al tecnico.
-- **Smistamento automatico ("Smista pratiche per zona")**: le pratiche in attesa vengono distribuite sui prossimi giorni per ogni tecnico, con **data e orario ipotizzati** (rispettando orari, indisponibilità e punto di partenza di ciascuno). Se un giorno ha già tappe, le nuove si inseriscono negli spazi liberi senza toccare gli orari esistenti. Le proposte compaiono nella sezione "Proposte": l'operatore conferma singolarmente o per giornata intera, oppure rifiuta.
+- **Smistamento automatico ("Smista pratiche per zona")**: le pratiche in attesa vengono distribuite sui prossimi giorni per ogni tecnico, con **data e orario ipotizzati** (rispettando orari, indisponibilità e punto di partenza di ciascuno). Ogni giorno segue la **regola del rientro**: l'ultimo sopralluogo è il più vicino alla base (in linea d'aria), così a fine giornata il rientro è breve. In un giorno nuovo si scelgono le pratiche per priorità (urgenti, rientrate, normali), aggiungendone una alla volta finché entrano tutte (chi non entra, per esempio un'urgente troppo lontana, non blocca le successive), e si parte dalla più lontana per finire sulla più vicina. Se il giorno ha solo **bozze** (proposte dello smistamento mai approvate, chiamate o cambiate a mano) e arriva almeno una pratica nuova che ci sta, il giorno si ripianifica da capo: le bozze possono cambiare orario e, se una pratica con priorità più alta toglie loro il posto, passano a un altro giorno o tornano in attesa. Se il giorno ha almeno una tappa approvata, chiamata o confermata, le nuove si inseriscono negli spazi liberi senza toccare gli orari esistenti, e in coda al giro entra solo una tappa più vicina alla base dell'ultima (o che permette comunque di rientrare entro la fine della giornata); la stessa regola vale per gli slot alternativi offerti in chiamata e per i rimpiazzi. Senza un punto di partenza (né del tecnico né generale) lo smistamento lavora come prima. Il riordino a mano e "Ottimizza" restano scelte dell'operatore. Le proposte compaiono nella sezione "Proposte": l'operatore conferma singolarmente o per giornata intera, oppure rifiuta.
 - **Tag "Urgente"** su ogni pratica (checkbox nel form, colonna `Urgente` in import): badge rosso in lista e mappa, priorità nello smistamento (pianificate per prime nei primi giorni utili) e **annuncio esplicito dell'urgenza nella chiamata AI**.
 - **Inserimento appuntamenti**
   - *Aggiunta rapida*: nella sezione "In attesa" digita un indirizzo e premi "Aggiungi" (opzionale pulizia AI con Gemini).
@@ -271,6 +274,59 @@ certi (segreteria, mancata risposta, numero non componibile) e per il resto most
 "❓ Esito da verificare" senza toccare lo stato; l'esito si può registrare a mano dalla
 finestra di chiamata ("Registra esito della telefonata").
 
+
+## Versione di prova
+
+Ogni ramo pubblicato su Vercel ha un'**anteprima** (ambiente *Preview*) con un archivio
+tutto suo, separato da quello vero. L'anteprima è una **versione di prova**: serve a
+provare telefonate vere dell'operatore AI senza toccare i dati veri e senza poter
+chiamare nessun numero che non sia stato autorizzato.
+
+**Quando è accesa**
+
+- Sulle anteprime di Vercel (`VERCEL_ENV=preview`), oppure fuori da Vercel con
+  `OPTIROUTE_TEST_MODE=1` (per esempio con `npm run dev:cloud`).
+- **Mai in produzione**: con `VERCEL_ENV=production` resta spenta anche se
+  `OPTIROUTE_TEST_MODE` è impostata per errore.
+
+**Come si riconosce**
+
+- In cima all'app c'è sempre la scritta «VERSIONE DI PROVA · dati finti, separati da
+  quelli veri · le telefonate partono solo verso i numeri ammessi» e il titolo della
+  scheda del browser comincia con «PROVA · ». Se non c'è nessun numero ammesso, la
+  scritta avvisa che le chiamate sono bloccate. Vale anche dentro il gestionale.
+- Il browser lo scopre all'avvio dal ping anonimo del cloud (`/api/cloud?op=ping`, campi
+  `testMode` e `testNumbersConfigured`; i numeri non vengono mai mostrati).
+
+**Variabili (Vercel → Settings → Environment Variables, ambiente Preview)**
+
+- `RETELL_TEST_NUMBERS` — i soli numeri che si possono chiamare in prova: uno o più,
+  separati da virgola, punto e virgola, spazi o a capo (es. `+39 333 1234567, +39 02 1234567`).
+  Si confrontano dopo la stessa normalizzazione dei numeri delle chiamate, quindi
+  `0039 333…`, `333 …` e `+39333…` sono lo stesso numero.
+- `OPTIROUTE_TEST_MODE` — `1` per accendere la versione di prova fuori da Vercel.
+
+**Cosa cambia rispetto alla versione vera**
+
+- **Telefonate**: partono solo verso i numeri di `RETELL_TEST_NUMBERS`, sia quelle
+  avviate dal browser sia quelle del pilota in cloud. Per ogni altro numero la chiamata
+  non parte (errore 403: «Versione di prova: questo numero non è fra quelli ammessi per
+  le prove.»); senza numeri ammessi non parte nessuna chiamata. Il testo della chiamata
+  è lo stesso della versione vera.
+- **Pratiche di prova**: dal pulsante «Pratiche di prova» della scritta si indica il
+  numero da chiamare (ricordato in questo browser) e si caricano 16 pratiche finte in
+  attesa (`prova-01`…`prova-16`, codici `900001`…`900016`, progetto `PROVA`), in due
+  gruppi da otto: Oltrepò pavese e Milano ovest con Novara. Ogni gruppo va a un tecnico
+  diverso: se nessun tecnico attivo è competente si aggiunge un «Tecnico di prova», a uno
+  senza base si imposta la base (Stradella o Magenta); il resto dei tecnici non si tocca.
+  Ogni caricamento toglie prima le pratiche di prova presenti, in qualunque stato: si
+  ricomincia da capo. «Togli le pratiche di prova» le elimina. Le pratiche hanno nomi di
+  fantasia e casi utili all'operatore AI (un'urgente, un referente, un nome tutto
+  maiuscolo, una senza intestatario, note pratiche, una visita da 40 minuti). Con il
+  cloud attivo si sincronizzano come ogni altra modifica.
+- **Pilota automatico**: chiama **tutti i giorni, domenica compresa**, negli orari
+  impostati (fuori dalla prova la domenica mai e il sabato solo se scelto). Vale nel
+  browser e nel motore in cloud; l'impostazione non si salva e non si sincronizza.
 
 ## Pratiche MISI/Prelios e gestionale
 

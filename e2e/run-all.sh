@@ -100,7 +100,7 @@ fi
 
 start_cloud() {
   echo "Avvio il server cloud di sviluppo su 127.0.0.1:$CLOUD_PORT (archivio in memoria, Retell finto)"
-  (cd "$REPO" && unset VERCEL_ENV RETELL_API_KEY && PORT="$CLOUD_PORT" CRON_SECRET="$CLOUD_KEY" FAKE_RETELL=1 \
+  (cd "$REPO" && unset VERCEL_ENV RETELL_API_KEY OPTIROUTE_TEST_MODE RETELL_TEST_NUMBERS && PORT="$CLOUD_PORT" CRON_SECRET="$CLOUD_KEY" FAKE_RETELL=1 \
     exec setsid node scripts/dev-cloud-server.mjs) > "$LOGS/cloud-server.log" 2>&1 &
   STARTED_PIDS+=("$!")
   wait_http "http://127.0.0.1:$CLOUD_PORT/api/cloud?op=ping" 30
@@ -108,7 +108,7 @@ start_cloud() {
 
 start_gestionale_cloud() {
   echo "Avvio il server cloud di sviluppo con il gestionale FINTO su 127.0.0.1:$GESTIONALE_CLOUD_PORT (pagina del gestionale: 127.0.0.1:$GESTIONALE_PARENT_PORT)"
-  (cd "$REPO" && unset VERCEL_ENV RETELL_API_KEY GESTIONALE_ORIGINS GESTIONALE_FIREBASE_PROJECTS && PORT="$GESTIONALE_CLOUD_PORT" CRON_SECRET="$GESTIONALE_KEY" FAKE_RETELL=1 \
+  (cd "$REPO" && unset VERCEL_ENV RETELL_API_KEY OPTIROUTE_TEST_MODE RETELL_TEST_NUMBERS GESTIONALE_ORIGINS GESTIONALE_FIREBASE_PROJECTS && PORT="$GESTIONALE_CLOUD_PORT" CRON_SECRET="$GESTIONALE_KEY" FAKE_RETELL=1 \
     exec setsid node scripts/dev-cloud-server.mjs --gestionale-test --gestionale-origin "http://127.0.0.1:$GESTIONALE_PARENT_PORT") > "$LOGS/gestionale-cloud-server.log" 2>&1 &
   STARTED_PIDS+=("$!")
   wait_http "http://127.0.0.1:$GESTIONALE_CLOUD_PORT/api/cloud?op=ping" 30

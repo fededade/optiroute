@@ -4,7 +4,7 @@ import {
   type PlanningFallback,
   type SlotOption,
   addDaysStr,
-  bestSlot,
+  bestSlotForReturn,
   dateAtMinutes,
   dayContextFor,
   durationOf,
@@ -18,7 +18,8 @@ import { parseFollowUpDate } from './callService';
 
 // Alternative REALI da offrire in chiamata: slot già verificati sul giro del
 // tecnico (senza spostare nessuna tappa), su date diverse, scelti in modo da
-// allungare il meno possibile i giri. L'agente AI le propone se il cliente
+// allungare il meno possibile i giri e rispettando la regola del rientro
+// (l'ultima tappa del giro resta la più vicina alla base). L'agente AI le propone se il cliente
 // rifiuta l'orario principale; all'esito lo slot scelto viene rivalidato.
 
 export interface AlternativeOptions {
@@ -93,7 +94,9 @@ export const computeAlternativeSlots = (
       .filter(o => o.start >= notBefore)
       .filter(o => !(date === appt.date && currentStart !== null && Math.abs(o.start - currentStart) < SAME_DAY_MIN_GAP));
 
-    const best = bestSlot(options);
+    // Regola del rientro: in coda al giro solo una tappa più vicina alla base
+    // dell'ultima (o se il tecnico rientra comunque entro fine giornata)
+    const best = bestSlotForReturn(options, route, ctx, appt.coords);
     if (!best) continue;
 
     const score =
@@ -117,6 +120,8 @@ export const computeAlternativeSlots = (
 
 // Rivalida, al momento dell'esito, che l'alternativa offerta sia ancora
 // inseribile nel giro (esclusa la pratica stessa). null se non più libera.
+// La regola del rientro qui NON si applica: uno slot già offerto al cliente
+// resta valido.
 export const resolveAlternative = (
   appt: Appointment,
   label: AlternativeLabel,

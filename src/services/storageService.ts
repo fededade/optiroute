@@ -1,5 +1,5 @@
 import type { Appointment, Coordinates } from '../types';
-import { CALL_OUTCOME_MAX_AGE_MS, DEFAULT_AUTOPILOT_SETTINGS, type AutopilotSettings } from './autopilotService';
+import { CALL_OUTCOME_MAX_AGE_MS, DEFAULT_AUTOPILOT_SETTINGS, storableAutopilotSettings, type AutopilotSettings } from './autopilotService';
 import { DEFAULT_BRIDGE_SETTINGS, type BridgeSettings } from './bridgeService';
 import { safeLocalStorage } from './safeStorage';
 
@@ -107,7 +107,8 @@ export const loadSettings = (): StoredSettings | null => {
 
 // Impostazioni del pilota fuse con i default: i campi aggiunti in seguito
 // hanno sempre un valore
-export const loadAutopilotSettings = (): AutopilotSettings => ({
+// (senza i campi di sola esecuzione, che non si salvano mai)
+export const loadAutopilotSettings = (): AutopilotSettings => storableAutopilotSettings({
   ...DEFAULT_AUTOPILOT_SETTINGS,
   ...(loadSettings()?.autopilot || {}),
 });

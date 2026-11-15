@@ -5,6 +5,7 @@ import {
   CALL_OUTCOME_MAX_AGE_MS,
   DEFAULT_AUTOPILOT_SETTINGS,
   alternativesForCall,
+  effectiveAutopilotSettings,
   autopilotStats,
   expireStaleAutoCalls,
   isWithinCallWindow,
@@ -49,6 +50,9 @@ export interface EngineDeps {
   clock?: () => number;                    // tempo reale per budget e pause (default Date.now)
   sleep?: (ms: number) => Promise<void>;
   timezone?: () => TimezoneStatus;
+  // Versione di prova (dall'ambiente, vedi isTestModeEnv): il pilota chiama
+  // anche la domenica. Default: no.
+  testMode?: boolean;
 }
 
 export interface TickOptions {
@@ -57,11 +61,12 @@ export interface TickOptions {
 
 const realSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-// Configurazione con i valori di default per i campi mancanti
-export const planningFrom = (config: CloudConfig, now: Date): PlanningContext => ({
+// Configurazione con i valori di default per i campi mancanti. I campi di
+// sola esecuzione (callEveryDay) li decide l'ambiente, mai la configurazione.
+export const planningFrom = (config: CloudConfig, now: Date, env: { testMode?: boolean } = {}): PlanningContext => ({
   technicians: Array.isArray(config.technicians) ? config.technicians : [],
   fallback: config.fallback,
-  settings: { ...DEFAULT_AUTOPILOT_SETTINGS, ...(config.autopilot || {}) },
+  settings: effectiveAutopilotSettings({ ...DEFAULT_AUTOPILOT_SETTINGS, ...(config.autopilot || {}) }, { testMode: env.testMode === true }),
   now,
 });
 
@@ -201,7 +206,7 @@ export const runTick = async (deps: EngineDeps, source: TickSource, opts: TickOp
     const cfg = await store.readConfig();
     config = cfg.config;
     if (config) {
-      const ctx0 = planningFrom(config, deps.now());
+      const ctx0 = planningFrom(config, deps.now(), deps);
       summary.pilotEnabled = ctx0.settings.enabled;
       summary.windowOpen = isWithinCallWindow(ctx0.now, ctx0.settings);
     }
@@ -296,7 +301,7 @@ export const runTick = async (deps: EngineDeps, source: TickSource, opts: TickOp
         let applied = 0;
         await commit(store, all => {
           applied = 0;
-          const ctx = planningFrom(cfg, deps.now());
+          const ctx = planningFrom(cfg, deps.now(), deps);
           let list = all;
           for (const f of found) {
             const next = reduceCallOutcome(list, f.id, f.outcome, f.callId, ctx);
@@ -310,11 +315,11 @@ export const runTick = async (deps: EngineDeps, source: TickSource, opts: TickOp
     }
 
     // 4) Lanci delle chiamate dovute
-    const settings = planningFrom(cfg, deps.now()).settings;
+    const settings = planningFrom(cfg, deps.now(), deps).settings;
     if (settings.enabled) {
       if (!deps.retell.configured()) {
         const { appointments } = await store.readAppointments();
-        if (nextDueCall(appointments || [], planningFrom(cfg, deps.now()))) {
+        if (nextDueCall(appointments || [], planningFrom(cfg, deps.now(), deps))) {
           summary.error = 'Chiamate AI non configurate sul server (RETELL_API_KEY, RETELL_FROM_NUMBER)';
         }
       } else {
@@ -333,7 +338,7 @@ export const runTick = async (deps: EngineDeps, source: TickSource, opts: TickOp
           const marked = await commit(store, all => {
             picked = null;
             alternatives = [];
-            const ctx = planningFrom(cfg, ts);
+            const ctx = planningFrom(cfg, ts, deps);
             const next = nextDueCall(all, ctx);
             if (!next) return all;
             picked = next;
@@ -384,7 +389,7 @@ export const runTick = async (deps: EngineDeps, source: TickSource, opts: TickOp
   // 5) Fotografia finale per il riepilogo
   try {
     const { appointments } = await store.readAppointments();
-    const stats = autopilotStats(appointments || [], planningFrom(cfg, deps.now()));
+    const stats = autopilotStats(appointments || [], planningFrom(cfg, deps.now(), deps));
     summary.inFlight = stats.inFlight;
     summary.queued = stats.queued;
     summary.windowOpen = stats.windowOpen;

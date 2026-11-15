@@ -112,6 +112,11 @@ export interface Appointment {
   offeredAlternatives?: AlternativeSlot[]; // alternative offerte nell'ultima chiamata
   declinedDates?: string[];       // date rifiutate dal cliente: non riproporle
   backfillOf?: string;            // "rimpiazza <cliente>": slot liberato che sta coprendo
+
+  // Smistamento: slot scritto dallo smistamento ("data|inizio|tecnico"). Se
+  // coincide ancora con lo slot attuale e la tappa non è mai stata approvata
+  // né chiamata, la tappa è una bozza e lo smistamento la può risistemare.
+  autoSlot?: string;
 }
 
 // --- Tecnici / soggetti che effettuano i sopralluoghi ---

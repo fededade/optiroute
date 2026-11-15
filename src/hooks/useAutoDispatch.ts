@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Appointment, Coordinates, Technician } from '../types';
 import { computeDispatch } from '../services/dispatchService';
-import { applyPatches, addDaysStr, isInRoute, localDateStr } from '../services/slotService';
+import { applyPatches, addDaysStr, isDraftStop, isInRoute, localDateStr } from '../services/slotService';
 import { approveForCalling, nextCallWindowStart, type AutopilotSettings } from '../services/autopilotService';
 
 // Smistamento automatico (pilota acceso + "smistamento automatico"): le
 // pratiche in attesa con telefono vengono smistate da sole in giri proposti,
-// inserite negli spazi liberi dei giri esistenti senza mai spostarne gli
-// orari. Con "chiama senza approvazione" le nuove proposte vanno subito in
+// inserite negli spazi liberi dei giri esistenti. Le tappe approvate, chiamate
+// o confermate non si spostano mai; le bozze (proposte dello smistamento non
+// ancora approvate né toccate a mano) si possono risistemare quando il giorno
+// si ripianifica (arrivano come `patches`). Con "chiama senza approvazione" le nuove proposte vanno subito in
 // coda chiamate, altrimenti restano fra le Proposte per l'operatore.
 //
 // Niente cicli: le pratiche che lo smistamento non riesce a collocare restano
@@ -82,11 +84,13 @@ export const afterDispatchRun = (
 };
 
 // Firma delle tappe già nel giro: se cambia durante il calcolo, il risultato
-// potrebbe sovrapporsi a una tappa nuova e va ricalcolato
-const routeSignature = (all: Appointment[]): string =>
+// potrebbe sovrapporsi a una tappa nuova e va ricalcolato. Conta anche se la
+// tappa è ancora una bozza: una bozza approvata nel frattempo non deve essere
+// spostata dal risultato calcolato prima.
+export const routeSignature = (all: Appointment[]): string =>
   all
     .filter(isInRoute)
-    .map(a => `${a.id}~${a.technicianId || ''}~${a.date}~${a.startTime}~${a.endTime || ''}`)
+    .map(a => `${a.id}~${a.technicianId || ''}~${a.date}~${a.startTime}~${a.endTime || ''}~${isDraftStop(a) ? 'b' : ''}`)
     .sort()
     .join('|');
 
@@ -100,10 +104,10 @@ export const autoDispatchStartDate = (now: Date, settings: AutopilotSettings): s
 // resta quello attuale: potrebbe essere cambiato durante il calcolo)
 const PLANNING_FIELDS: (keyof Appointment)[] = [
   'status', 'date', 'startTime', 'endTime', 'sequenceOrder', 'travelTimeFromPrev', 'distanceFromPrev',
-  'hasLunchBreakBefore', 'technicianId', 'province', 'comune',
+  'hasLunchBreakBefore', 'technicianId', 'province', 'comune', 'autoSlot',
 ];
 
-const planningOf = (u: Appointment): Partial<Appointment> => {
+export const planningOf = (u: Appointment): Partial<Appointment> => {
   const out: Partial<Appointment> = {};
   for (const k of PLANNING_FIELDS) (out as Record<string, unknown>)[k] = u[k];
   return out;
@@ -194,7 +198,8 @@ export const useAutoDispatch = ({
         placed = placedIds.length;
         latest.current.commit(all => {
           // Solo le pratiche ancora in attesa (l'operatore potrebbe averle
-          // spostate durante il calcolo)
+          // spostate durante il calcolo). Le bozze risistemate o scalzate dal
+          // loro giorno arrivano solo come `patches`.
           let next = all.map(a => (a.status === 'pending' && byId.has(a.id) ? { ...a, ...planningOf(byId.get(a.id)!) } : a));
           next = applyPatches(next, proposal.patches);
           if (s.autoApprove && placedIds.length > 0) next = approveForCalling(next, placedIds, now);

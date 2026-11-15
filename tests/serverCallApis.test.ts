@@ -6,7 +6,7 @@ import { endedCall, invoke, startFakeRetellHttp, type FakeRetellHttp } from './s
 // api/retell-call e api/call-status: protette dalla chiave SOLO se CRON_SECRET
 // è impostata; altrimenti comportamento invariato. Retell finto via RETELL_API_BASE.
 
-const VARS = ['CRON_SECRET', 'RETELL_API_KEY', 'RETELL_FROM_NUMBER', 'RETELL_AGENT_ID', 'RETELL_API_BASE'] as const;
+const VARS = ['CRON_SECRET', 'RETELL_API_KEY', 'RETELL_FROM_NUMBER', 'RETELL_AGENT_ID', 'RETELL_API_BASE', 'VERCEL_ENV', 'OPTIROUTE_TEST_MODE', 'RETELL_TEST_NUMBERS'] as const;
 const saved: Record<string, string | undefined> = {};
 
 let retell: FakeRetellHttp;

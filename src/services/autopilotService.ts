@@ -3,6 +3,7 @@ import { computeAlternativeSlots, inferChosenAlternative, resolveAlternative } f
 import {
   type PlanningFallback,
   type SlotOption,
+  allowedByReturnRule,
   dateAtMinutes,
   dayContextFor,
   durationOf,
@@ -27,7 +28,7 @@ export interface AutopilotSettings {
   enabled: boolean;            // false di default: senza, il comportamento resta quello manuale
   callWindowStart: string;     // '09:00'
   callWindowEnd: string;       // '19:30'
-  callSaturday: boolean;       // false; la domenica mai
+  callSaturday: boolean;       // false; la domenica mai (tranne in prova, vedi callEveryDay)
   maxAttempts: number;         // 3 chiamate senza risposta, poi "irreperibile"
   retryMinutes: number;        // 120
   offerAlternatives: boolean;  // true
@@ -39,6 +40,10 @@ export interface AutopilotSettings {
   autoDispatch: boolean;       // true (usato dalla UI)
   dispatchHorizonDays: number; // 14 (usato dalla UI)
   autoApprove: boolean;        // false (usato dalla UI): chiama le nuove proposte senza attendere l'approvazione del giro
+  // Solo durante l'esecuzione, MAI salvato né sincronizzato: lo mette
+  // l'ambiente (versione di prova) con effectiveAutopilotSettings. Acceso, il
+  // pilota chiama ogni giorno, domenica compresa, negli orari impostati.
+  callEveryDay?: boolean;
 }
 
 export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
@@ -55,6 +60,21 @@ export const DEFAULT_AUTOPILOT_SETTINGS: AutopilotSettings = {
   autoDispatch: true,
   dispatchHorizonDays: 14,
   autoApprove: false,
+};
+
+// Impostazioni effettive del pilota: quelle salvate più i campi di sola
+// esecuzione decisi dall'ambiente. Fuori dalla versione di prova
+// callEveryDay è sempre falso, qualunque cosa ci sia nelle impostazioni.
+export const effectiveAutopilotSettings = (s: AutopilotSettings, env: { testMode: boolean }): AutopilotSettings => ({
+  ...s,
+  callEveryDay: env.testMode === true,
+});
+
+// Impostazioni da salvare o sincronizzare: senza i campi di sola esecuzione
+export const storableAutopilotSettings = (s: AutopilotSettings): AutopilotSettings => {
+  if (!('callEveryDay' in s)) return s;
+  const { callEveryDay: _runtime, ...rest } = s;
+  return rest;
 };
 
 export interface PlanningContext {
@@ -145,6 +165,7 @@ export const baseFor =(ctx: PlanningContext, technicianId: string | undefined, d
 // --- Fascia oraria delle chiamate ---
 
 const dayAllowed = (d: Date, s: AutopilotSettings): boolean => {
+  if (s.callEveryDay === true) return true; // versione di prova: ogni giorno
   const day = d.getDay();
   if (day === 0) return false;           // la domenica mai
   if (day === 6) return s.callSaturday;
@@ -563,7 +584,11 @@ const backfillSlot = (all: Appointment[], freed: FreedSlot, leftId: string, ctx:
     const options = findFeasibleSlots(route, day, cand.coords, durationOf(cand), {
       notBefore: freed.start - 30,
       notAfter: freed.start + 120,
-    }).filter(o => dateAtMinutes(freed.date, o.start).getTime() >= minStartAbs);
+    })
+      .filter(o => dateAtMinutes(freed.date, o.start).getTime() >= minStartAbs)
+      // regola del rientro: in coda al giro solo chi è più vicino alla base
+      // dell'ultima tappa (o se il tecnico rientra comunque entro fine giornata)
+      .filter(o => allowedByReturnRule(o, route, day, cand.coords));
 
     for (const option of options) {
       const score =

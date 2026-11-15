@@ -4,7 +4,8 @@ import { geocodeAddress } from '../services/geocodingService';
 import { parseAddressInput } from '../services/geminiService';
 import { matchTechnician } from '../services/technicianService';
 import { provinceLabel } from '../utils/provinces';
-import { Building2, CalendarClock, CircleAlert, Contact, FilePen, FilePlus2, Flag, Siren, StickyNote, TriangleAlert, UserRound } from 'lucide-react';
+import { Building2, CalendarClock, CircleAlert, Contact, FilePen, FilePlus2, Flag, Hash, Siren, StickyNote, TriangleAlert, UserRound } from 'lucide-react';
+import { displayCode, prettyCode } from '../services/praticaCode';
 import ModalShell from './modal/ModalShell';
 import { Field, Section, Spinner, Switch, ic } from './modal/parts';
 
@@ -166,11 +167,18 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ initial, technician
   const fid = (k: string) => `appt-${k}`;
   const categoryTone = category === CATEGORY_CANCELLED ? 'chip-neutral' : 'chip-danger';
   const categoryChip = CATEGORY_OPTIONS.find(o => o.value === category)?.label;
+  // In modifica, accanto al titolo: il codice della perizia ("844.787")
+  const code = initial ? prettyCode(displayCode(initial)) : '';
 
   return (
     <ModalShell
       icon={isEdit ? FilePen : FilePlus2}
       title={isEdit ? 'Modifica Appuntamento' : 'Nuovo Appuntamento'}
+      titleAside={isEdit && code ? (
+        <span className="chip chip-neutral num select-text max-w-[11rem]" title="Codice perizia" data-testid="appointment-code">
+          <Hash size={12} strokeWidth={2} aria-hidden /><span className="truncate">{code}</span>
+        </span>
+      ) : undefined}
       subtitle={isEdit
         ? 'Aggiorna i dati della pratica, la pianificazione e lo stato.'
         : 'Inserisci la pratica: l\'indirizzo viene verificato sulla mappa.'}

@@ -6,7 +6,7 @@ import type { Appointment } from '../types';
 import { CallStatus } from '../Components/AutopilotBadges';
 import { Menu, MenuItem } from '../ui/Menu';
 import type { Workspace } from './types';
-import { containsText, dayLabel, displayCode, displayNotes, formatPhone, placeLabel, shortStreet, titleIsAddress } from './format';
+import { containsText, dayLabel, displayCode, displayNotes, formatPhone, placeLabel, prettyCode, shortStreet, titleIsAddress } from './format';
 import { ISSUE_LABEL, STATUS_META, actionsFor } from './praticaActions';
 import { phoneMissing } from './praticheTable';
 
@@ -38,7 +38,7 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
   const street = sameAsAddress ? '' : shortStreet(appt);
   const rawPlace = placeLabel(appt);
   const place = sameAsAddress && containsText(appt.title, appt.comune || rawPlace) ? '' : rawPlace;
-  const code = displayCode(appt);
+  const code = prettyCode(displayCode(appt));
   const notes = displayNotes(appt);
   const o = appt.callOutcome;
   const summary = o?.summary || appt.callSummary;
@@ -179,7 +179,7 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
               </span>
             )}
             {appt.portalSuspension && (
-              <span className="chip chip-neutral" title={appt.portalSuspension === '-' ? 'Sospesa sul portale (nessuna nota)' : appt.portalSuspension} data-testid="pratica-portal-suspension">
+              <span className="chip chip-neutral" title={appt.portalSuspension === '-' ? 'Sospesa sul portale (nota non disponibile)' : appt.portalSuspension} data-testid="pratica-portal-suspension">
                 Sospesa sul portale
               </span>
             )}

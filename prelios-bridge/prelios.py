@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from browser import PreliosBrowser
 from contact_parse import analizza_nota_gestore, estrai_telefoni
+from excel_pratiche import codice_leggibile
 
 PRELIOS_URL = "https://perizie.prelios.com/VTSSO/"
 
@@ -144,7 +145,7 @@ def search_perizia(browser: PreliosBrowser, code: str, log=print) -> bool:
 
     field = _imposta_filtro_codice(browser, code)
     if field == "not_found":
-        log(f"Campo Cod. Immobile non trovato per {code}")
+        log(f"Campo Cod. Immobile non trovato per {codice_leggibile(code)}")
         return False
 
     browser.execute_js("cmdFindClick();")
@@ -164,7 +165,7 @@ def search_perizia(browser: PreliosBrowser, code: str, log=print) -> bool:
         browser.wait(1)
         if browser.execute_js(check):
             return True
-    log(f"Perizia {code} non trovata nell'elenco")
+    log(f"Perizia {codice_leggibile(code)} non trovata nell'elenco")
     return False
 
 
@@ -194,7 +195,7 @@ def open_perizia(browser: PreliosBrowser, code: str, user_id: str, log=print) ->
 
     ok = click(code) or click(_fmt(code)) or (code_np != code and click(code_np))
     if not ok:
-        log(f"Riga perizia {code} non trovata nella griglia")
+        log(f"Riga perizia {codice_leggibile(code)} non trovata nella griglia")
         return False
     browser.wait(4)
     return True
@@ -324,15 +325,27 @@ def extract_phone(browser: PreliosBrowser, log=print) -> tuple[str, str]:
 # intestazioni Data | VT | Cognome | Nome | Cellulare | Email | Note |
 # ID Imm. | Key | Stato Perizia, righe più recenti in alto.
 #
-# NON verificato sul portale reale (scritto dal video, mai eseguito lì): il
-# clic sulla voce «Sospesi», l'attesa della griglia e la sua lettura.
+# Dal primo giro sul portale vero (file descrittivo): le voci del menu della
+# perizia sono <input> di testo usati come pulsanti, con un onclick; la voce
+# «Sospesi» ha onclick wsTbs.Url('Anpl_Immobili_Sospesi_ISP','ISPVL_','',
+# '5.208'). Nella stessa pagina ci sono comandi che CAMBIANO LO STATO della
+# perizia e non vanno MAI toccati: «Attiva» (Anpl_Immobili_Riattiva_ISP),
+# tutti i wsStatoValutazioneButtons.ButAction.* («Sospesa», «Riattiva»,
+# «Inoltra Perizia», «Conclusa», «Abbandona», «Accetta», «Rifiuta»...),
+# cmdSaveClick() («Salva»), cmdCancelClick() («Canc.»).
 #
-# Regole: si clicca SOLO la voce il cui testo è esattamente «Sospesi» (mai
-# Nuovo, Salva, Canc., Riattiva...), niente scritture nei campi. Della
-# griglia si leggono SOLO le colonne «Data» e «Note» (trovate per nome):
-# cognome, nome, cellulare ed email di chi ha sospeso non escono mai dallo
-# script. Gli script sono FISSI: nessun identificatore preso da fuori viene
-# inserito nel JavaScript.
+# NON verificato sul portale reale: che la pagina «Sospesi» si apra così,
+# l'attesa della griglia e la sua lettura (intestazioni prese dal video).
+#
+# Regole: si clicca SOLO l'elemento il cui onclick contiene esattamente il
+# codice di pagina Anpl_Immobili_Sospesi_ISP, con un controllo esplicito,
+# prima del clic, che l'onclick non contenga nessuno dei comandi vietati;
+# se non c'è, la stessa navigazione con la chiamata diretta wsTbs.Url (come
+# per l'Anagrafica). Nessuna ricerca per testo, niente scritture nei campi.
+# Della griglia si leggono SOLO le colonne «Data» e «Note» (trovate per
+# nome): cognome, nome, cellulare ed email di chi ha sospeso non escono mai
+# dallo script. Gli script sono FISSI: nessun identificatore preso da fuori
+# viene inserito nel JavaScript.
 
 # Etichetta di un campo: <label for>, <label> che lo contiene, testo della
 # cella precedente, title/placeholder. Usata dagli script qui sotto.
@@ -383,38 +396,69 @@ function chiamataDi(e) {
 }
 """
 
-# Clic sulla voce del menu della perizia il cui testo è ESATTAMENTE
-# «Sospesi» (sola navigazione). Fra più elementi con quel testo preferisce
-# quello con onclick/href o un link/pulsante, altrimenti il più interno.
+# Codice della pagina «Sospesi» della perizia e comandi che non si devono
+# MAI cliccare (cambiano lo stato della perizia o salvano/cancellano).
+PAGINA_SOSPESI = "Anpl_Immobili_Sospesi_ISP"
+COMANDI_VIETATI = ("Riattiva", "wsStatoValutazioneButtons", "cmdSaveClick", "cmdCancelClick")
+
+# Clic sulla voce del menu della perizia il cui onclick contiene ESATTAMENTE
+# il codice di pagina 'Anpl_Immobili_Sospesi_ISP' (fra apici: non un codice
+# più lungo). Fra più elementi preferisce uno visibile. Prima del clic
+# ricontrolla che l'onclick NON contenga nessuno dei comandi vietati.
 # Ritorna 'clicked', oppure null se in questo documento non c'è.
 _JS_CLICCA_SOSPESI = r"""
-var els = document.querySelectorAll('a, button, input[type="button"], td, span, div, li, font, b');
-var cand = [];
+var VIETATI = ['Riattiva', 'wsStatoValutazioneButtons', 'cmdSaveClick', 'cmdCancelClick'];
+var reSospesi = /['"]Anpl_Immobili_Sospesi_ISP['"]/;
+function permesso(codice) {
+    if (!reSospesi.test(codice)) return false;
+    for (var v = 0; v < VIETATI.length; v++) { if (codice.indexOf(VIETATI[v]) >= 0) return false; }
+    return true;
+}
+var els = document.querySelectorAll('[onclick]');
+var scelto = null, visibile = false;
 for (var i = 0; i < els.length; i++) {
-    var el = els[i];
-    var t = ((el.innerText || el.textContent || el.value || '') + '').replace(/\s+/g, ' ').trim();
-    if (t !== 'Sospesi') continue;
-    var r = el.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) continue;
-    cand.push(el);
+    var codice = els[i].getAttribute('onclick') || '';
+    if (!permesso(codice)) continue;
+    var r = els[i].getBoundingClientRect();
+    var vis = r.width > 0 && r.height > 0;
+    if (!scelto || (vis && !visibile)) { scelto = els[i]; visibile = vis; }
 }
-if (!cand.length) return null;
-var scelto = null;
-for (var j = 0; j < cand.length && !scelto; j++) {
-    var c = cand[j];
-    if (c.tagName === 'A' || c.tagName === 'BUTTON' || c.tagName === 'INPUT' || c.getAttribute('onclick')) scelto = c;
-}
-if (!scelto) scelto = cand[cand.length - 1];
+if (!scelto) return null;
+if (!permesso(scelto.getAttribute('onclick') || '')) return null;   // controllo esplicito
 scelto.click();
 return 'clicked';
 """
 
+# Ripiego se la voce non c'è: la stessa navigazione chiamata direttamente
+# (stessa forma usata per l'Anagrafica). Null se wsTbs non c'è.
+_JS_NAV_SOSPESI = r"""
+if (typeof wsTbs === 'undefined' || !wsTbs || typeof wsTbs.Url !== 'function') return null;
+wsTbs.Url('Anpl_Immobili_Sospesi_ISP','ISPVL_','','5.208',null);
+return 'chiamata';
+"""
+
+# Come si è arrivati alla pagina «Sospesi» (per il log e la descrizione)
+ARRIVO_CLIC = "clic"
+ARRIVO_CHIAMATA = "chiamata diretta"
+
 # Griglia della pagina «Sospesi»: la riga di intestazione con le celle
-# «Data», «Note» e «Stato Perizia»; per ogni riga successiva con lo stesso
-# numero di celle si leggono SOLO «Data» e «Note». In più la voce scelta del
-# menu «Motivo Sospensione» (se non vuota). Null se la griglia non c'è.
+# «Data», «Note» e «Stato Perizia». Le righe dati sono TUTTE le righe del
+# documento con lo stesso numero di celle, in qualunque tabella (la griglia
+# wsGrid può disegnare la testata in una tabella e le righe in un'altra),
+# escluse le righe di intestazione e quelle con tabelle annidate, nell'ordine
+# del documento; di ognuna si leggono SOLO «Data» e «Note». In più la voce
+# scelta del menu «Motivo Sospensione» (se non vuota). Null se la griglia
+# non c'è.
 _JS_GRIGLIA_SOSPESI = _JS_ETICHETTA + r"""
 function norm(s) { return (s || '').toLowerCase().replace(/[.:]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function nomiDi(tr) {
+    var nomi = [];
+    for (var c = 0; c < tr.cells.length; c++) nomi.push(norm(txt(tr.cells[c])));
+    return nomi;
+}
+function eIntestazione(nomi) {
+    return nomi.indexOf('data') >= 0 && nomi.indexOf('note') >= 0 && nomi.indexOf('stato perizia') >= 0;
+}
 var out = {griglia: false, righe: [], motivo: ''};
 try {
     var sels = document.querySelectorAll('select');
@@ -426,23 +470,26 @@ try {
         if (voce) { out.motivo = voce; break; }
     }
 } catch (e) { }
-var tables = document.querySelectorAll('table');
-for (var t = 0; t < tables.length && !out.griglia; t++) {
-    var rows = tables[t].rows || [];
-    for (var r = 0; r < rows.length && r < 50; r++) {
-        if (!rows[r].cells || rows[r].querySelector('table')) continue;
-        var nomi = [];
-        for (var c = 0; c < rows[r].cells.length; c++) nomi.push(norm(txt(rows[r].cells[c])));
-        var iData = nomi.indexOf('data'), iNote = nomi.indexOf('note');
-        if (iData < 0 || iNote < 0 || nomi.indexOf('stato perizia') < 0) continue;
-        out.griglia = true;
-        for (var d = r + 1; d < rows.length && out.righe.length < 50; d++) {
-            var cells = rows[d].cells;
-            if (!cells || cells.length !== nomi.length || rows[d].querySelector('table')) continue;
-            var nota = ((cells[iNote].innerText || cells[iNote].textContent || '') + '').replace(/\s+/g, ' ').trim();
-            out.righe.push({data: txt(cells[iData]).substring(0, 40), note: nota.substring(0, 2000)});
-        }
-        break;
+var trs = document.querySelectorAll('tr');
+var testata = null;
+for (var r = 0; r < trs.length && !testata; r++) {
+    if (!trs[r].cells || !trs[r].cells.length || trs[r].querySelector('table')) continue;
+    var n0 = nomiDi(trs[r]);
+    if (eIntestazione(n0)) testata = {nomi: n0, tr: trs[r]};
+}
+if (testata) {
+    out.griglia = true;
+    var nCelle = testata.nomi.length;
+    var iData = testata.nomi.indexOf('data'), iNote = testata.nomi.indexOf('note');
+    for (var d = 0; d < trs.length && out.righe.length < 50; d++) {
+        var tr = trs[d];
+        if (tr === testata.tr || !tr.cells || tr.cells.length !== nCelle || tr.querySelector('table')) continue;
+        var tutteTh = true;
+        for (var h = 0; h < tr.cells.length; h++) { if (tr.cells[h].tagName !== 'TH') { tutteTh = false; break; } }
+        if (tutteTh || eIntestazione(nomiDi(tr))) continue;   // altre righe di intestazione
+        var cells = tr.cells;
+        var nota = ((cells[iNote].innerText || cells[iNote].textContent || '') + '').replace(/\s+/g, ' ').trim();
+        out.righe.push({data: txt(cells[iData]).substring(0, 40), note: nota.substring(0, 2000)});
     }
 }
 return (out.griglia || out.motivo) ? out : null;
@@ -541,20 +588,35 @@ def _righe_sospesi(val: dict) -> list[dict]:
 
 def leggi_pagina_sospesi(browser: PreliosBrowser, log=print,
                          attesa: int = ATTESA_SOSPESI_SEC) -> dict:
-    """Dalla perizia aperta: clic sulla voce «Sospesi» (sola navigazione),
-    attesa della griglia, lettura di «Data» e «Note» di ogni riga e del
-    «Motivo Sospensione» scelto. BEST-EFFORT, NON verificato sul portale.
+    """Dalla perizia aperta: navigazione alla pagina «Sospesi» (clic sulla
+    voce del menu con il codice di pagina Anpl_Immobili_Sospesi_ISP, o in
+    ripiego la chiamata diretta wsTbs.Url), attesa della griglia, lettura di
+    «Data» e «Note» di ogni riga e del «Motivo Sospensione» scelto.
+    BEST-EFFORT, NON verificato sul portale.
 
     Returns:
         {"raggiunta": bool, "righe": [{"data", "note"}], "motivo": str,
-         "esito": 'OK' o motivo del fallimento}"""
-    vuoto = {"raggiunta": False, "righe": [], "motivo": ""}
+         "arrivo": ARRIVO_CLIC | ARRIVO_CHIAMATA | '' (pagina non aperta),
+         "esito": 'OK' o motivo del fallimento (dice come si è arrivati e
+         cosa non si è trovato)}"""
+    vuoto = {"raggiunta": False, "righe": [], "motivo": "", "arrivo": ""}
+    arrivo = ""
+    problema = ""
     try:
-        cliccato = _run_everywhere(browser, _JS_CLICCA_SOSPESI)
+        if _run_everywhere(browser, _JS_CLICCA_SOSPESI) == "clicked":
+            arrivo = ARRIVO_CLIC
     except Exception as e:  # noqa: BLE001
-        return dict(vuoto, esito=f"clic su «Sospesi» non riuscito ({str(e)[:80]})")
-    if cliccato != "clicked":
-        return dict(vuoto, esito="voce «Sospesi» non trovata nella pagina della perizia")
+        problema = f" (clic non riuscito: {str(e)[:80]})"
+    if not arrivo:
+        try:
+            browser.switch_to_default()
+            if browser.execute_js(_JS_NAV_SOSPESI) == "chiamata":
+                arrivo = ARRIVO_CHIAMATA
+        except Exception as e:  # noqa: BLE001
+            problema += f" (chiamata diretta non riuscita: {str(e)[:80]})"
+    if not arrivo:
+        return dict(vuoto, esito=(f"voce del menu con {PAGINA_SOSPESI} non trovata e wsTbs "
+                                  f"non disponibile: pagina «Sospesi» non aperta{problema}"))
     for _ in range(max(1, attesa)):
         browser.wait(1)
         motivo = ""
@@ -568,8 +630,14 @@ def leggi_pagina_sospesi(browser: PreliosBrowser, log=print,
                 griglia = val
         if griglia is not None:
             return {"raggiunta": True, "righe": _righe_sospesi(griglia), "motivo": motivo,
-                    "esito": "OK"}
-    return dict(vuoto, esito="griglia della pagina «Sospesi» non comparsa")
+                    "arrivo": arrivo, "esito": "OK"}
+    come = (f"pagina aperta con il clic sulla voce del menu con {PAGINA_SOSPESI}"
+            if arrivo == ARRIVO_CLIC else
+            f"voce del menu con {PAGINA_SOSPESI} non trovata, pagina aperta con la "
+            "chiamata diretta wsTbs.Url")
+    return dict(vuoto, arrivo=arrivo,
+                esito=(f"griglia della pagina «Sospesi» non comparsa ({come}; nessuna "
+                       "tabella con le colonne «Data», «Note» e «Stato Perizia»)"))
 
 
 def read_perizia_structure(browser: PreliosBrowser) -> dict:
@@ -604,18 +672,61 @@ def read_perizia_structure(browser: PreliosBrowser) -> dict:
 
 # Righe della griglia: per ogni <tr> i testi delle celle DIRETTE. Le righe che
 # contengono tabelle annidate (layout) sono saltate e contate a parte.
-_JS_GRID_ROWS = """
-var out = {rows: [], layout_rows: 0, tables: document.querySelectorAll('table').length};
+# In più, "icone" (ALLINEATO per indice a "rows"): il codice dell'icona della
+# cella sotto l'intestazione «VT» (nome del file dell'immagine senza
+# estensione, maiuscolo, solo se fatto di 1-3 lettere), null se non c'è.
+# Niente altro dalle celle a icona. La colonna si trova PER NOME: la riga di
+# intestazione è quella con una cella «VT» e una «Tipo Perizia» (o
+# «Tipologia»); vale per le righe della stessa tabella (se la tabella non ha
+# intestazione, per l'ultima vista) con lo stesso numero di celle.
+# "vt": true se quella riga di intestazione è stata trovata.
+_JS_GRID_ROWS = r"""
+var out = {rows: [], icone: [], vt: false, layout_rows: 0,
+           tables: document.querySelectorAll('table').length};
+function nomeCol(t) { return t.toLowerCase().replace(/[.:]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function codiceIcona(cell) {
+    var imgs = cell.querySelectorAll('img, input[type="image"]');
+    for (var m = 0; m < imgs.length; m++) {
+        var file = (imgs[m].getAttribute('src') || '').split(/[?#]/)[0].split('/').pop();
+        var nome = file.replace(/\.[A-Za-z0-9]+$/, '').toUpperCase();
+        if (/^[A-Z]{1,3}$/.test(nome)) return nome;
+    }
+    return null;
+}
+var perTabella = [], ultima = null;
+function intestazioneDi(tab) {
+    for (var k = 0; k < perTabella.length; k++) { if (perTabella[k].t === tab) return perTabella[k].h; }
+    return ultima;
+}
 var trs = document.querySelectorAll('tr');
 for (var i = 0; i < trs.length && out.rows.length < 3000; i++) {
     var tr = trs[i];
     if (tr.querySelector('table')) { out.layout_rows++; continue; }
-    var cells = [];
+    var cells = [], nomi = [];
     for (var j = 0; j < tr.cells.length; j++) {
         var t = (tr.cells[j].innerText || tr.cells[j].textContent || '');
-        cells.push(t.replace(/\\s+/g, ' ').trim().substring(0, 500));
+        t = t.replace(/\s+/g, ' ').trim();
+        cells.push(t.substring(0, 500));
+        nomi.push(nomeCol(t));
     }
-    if (cells.length) out.rows.push(cells);
+    if (!cells.length) continue;
+    var tab = tr.closest ? tr.closest('table') : null;
+    var iVT = nomi.indexOf('vt');
+    if (iVT >= 0 && (nomi.indexOf('tipo perizia') >= 0 || nomi.indexOf('tipologia') >= 0)) {
+        var h = {i: iVT, n: cells.length};
+        var nuova = true;
+        for (var q = 0; q < perTabella.length; q++) { if (perTabella[q].t === tab) { perTabella[q].h = h; nuova = false; } }
+        if (nuova) perTabella.push({t: tab, h: h});
+        ultima = h;
+        out.vt = true;
+    }
+    var icona = null;
+    var hh = intestazioneDi(tab);
+    if (hh && tr.cells.length === hh.n) {
+        try { icona = codiceIcona(tr.cells[hh.i]); } catch (e) { icona = null; }
+    }
+    out.rows.push(cells);
+    out.icone.push(icona);
 }
 return out;
 """
@@ -893,20 +1004,33 @@ def read_grid(browser: PreliosBrowser) -> dict:
 
     Returns:
         {"rows": [[celle...], ...] (tutte le origini concatenate),
+         "icone": [codice o None, ...] (allineato per indice a "rows"),
+         "colonna_vt": True se l'intestazione «VT» è stata trovata,
          "frames": [{"origine", "righe", "righe_layout", "tabelle"}],
          "frame_count": numero di frame letti (escluso il documento)}
     """
+    from stato_portale import codice_icona
     rows: list[list[str]] = []
+    icone: list[str | None] = []
+    colonna_vt = False
     frames: list[dict] = []
     for origine, val in _collect_everywhere(browser, _JS_GRID_ROWS):
         if not isinstance(val, dict):
             continue
-        righe = [[str(c) for c in r] for r in (val.get("rows") or []) if isinstance(r, list)]
-        rows.extend(righe)
-        frames.append({"origine": origine, "righe": len(righe),
+        grezze = val.get("rows") or []
+        ic = val.get("icone") if isinstance(val.get("icone"), list) else []
+        n = 0
+        for i, r in enumerate(grezze):
+            if not isinstance(r, list):
+                continue
+            rows.append([str(c) for c in r])
+            icone.append(codice_icona(ic[i]) if i < len(ic) else None)
+            n += 1
+        colonna_vt = colonna_vt or val.get("vt") is True
+        frames.append({"origine": origine, "righe": n,
                        "righe_layout": val.get("layout_rows", 0),
                        "tabelle": val.get("tables", 0)})
-    return {"rows": rows, "frames": frames,
+    return {"rows": rows, "icone": icone, "colonna_vt": colonna_vt, "frames": frames,
             "frame_count": sum(1 for f in frames if f["origine"] != "main")}
 
 
@@ -942,7 +1066,8 @@ def attendi_griglia(browser: PreliosBrowser, max_secondi: int = 20,
     diversa_da: righe di una ricerca precedente; finché le righe dati sono
     ancora le stesse la griglia è considerata non ancora aggiornata."""
     ultimo = -1
-    griglia: dict = {"rows": [], "frames": [], "frame_count": 0}
+    griglia: dict = {"rows": [], "icone": [], "colonna_vt": False, "frames": [],
+                     "frame_count": 0}
     vecchie = _firme_dati_da_firme(diversa_da) if diversa_da is not None else None
     for _ in range(max_secondi):
         browser.wait(1)
@@ -1067,7 +1192,7 @@ def cerca_sospese(browser: PreliosBrowser, firme_prima: set, log=print) -> dict:
 
     Returns:
         {"esito": "ok" | motivo, "righe": [...] (solo con esito ok),
-         "trovati": n o None}"""
+         "icone": [...] (allineato a "righe"), "trovati": n o None}"""
     browser.switch_to_default()
     r = _stato_perizia(browser, "sospese")
     if r is None:
@@ -1082,6 +1207,7 @@ def cerca_sospese(browser: PreliosBrowser, firme_prima: set, log=print) -> dict:
         browser.execute_js("cmdFindClick();")
         griglia = attendi_griglia(browser, diversa_da=firme_prima)
         righe = list(griglia["rows"])
+        icone = _icone_allineate(griglia, righe)
         trovati = leggi_trovati(browser)
         esito = "ok" if _firme_dati(righe) != _firme_dati_da_firme(firme_prima) else \
             "la griglia non è cambiata dopo la ricerca delle sospese"
@@ -1089,7 +1215,14 @@ def cerca_sospese(browser: PreliosBrowser, firme_prima: set, log=print) -> dict:
         vuoto = _stato_perizia(browser, "vuoto")
         if not vuoto or vuoto.get("esito") != "ok":
             log("ATTENZIONE: «Stato Perizia» non rimesso vuoto dopo la ricerca delle sospese.")
-    return {"esito": esito, "righe": righe if esito == "ok" else [], "trovati": trovati}
+    return {"esito": esito, "righe": righe if esito == "ok" else [],
+            "icone": icone if esito == "ok" else [], "trovati": trovati}
+
+
+def _icone_allineate(griglia: dict, righe: list) -> list:
+    """Icone della griglia allineate per indice alle righe (None dove mancano)."""
+    icone = list(griglia.get("icone") or [])
+    return (icone + [None] * len(righe))[:len(righe)]
 
 
 def list_assigned(browser: PreliosBrowser, log=print,
@@ -1132,6 +1265,11 @@ def list_assigned(browser: PreliosBrowser, log=print,
     except Exception as e:  # noqa: BLE001 — solo descrizione, mai bloccante
         info["pagina"] = {"errore": str(e)[:200]}
     righe: list[list[str]] = list(griglia["rows"])
+    # icona «VT» di ogni riga, allineata per indice a `righe` (anche dopo la
+    # paginazione): la usa il parser per lo stato
+    icone: list = _icone_allineate(griglia, righe)
+    info["icone"] = icone
+    info["colonna_vt"] = bool(griglia.get("colonna_vt"))
     firme = {tuple(r) for r in righe}
     n_dati = _conta_righe_tipologia(righe)
     log(f"Elenco: lette {len(righe)} righe grezze da {len(griglia['frames'])} "
@@ -1146,7 +1284,7 @@ def list_assigned(browser: PreliosBrowser, log=print,
             "forse ci sono più pagine (le più vecchie non sono lette; "
             + (f"Max Righe richiesto: {max_righe})." if max_righe else "Max Righe non toccato)."))
 
-    _segui_paginazione(browser, righe, firme, info, log, max_pagine)
+    _segui_paginazione(browser, righe, firme, info, log, max_pagine, icone)
 
     # La ricerca delle sospese viene DOPO: cambia la griglia mostrata
     if cerca_sospese_ora:
@@ -1158,9 +1296,10 @@ def list_assigned(browser: PreliosBrowser, log=print,
 
 
 def _segui_paginazione(browser: PreliosBrowser, righe: list, firme: set, info: dict,
-                       log, max_pagine: int) -> None:
+                       log, max_pagine: int, icone: list | None = None) -> None:
     """Segue il controllo "pagina successiva" SOLO se ce n'è esattamente uno
-    (mai i numeri di pagina); aggiunge a `righe` le righe nuove."""
+    (mai i numeri di pagina); aggiunge a `righe` le righe nuove (e a
+    `icone`, se passato, le loro icone, sempre allineate per indice)."""
     candidati = find_next_controls(browser)
     info["controlli_paginazione"] = candidati
     if len(candidati) != 1:
@@ -1179,11 +1318,16 @@ def _segui_paginazione(browser: PreliosBrowser, righe: list, firme: set, info: d
         if not cliccato:
             break
         griglia = attendi_griglia(browser)
-        nuove = [r for r in griglia["rows"] if tuple(r) not in firme]
+        tutte = list(griglia["rows"])
+        icone_pagina = _icone_allineate(griglia, tutte)
+        nuove_idx = [i for i, r in enumerate(tutte) if tuple(r) not in firme]
+        nuove = [tutte[i] for i in nuove_idx]
         if not _conta_righe_tipologia(nuove):
             break  # nessuna riga nuova: era l'ultima pagina
         pagine += 1
         righe.extend(nuove)
+        if icone is not None:
+            icone.extend(icone_pagina[i] for i in nuove_idx)
         firme.update(tuple(r) for r in nuove)
         info["pagine"] = pagine
         if len(find_next_controls(browser)) != 1:

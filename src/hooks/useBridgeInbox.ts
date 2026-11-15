@@ -58,6 +58,7 @@ export interface BridgeImportOutcome {
   removed?: number;   // tolte perché già nel gestionale
   removedPortal?: number; // tolte perché già fissate, fatte o chiuse sul portale
   suspended?: number; // sospese sul portale (stato dato dalla nota)
+  resumed?: number;   // non più sospese sul portale: tornate in attesa
 }
 
 interface UseBridgeInboxOptions {
@@ -105,6 +106,7 @@ export const describeImport = (o: BridgeImportOutcome, at: Date): string => {
       : `${o.removedPortal} tolte perché già fissate o chiuse sul portale`);
   }
   if (o.suspended && o.suspended > 0) parts.push(plural(o.suspended, 'sospesa sul portale', 'sospese sul portale'));
+  if (o.resumed && o.resumed > 0) parts.push(plural(o.resumed, 'tornata in attesa (non più sospesa)', 'tornate in attesa (non più sospese)'));
   return parts.length > 0 ? `${parts.join(', ')} alle ${hhmm(at)}` : `nessuna novità alle ${hhmm(at)}`;
 };
 
@@ -194,7 +196,7 @@ export const useBridgeInbox = ({ settings, isLeader, appointmentsRef, importBrid
         outcome = { ...imported, removed: outcome.removed, removedPortal: outcome.removedPortal };
       }
       const done = new Date();
-      if (outcome.added + outcome.updated + outcome.failed + (outcome.removed || 0) + (outcome.removedPortal || 0) + (outcome.suspended || 0) > 0 || !lastResultRef.current) {
+      if (outcome.added + outcome.updated + outcome.failed + (outcome.removed || 0) + (outcome.removedPortal || 0) + (outcome.suspended || 0) + (outcome.resumed || 0) > 0 || !lastResultRef.current) {
         lastResultRef.current = describeImport(outcome, done);
       }
 

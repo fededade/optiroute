@@ -20,6 +20,8 @@ Stato sul portale (stato_portale.py): se fra le intestazioni ci sono le
 colonne di data dell'Elenco Perizie (Conclusa, Sopralluogo, Valutata,
 Sospesa, Revoca, Sospensione, Inoltrata Perizia), ogni pratica riceve fase,
 stato e date; altrimenti quei campi restano vuoti (comportamento di prima).
+Per l'elenco letto dal portale conta anche l'icona della colonna «VT»
+(parse_grid_rows, argomento `icone`); nei file non ci sono icone.
 """
 
 from __future__ import annotations
@@ -38,7 +40,8 @@ except ImportError:  # pragma: no cover - dipende dall'ambiente
     openpyxl = None  # type: ignore
     HAS_OPENPYXL = False
 
-from stato_portale import mappa_colonne_stato, stato_da_riga, trova_intestazioni_stato
+from stato_portale import (NON_RICONOSCIUTA, codice_icona, mappa_colonne_stato,
+                           stato_da_riga, trova_intestazioni_stato)
 
 # Tipologia da tenere (forma normalizzata: maiuscolo, spazi collassati)
 TIPOLOGIA_TARGET = "FULL - ACQUISTO"
@@ -127,6 +130,21 @@ def _cell_str(value: object) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value).strip()
+
+
+def codice_leggibile(codice: object) -> str:
+    """Numero della perizia come lo si legge sul portale, per i messaggi
+    della finestra del bridge: '844787' → '844.787' (punto delle migliaia).
+    Snapshot e cache tengono il codice com'è: questa è solo la scrittura nei
+    messaggi. Un valore che non è fatto di sole cifre resta com'è."""
+    s = _cell_str(codice).replace(".", "").replace(" ", "")
+    if not s.isdigit() or len(s) < 4:
+        return _cell_str(codice)
+    gruppi = []
+    while s:
+        gruppi.insert(0, s[-3:])
+        s = s[:-3]
+    return ".".join(gruppi)
 
 
 def normalizza_tipologia(value: object) -> str:
@@ -322,7 +340,8 @@ def parse_grid_rows(rows: Iterable[Sequence],
                     stats: dict | None = None,
                     intestazioni: Iterable[Sequence] = (),
                     oggi: date | None = None,
-                    sospese: set[str] | None = None) -> list[Pratica]:
+                    sospese: set[str] | None = None,
+                    icone: Sequence[object] | None = None) -> list[Pratica]:
     """Parsa righe gia' in memoria lette dalla GRIGLIA del portale (non da file).
 
     Usa SEMPRE l'euristica ancorata alla cella Tipologia (stessi offset e
@@ -352,9 +371,20 @@ def parse_grid_rows(rows: Iterable[Sequence],
         oggi: data di riferimento per la fase (default: oggi).
         sospese: codici trovati dalla ricerca delle sospese del portale
             (None = ricerca non fatta: ripiego sulla colonna Sospensione).
+        icone: codice dell'icona «VT» di ogni riga, ALLINEATO per indice a
+            `rows` (None o valore non valido = icona non letta per quella
+            riga: regola di prima). None per tutto l'argomento = nessuna
+            icona (elenchi da file): regola di prima, senza contarle.
+            Le perizie in uno stato non riconosciuto (stato_portale,
+            regola 5) NON sono restituite: sono contate per codice in
+            stats["non_pubblicate"].
     """
     contatori = {"righe": 0, "con_tipologia": 0, "altre_tipologie": 0,
-                 "senza_codice": 0, "duplicate": 0, "pratiche": 0, "senza_stato": 0}
+                 "senza_codice": 0, "duplicate": 0, "pratiche": 0, "senza_stato": 0,
+                 "senza_icona": 0}
+    conta_icone: dict[str, int] = {}
+    non_pubblicate: dict[str, int] = {}
+    icone = list(icone) if icone is not None else None
     target = normalizza_tipologia(solo_tipologia) if solo_tipologia else None
     visti: set[str] = set()
     pratiche: list[Pratica] = []
@@ -362,7 +392,7 @@ def parse_grid_rows(rows: Iterable[Sequence],
     oggi = oggi or date.today()
     header, mappa_stato, motivo_stato = trova_intestazioni_stato(rows, intestazioni)
 
-    for row in rows:
+    for indice, row in enumerate(rows):
         row = list(row)
         contatori["righe"] += 1
         if not any(_cell_str(c) for c in row):
@@ -371,6 +401,11 @@ def parse_grid_rows(rows: Iterable[Sequence],
         if col_t < 0:
             continue  # intestazione, riga di layout, totali, paginazione...
         contatori["con_tipologia"] += 1
+        icona = None
+        if icone is not None:
+            icona = codice_icona(icone[indice]) if indice < len(icone) else None
+            if icona:
+                conta_icone[icona] = conta_icone.get(icona, 0) + 1
         tipologia = normalizza_tipologia(_get(row, col_t))
         if target and tipologia != target:
             contatori["altre_tipologie"] += 1
@@ -386,7 +421,12 @@ def parse_grid_rows(rows: Iterable[Sequence],
         if mappa_stato is not None:
             if len(row) == len(header) and col_t == mappa_stato["tipologia"]:
                 ora = None if sospese is None else pratica.codice in sospese
-                pratica.con_stato(stato_da_riga(row, mappa_stato, oggi, ora))
+                if icone is not None and icona is None:
+                    contatori["senza_icona"] += 1
+                pratica.con_stato(stato_da_riga(row, mappa_stato, oggi, ora, icona))
+                if pratica.fase == NON_RICONOSCIUTA:
+                    non_pubblicate[icona] = non_pubblicate.get(icona, 0) + 1
+                    continue   # né pubblicata né aperta
             else:
                 contatori["senza_stato"] += 1
         pratiche.append(pratica)
@@ -395,6 +435,8 @@ def parse_grid_rows(rows: Iterable[Sequence],
     if stats is not None:
         stats.update(contatori)
         stats["colonne_stato"] = "" if mappa_stato is not None else motivo_stato
+        stats["icone"] = conta_icone
+        stats["non_pubblicate"] = non_pubblicate
     return pratiche
 
 

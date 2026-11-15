@@ -11,6 +11,7 @@ fs.mkdirSync(OUT, { recursive: true });
 const BASE = `http://127.0.0.1:${PORT}`;
 const KEY = 'chiave-di-prova-e2e';
 const D = '2026-11-17';
+const WEEKDAY_10 = Date.UTC(2026, 10, 16, 9, 0, 0); // lun 16/11/2026 10:00 Europe/Rome
 
 const results = [];
 const check = (name, cond, extra = '') => {
@@ -135,8 +136,11 @@ const seedSettings = {
   autopilot: { enabled: true, callWindowStart: '00:00', callWindowEnd: '23:59', callSaturday: true, autoDispatch: true },
 };
 
-const newContext = async (browser, who) => {
-  const ctx = await browser.newContext({ viewport: { width: 1400, height: 950 } });
+// now: orologio finto del browser (fuso di Roma) per gli scenari che chiamano
+// dal browser: la fascia delle chiamate dipende da giorno e ora (la domenica
+// il pilota non chiama mai), la prova no
+const newContext = async (browser, who, { now } = {}) => {
+  const ctx = await browser.newContext({ viewport: { width: 1400, height: 950 }, ...(now ? { timezoneId: 'Europe/Rome', locale: 'it-IT' } : {}) });
   const apiLog = [];
   // In Playwright vince la route registrata per ULTIMA: prima il catch-all
   await ctx.route(() => true, route => {
@@ -159,6 +163,7 @@ const newContext = async (browser, who) => {
   });
   await ctx.route(/\/api\/cloud\?/, route => { apiLog.push(route.request().url()); return handleCloud(route, who); });
   const page = await ctx.newPage();
+  if (now) await page.clock.install({ time: now });
   page.on('dialog', d => d.accept());
   page.on('pageerror', e => console.log(`[${who}] pageerror`, e.message));
   return { ctx, page, apiLog };
@@ -400,7 +405,9 @@ const stored = (page, key) => page.evaluate(k => JSON.parse(localStorage.getItem
     await A.ctx.close();
 
     // ================= f) regressione a cloud spento =================
-    const F = await newContext(browser, 'F');
+    // il browser chiama da solo: orologio fissato a un giorno feriale nella
+    // fascia delle chiamate, il giorno prima delle proposte
+    const F = await newContext(browser, 'F', { now: WEEKDAY_10 });
     await seed(F.page, true);
     await goSection(F.page, 'proposte');
     await F.page.getByRole('button', { name: 'Approva e chiama', exact: true }).first().click();

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { AlternativeSlot, Appointment, IssueType } from '../types';
 import { startConfirmationCall } from '../services/callService';
 import { formatAlternative } from './AutopilotBadges';
+import { prettyCode } from '../services/praticaCode';
 import {
   CalendarClock, CalendarDays, CircleAlert, Clock, Construction, HardHat, MapPin, Phone, PhoneOff,
   RotateCw, Shuffle, Siren, StickyNote, TriangleAlert, type LucideIcon,
@@ -210,7 +211,7 @@ const CallModal: React.FC<CallModalProps> = ({ appointment, technicianName, dayS
                 {appointment.periziaCode && (
                   <>
                     <dt className="text-ink-500">Pratica</dt>
-                    <dd className="num text-ink-900">#{appointment.periziaCode}</dd>
+                    <dd className="num text-ink-900">#{prettyCode(appointment.periziaCode)}</dd>
                   </>
                 )}
                 <dt className="flex items-center gap-1.5 text-ink-500"><CalendarDays {...ic} size={14} />Data</dt>

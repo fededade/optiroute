@@ -75,7 +75,9 @@ const LAVORI = [
   /\b(cantiere|ristruttur|sanatori|difformit|agibilit)/,
 ];
 const RICHIAMO = [
-  /\b(richiam|ricontatt|risent|sentir|ritelefon|irraggiungibil|non raggiungibil|segreteria)/,
+  // anche chiamare/chiamata, telefonare, contattare ("telefonare" non è
+  // "numero": quello vuole le parole del numero sbagliato o mancante)
+  /\b(richiam|ricontatt|risent|sentir|ritelefon|chiam|telefon|contatt|irraggiungibil|non raggiungibil|segreteria)/,
   /\bnon rispond/,
   /\bnr\b/,
   /\b(attendo|attendiamo|attende|in attesa)\b(?:\s+(?:di|della|del|dal|dalla|dello))?\s+(conferma|dispo|riscontro|rispost)/,
@@ -210,6 +212,31 @@ const findDates = (text: string, today: string): Found[] => {
   // "mese prossimo": il primo del mese dopo
   scan(/(?<!\b(?:inizio|meta|fine)\s+(?:del\s+)?)\b(?:mese\s+(?:prossimo|prox|pross)|(?:prossimo|prox|pross)\.?\s+mese)\b/g,
     () => ({ tier: 2, forward: true, date: firstOfNextMonth(today) }));
+  // Giorno del mese SENZA mese ("dopo il 19", "dal 25", "fino al 20"): solo
+  // dopo il/dal/del/dall'/dell'/al (quindi mai "alle 19", "le 19", "ore 19",
+  // "via Roma 19") e mai seguito da ":30", ".30", ",5", "/11", gg/giorni/ore/
+  // %/anni/mesi/settimane, "°", piano/scala/interno o dal nome del mese (data
+  // completa, livello 1). Il mese: quello che rende la data più vicina a oggi
+  // (scorso, questo o prossimo; un giorno che nel mese non c'è salta il mese);
+  // con "dal", "dopo il", "fino al"… ("non prima di") il più vicino non passato.
+  scan(new RegExp(`(?<=\\b(?:il|dal|del|dall|dell|al)\\s)(\\d{1,2})(?!\\d)(?![:.,/]\\d)(?!\\s*[°º%])`
+    + `(?!\\s*(?:gg|giorni|giorno|ore|anni|anno|mesi|mese|settimane|settimana|sett|piano|piani|scala|interno|int)\\b)`
+    + `(?!\\s*${MONTH_WORD}\\b)`, 'g'), m => {
+    const day = Number(m[1]);
+    const before = text.slice(0, m.index);
+    const notBefore = FROM_BEFORE.test(before) || UNTIL_BEFORE.test(before);
+    const y = Number(today.slice(0, 4));
+    const mo = Number(today.slice(5, 7));
+    const now = utc(today);
+    let best: string | undefined;
+    for (const k of [-1, 0, 1]) {
+      const m0 = mo - 1 + k;
+      const iso = validDate(y + Math.floor(m0 / 12), ((m0 % 12) + 12) % 12 + 1, day);
+      if (!iso || (notBefore && iso < today)) continue;
+      if (!best || Math.abs(utc(iso) - now) < Math.abs(utc(best) - now)) best = iso;
+    }
+    return { tier: 2, date: best };
+  });
 
   // --- 3: domani, giorni della settimana (il prossimo, mai oggi) ---
   scan(/\b(dopodomani|domani)\b/g, m => ({ tier: 3, date: addDays(today, m[1] === 'domani' ? 1 : 2) }));
@@ -269,11 +296,25 @@ export const classifySuspension = (nota: string, oggi: string): SuspensionClass 
 // Impronta della nota applicata (testo ripulito; "-" se vuota)
 export const suspensionFingerprint = (nota: string | undefined): string => (nota || '').replace(/\s+/g, ' ').trim() || '-';
 
-// Riga aggiunta alle note
+// Riga aggiunta alle note. Nota vuota: spesso il bridge non l'ha ancora
+// letta (ne legge poche per giro), quindi "non disponibile"
 export const suspensionNoteLine = (nota: string | undefined): string => {
   const t = (nota || '').replace(/\s+/g, ' ').trim();
-  return t ? `Sospesa sul portale: ${t}` : 'Sospesa sul portale (nessuna nota).';
+  return t ? `Sospesa sul portale: ${t}` : 'Sospesa sul portale (nota non disponibile).';
 };
+
+// Riga scritta da noi (anche nelle forme di prima, es. "(nessuna nota).")
+const isSuspensionLine = (line: string): boolean => /^Sospesa sul portale(?::\s| \()/.test(line.trim());
+
+// Stato che la sospensione ha dato alla pratica, in forma compatta
+// ("issue|callback|2026-11-20", "pending||2026-11-25")
+export const suspensionState = (a: Pick<Appointment, 'status' | 'issueType' | 'followUpDate'>): string =>
+  `${a.status}|${a.issueType || ''}|${a.followUpDate || ''}`;
+
+// La pratica è ancora ESATTAMENTE nello stato che le aveva dato la
+// sospensione: nessuno l'ha toccata
+export const suspensionUntouched = (a: Appointment): boolean =>
+  !!a.portalSuspensionState && suspensionState(a) === a.portalSuspensionState;
 
 // Stato della pratica (in attesa o proposta) secondo la nota
 export const suspensionChanges = (cls: SuspensionClass): Partial<Appointment> => {
@@ -303,51 +344,78 @@ export interface SuspensionOptions {
   dayBase?: (technicianId: string | undefined, date: string) => { base: Coordinates | null } | undefined;
 }
 
-const appendLine = (notes: string | undefined, line: string): string =>
-  notes && notes.trim() ? `${notes.replace(/\s+$/, '')}\n${line}` : line;
+// La riga della sospensione SOSTITUISCE quella scritta prima (al suo posto);
+// le altre note non si toccano. Nessuna riga di prima: in fondo.
+const withLine = (notes: string | undefined, line: string): string => {
+  const lines = (notes || '').split('\n');
+  const at = lines.findIndex(isSuspensionLine);
+  if (at < 0) return notes && notes.trim() ? `${notes.replace(/\s+$/, '')}\n${line}` : line;
+  return lines.flatMap((l, i) => (i === at ? [line] : isSuspensionLine(l) ? [] : [l])).join('\n');
+};
 
-const withLine = (notes: string | undefined, line: string): string =>
-  notes && notes.includes(line) ? notes : appendLine(notes, line);
+// Note senza la riga della sospensione
+const withoutLine = (notes: string | undefined): string =>
+  (notes || '').split('\n').filter(l => !isSuspensionLine(l)).join('\n').replace(/\s+$/, '');
+
+// Senza impronta e stato dato dalla sospensione
+const withoutSuspension = (a: Appointment): Appointment => {
+  const rest = { ...a };
+  delete rest.portalSuspension;
+  delete rest.portalSuspensionState;
+  return rest;
+};
 
 // Applica la sospensione del portale alle pratiche dello snapshot con fase
 // "sospesa" (pratiche appena importate comprese: sono in attesa).
-//  - in attesa o proposte: stato dalla nota (proposta: esce dal giro; chiamata
-//    in coda tolta) + riga nelle note + impronta;
-//  - problematiche, stand-by, annullate: solo riga e impronta;
+//  - in attesa o proposte, oppure ancora ESATTAMENTE nello stato che le aveva
+//    dato la sospensione (nessuno l'ha toccata: es. prima la nota vuota, poi
+//    quella vera): stato dalla nota (proposta: esce dal giro; chiamata in
+//    coda tolta) + riga nelle note + impronta + stato dato (portalSuspensionState);
+//  - cambiate dall'operatore (problematiche, stand-by, annullate): solo riga
+//    e impronta;
 //  - confermate e con una chiamata in corso: mai toccate.
+// La riga non si accumula: quella scritta prima viene sostituita.
 // Stessa impronta = niente (le scelte successive dell'operatore restano);
 // nota cambiata sul portale = si riapplica. Pratica nello snapshot ma non più
-// sospesa: si toglie solo l'impronta. Pratica assente dallo snapshot: niente.
+// sospesa: se è ancora nello stato che le avevamo dato torna in attesa (senza
+// la data e senza la nostra riga, in `restored`); altrimenti si tolgono solo
+// impronta e stato dato. Pratica assente dallo snapshot: niente.
 export const applyPortalSuspensions = (
   all: Appointment[],
   pratiche: Pick<BridgePratica, 'codice' | 'fase' | 'sospensione'>[],
   opts: SuspensionOptions
-): { list: Appointment[]; applied: SuspensionChange[]; cleared: string[] } => {
+): { list: Appointment[]; applied: SuspensionChange[]; cleared: string[]; restored: string[] } => {
   const byKey = new Map<string, Pick<BridgePratica, 'codice' | 'fase' | 'sospensione'>>();
   for (const p of pratiche) {
     const key = codeKey(p.codice);
     if (key && !byKey.has(key)) byKey.set(key, p);
   }
-  if (byKey.size === 0) return { list: all, applied: [], cleared: [] };
+  if (byKey.size === 0) return { list: all, applied: [], cleared: [], restored: [] };
 
   const today = opts.today || localDateStr(opts.now);
   let list = all;
   const applied: SuspensionChange[] = [];
   const cleared: string[] = [];
+  const restored: string[] = [];
   for (const a of all) {
     const key = praticaKey(a);
     const p = key ? byKey.get(key) : undefined;
     if (!p) continue;
 
     if (p.fase !== 'sospesa') {
-      if (a.portalSuspension === undefined) continue;
+      if (a.portalSuspension === undefined && a.portalSuspensionState === undefined) continue;
+      const untouched = suspensionUntouched(a) && a.status !== 'confirmed';
+      // Stato nostro ma chiamata in corso: si riprova al prossimo scaricamento
+      if (untouched && isCallInFlight(a, opts.now)) continue;
       list = list.map(x => {
         if (x.id !== a.id) return x;
-        const rest = { ...x };
-        delete rest.portalSuspension;
-        return rest;
+        const rest = withoutSuspension(x);
+        return untouched
+          ? { ...rest, status: 'pending' as const, issueType: undefined, followUpDate: undefined, notes: withoutLine(x.notes) || undefined }
+          : rest;
       });
       cleared.push(a.id);
+      if (untouched) restored.push(a.id);
       continue;
     }
 
@@ -360,16 +428,19 @@ export const applyPortalSuspensions = (
     const notes = withLine(a.notes, suspensionNoteLine(nota));
     const cls = classifySuspension(nota, today);
     const change = { id: a.id, codice: p.codice, kind: cls.kind, ...(cls.date ? { date: cls.date } : {}) };
-    if (a.status === 'pending' || a.status === 'proposed') {
+    if (a.status === 'pending' || a.status === 'proposed' || suspensionUntouched(a)) {
       // Come quando la pratica esce dal giro: slot liberato, giro ricalcolato,
       // coda delle chiamate svuotata
       const ctx = a.date ? opts.dayBase?.(a.technicianId, a.date) : undefined;
-      list = removeFromRoute(list, a.id, { ...suspensionChanges(cls), notes, portalSuspension: fingerprint }, ctx);
+      const changes = suspensionChanges(cls);
+      const state = suspensionState({ status: changes.status!, issueType: changes.issueType, followUpDate: changes.followUpDate });
+      list = removeFromRoute(list, a.id, { ...changes, notes, portalSuspension: fingerprint, portalSuspensionState: state }, ctx);
       applied.push({ ...change, statusChanged: true });
     } else {
-      list = list.map(x => (x.id === a.id ? { ...x, notes, portalSuspension: fingerprint } : x));
+      // Cambiata dall'operatore: solo riga e impronta (nessuno stato dato)
+      list = list.map(x => (x.id === a.id ? { ...withoutSuspension(x), notes, portalSuspension: fingerprint } : x));
       applied.push({ ...change, statusChanged: false });
     }
   }
-  return { list, applied, cleared };
+  return { list, applied, cleared, restored };
 };

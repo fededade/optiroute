@@ -90,6 +90,7 @@ export interface Appointment {
   contactPerson?: string; // referente alternativo da contattare (nome + ruolo)
   referredBy?: string;    // chi ha indicato il referente (intestatario originario)
   portalSuspension?: string; // pratica sospesa sul portale: impronta della nota già applicata ("-" se vuota)
+  portalSuspensionState?: string; // stato che la sospensione le ha dato ("status|issueType|followUpDate"); assente = scritta solo la riga
 
   // Client & appointment details
   phone?: string;           // Client phone number for the AI confirmation call

@@ -31,7 +31,7 @@ import traceback
 from pathlib import Path
 
 from bridge_cache import componi_note
-from excel_pratiche import Pratica, load_pratiche
+from excel_pratiche import Pratica, codice_leggibile, load_pratiche
 
 # User ID Prelios di default (per mouseClickObj). Sovrascrivibile da --user-id.
 DEFAULT_USER_ID = "8468"
@@ -225,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         print("Login effettuato — inizio giro pratiche")
 
         for i, pratica in enumerate(pratiche, start=1):
-            print(f"[{i}/{len(pratiche)}] Pratica {pratica.codice} ({pratica.intestatario})...")
+            print(f"[{i}/{len(pratiche)}] Pratica {codice_leggibile(pratica.codice)} "
+                  f"({pratica.intestatario})...")
             try:
                 telefono, esito, nota = processa_pratica(browser, pratica, args.user_id)
             except Exception as e:  # noqa: BLE001 — il giro deve continuare

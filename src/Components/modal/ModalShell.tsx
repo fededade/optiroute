@@ -27,6 +27,8 @@ interface ModalShellProps {
   icon: LucideIcon;
   tone?: ModalTone;
   title: React.ReactNode;
+  /** Elemento accanto al titolo (es. il codice della pratica); se non c'è posto va sotto, il titolo resta intero */
+  titleAside?: React.ReactNode;
   subtitle?: React.ReactNode;
   onClose: () => void;
   /** Esc e clic sullo sfondo chiudono la finestra (default: sì) */
@@ -45,7 +47,7 @@ interface ModalShellProps {
 }
 
 const ModalShell: React.FC<ModalShellProps> = ({
-  icon: Icon, tone = 'neutral', title, subtitle, onClose, dismissible = true, closeDisabled = false,
+  icon: Icon, tone = 'neutral', title, titleAside, subtitle, onClose, dismissible = true, closeDisabled = false,
   closeHint, size = 'md', toolbar, footer, bodyClassName, children, testId,
 }) => {
   const titleId = useId();
@@ -85,7 +87,14 @@ const ModalShell: React.FC<ModalShellProps> = ({
             <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="modal-title leading-6 truncate">{title}</h2>
+            {titleAside ? (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
+                <h2 id={titleId} className="modal-title leading-6 truncate min-w-0">{title}</h2>
+                <span className="shrink-0">{titleAside}</span>
+              </div>
+            ) : (
+              <h2 id={titleId} className="modal-title leading-6 truncate">{title}</h2>
+            )}
             {subtitle && (
               <p id={subtitleId} className="modal-subtitle text-[13px] leading-5 text-ink-500">{subtitle}</p>
             )}

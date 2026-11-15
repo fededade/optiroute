@@ -26,6 +26,12 @@ Parti aggiunte dopo il secondo giro sul portale vero:
   (campi senza valori, campi con «sosp» con la sola lunghezza del valore,
   comandi del menu).
 
+Parti aggiunte dopo il primo giro con l'icona di stato: in "stato_portale"
+i codici dell'icona «VT» con i conteggi, le perizie non pubblicate per
+codice, quelle senza icona leggibile e (aggiunta da portals.py) la lettura
+della nota: come si è arrivati alla pagina «Sospesi» e se la griglia è
+comparsa. Solo conteggi e codici di 1-3 lettere, mai testi delle note.
+
 Modulo PURO (solo libreria standard, niente browser): testabile.
 """
 
@@ -555,6 +561,21 @@ def descrivi_perizia(grezza: dict | None, vietati: set[str] = frozenset()) -> di
 
 # === DESCRIZIONE COMPLETA ===
 
+_RE_CODICE_ICONA = re.compile(r"[A-Z]{1,3}")
+
+
+def _conteggi_codici(valori: object) -> dict[str, int]:
+    """{codice dell'icona: quante}: solo codici di 1-3 lettere maiuscole
+    (nient'altro può finire nel file), dal più frequente."""
+    out: dict[str, int] = {}
+    if isinstance(valori, dict):
+        for k, v in valori.items():
+            if isinstance(k, str) and _RE_CODICE_ICONA.fullmatch(k) \
+                    and isinstance(v, int) and not isinstance(v, bool):
+                out[k] = v
+    return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
 def valori_vietati(rows: Iterable[Sequence]) -> set[str]:
     """Nomi e indirizzi presenti nelle righe dati (colonne intestatario,
     via, comune del parser), normalizzati: non devono mai comparire."""
@@ -637,6 +658,12 @@ def descrivi_elenco(righe: list[Sequence], stats: dict | None = None,
                 stato_portale[k] = info_sosp[k]
         if info_sosp.get("motivo_ricerca"):
             stato_portale["motivo_ricerca"] = forma_se_serve(info_sosp["motivo_ricerca"], vietati)
+        # Icona di stato della colonna «VT»: codici (1-3 lettere) con i conteggi
+        if "icone_vt" in info_sosp:
+            stato_portale["colonna_vt_trovata"] = bool(info_sosp.get("colonna_vt"))
+            stato_portale["icone_vt"] = _conteggi_codici(info_sosp.get("icone_vt"))
+            stato_portale["non_pubblicate"] = _conteggi_codici(info_sosp.get("non_pubblicate"))
+            stato_portale["perizie_senza_icona"] = int(info_sosp.get("senza_icona") or 0)
 
     link_pagina = []
     for c in pagina.get("link_pagina") or []:

@@ -4,6 +4,7 @@ import { matchTechnician } from '../services/technicianService';
 import { provinceToCode } from '../utils/provinces';
 import type { BridgePratica } from '../services/bridgeService';
 import { codeKey, praticaKey } from '../services/praticaCode';
+import { withContactFromNote } from '../services/contactNote';
 
 // Nucleo dell'import delle pratiche, comune all'import da file (Excel / MISI)
 // e all'inbox del bridge: righe strutturate -> pratiche (merge per codice,
@@ -104,7 +105,9 @@ export const importRowsToAppointments = async (
           approximates.push(`${row.fullAddress} (${row.title})`);
         }
 
-        newAppointments.push({
+        // Chi chiamare e a quale numero: dalla nota di contatto (es. l'agente
+        // immobiliare indicato dalla banca al posto del cliente)
+        newAppointments.push(withContactFromNote({
           id: Date.now() + Math.random().toString(),
           // Se la posizione è approssimativa manteniamo l'indirizzo del
           // file (quello del comune sarebbe fuorviante per il tecnico)
@@ -122,7 +125,7 @@ export const importRowsToAppointments = async (
           project: row.project,
           technicianId: matched?.id,
           status: 'pending' // Import as pending
-        });
+        }));
       } else {
         failures.push(`${row.fullAddress} (${row.title})`);
       }

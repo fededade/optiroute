@@ -28,7 +28,9 @@ Obiettivo: l'operatore interviene il meno possibile e il giro non resta mai con 
    `--serve`) gira sul PC dell'operatore: dopo il login al portale (l'MFA resta manuale)
    legge le pratiche assegnate, recupera i telefoni e li espone all'app su
    `http://127.0.0.1:8765`. L'app le scarica ogni 5 minuti, le geocodifica e assegna il
-   tecnico. L'import da Excel resta disponibile.
+   tecnico. Dalla nota del gestore capisce chi chiamare (il cliente o, per esempio,
+   l'agente immobiliare indicato dalla banca): vedi "Chi chiamare" più sotto. L'import da
+   Excel resta disponibile.
 2. **I giri si formano da soli.** Le pratiche in attesa con telefono vengono smistate in giri
    proposti, con la **regola del rientro**: l'ultimo sopralluogo del giorno è il più vicino
    alla base del tecnico (se finisce tardi, almeno il rientro è breve). Le proposte non ancora
@@ -325,8 +327,10 @@ chiamare nessun numero che non sia stato autorizzato.
   volta, la scelta si ricorda in questo browser): spuntata, il caricamento elimina anche
   quelle e restano solo le 16 nuove; sono dati della sola versione di prova, la versione
   vera non viene toccata. «Togli le pratiche di prova» elimina solo quelle di prova. Le pratiche hanno nomi di
-  fantasia e casi utili all'operatore AI (un'urgente, un referente, un nome tutto
-  maiuscolo, una senza intestatario, note pratiche, una visita da 40 minuti). Con il
+  fantasia e casi utili all'operatore AI (un'urgente, un referente scritto a mano, due
+  referenti letti dalla nota del portale costruita con il numero indicato, un agente
+  immobiliare con nome e un'agenzia senza nome di persona, un nome tutto maiuscolo, una
+  senza intestatario, note pratiche, una visita da 40 minuti). Con il
   cloud attivo si sincronizzano come ogni altra modifica.
 - **Pilota automatico**: chiama **tutti i giorni, domenica compresa**, negli orari
   impostati (fuori dalla prova la domenica mai e il sabato solo se scelto). Vale nel
@@ -356,6 +360,32 @@ chiamare nessun numero che non sia stato autorizzato.
   cliente è disponibile solo da una data; il resto va fra le problematiche "da richiamare").
   Si applica una volta per nota (nella scheda: etichetta "Sospesa sul portale"); se la nota
   cambia sul portale si riapplica. Il chip del bridge conta le sospese.
+- **Chi chiamare: la nota del gestore** (`src/services/contactNote.ts`). Il telefono arriva
+  dalla nota della banca (nelle note della pratica dopo "Contatto Prelios:"), dove spesso la
+  persona da contattare non è il cliente ma, per esempio, l'agente immobiliare:
+  "ROSSI MARIO - 0039333… - PER IL SOPRALLUOGO CONTATTARE AG. IMM. SIG. LUCA BIANCHI 0039333…".
+  OptiRoute legge ogni numero della nota con la sua etichetta (il testo prima del numero, o
+  quello subito dopo se prima non c'è niente) e capisce di chi è: del cliente (cliente,
+  mutuatario, richiedente…, o il nome dell'intestatario in qualunque ordine, anche solo il
+  cognome), di un'altra persona con un ruolo (agente o agenzia immobiliare, geometra,
+  architetto, amministratore, custode, venditore, familiari, delegato…) o di un'altra
+  persona con nome e cognome. Il numero da chiamare è quello indicato in modo esplicito
+  ("contattare", "chiamare", "rivolgersi", "per il sopralluogo", "chiavi", "c/o"…; "rif." solo se
+  seguito da un ruolo o da un nome, non da un codice di pratica come "Rif: ISP 845.326");
+  dopo "ag. imm."/"agente" senza titolo, un'insegna ("AG. IMM. CASA FACILE") è il nome
+  dell'agenzia e non di una persona; un nome ha al massimo tre parole;
+  altrimenti resta quello scelto dal bridge. Se è di un'altra persona, la pratica prende il
+  **referente** ("Luca Bianchi — agente immobiliare", o "Referente indicato dal cliente —
+  agenzia immobiliare Girasole" senza un nome di persona) e "per conto di" l'intestatario:
+  la chiamata chiede del referente e spiega per conto di chi chiama. Nel dubbio non si
+  inventa niente: si chiama l'intestatario come prima. Vale per le pratiche nuove (bridge
+  ed Excel, dove senza "Contatto Prelios:" si leggono tutte le note) e, a ogni scaricamento
+  del bridge, per quelle già presenti non confermate, non annullate, senza una chiamata in
+  corso e senza referente; il loro telefono cambia solo se è vuoto o è uno dei numeri della
+  nota (un numero corretto a mano non si tocca). La nota letta resta segnata sulla pratica
+  (`contactNote`): se l'operatore toglie o cambia il referente, resta così finché la nota sul
+  portale non cambia. Il referente si scrive o si toglie a mano nella finestra della pratica
+  («Da contattare (se non è l'intestatario)» e «Ruolo»; vuoti = si chiama l'intestatario).
 - **Sopralluoghi confermati al gestionale**: non è più OptiRoute a scriverli nel
   gestionale (il vecchio invio è stato tolto a novembre 2026); è il gestionale che li legge
   dal server di OptiRoute. Vedi la sezione "Dentro il gestionale".

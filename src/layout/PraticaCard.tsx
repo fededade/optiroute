@@ -184,7 +184,7 @@ const PraticaCard: React.FC<PraticaCardProps> = ({ appt, ws, variant = 'card', d
               </span>
             )}
             {appt.contactPerson && (
-              <span className="chip chip-neutral max-w-full" title={appt.referredBy ? `Indicato da ${appt.referredBy}` : 'Referente da contattare'}>
+              <span className="chip chip-neutral max-w-full" title={appt.referredBy ? `Indicato da ${appt.referredBy}` : 'Referente da contattare'} data-testid="pratica-contact">
                 <UserRound size={12} strokeWidth={2} aria-hidden /><span className="truncate">{appt.contactPerson}</span>
               </span>
             )}

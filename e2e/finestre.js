@@ -331,6 +331,20 @@ async function tour(browser, viewport) {
   await dialog(page).getByLabel('Categoria / Problematica').selectOption('works_pending');
   await dialog(page).getByLabel('Data prevista fine lavori').fill('2026-12-01');
   await dialog(page).getByLabel('Note').fill('Cantiere in corso: richiamare a fine lavori.');
+  // referente da contattare al posto dell'intestatario: due campi affiancati
+  // (a 390 px uno sotto l'altro), tutti dentro la finestra
+  const refName = dialog(page).getByLabel('Da contattare (se non è l\'intestatario)');
+  const refRole = dialog(page).getByLabel('Ruolo', { exact: true });
+  assert.equal(await refName.inputValue(), '');
+  await refName.fill('Luca Bianchi');
+  await refRole.fill('agente immobiliare');
+  const nameBox = await refName.boundingBox();
+  const roleBox = await refRole.boundingBox();
+  for (const b of [nameBox, roleBox]) assert.ok(b.x >= dlgBox.x && b.x + b.width <= dlgBox.x + dlgBox.width + 0.5, 'campo del referente dentro la finestra');
+  if (viewport.width >= 1000) assert.ok(Math.abs(nameBox.y - roleBox.y) < 2 && roleBox.x > nameBox.x, 'nome e ruolo affiancati');
+  else assert.ok(roleBox.y > nameBox.y + nameBox.height, 'nome e ruolo uno sotto l\'altro');
+  assert.ok(await dialog(page).evaluate(d => { const f = d.querySelector('form'); return !f || f.scrollWidth <= f.clientWidth + 1; }), 'nessuno scorrimento orizzontale');
+  await refName.scrollIntoViewIfNeeded();
   await shot(page, 'pratica-modifica');
   await page.getByRole('button', { name: 'Salva Modifiche' }).click();
   await dialog(page).waitFor({ state: 'detached' });
@@ -340,7 +354,10 @@ async function tour(browser, viewport) {
   assert.equal(g4.issueType, 'works_pending');
   assert.equal(g4.followUpDate, '2026-12-01');
   assert.equal(g4.date, undefined);
+  assert.equal(g4.contactPerson, 'Luca Bianchi — agente immobiliare');
+  assert.equal(g4.referredBy, 'Cliente Delta');
   ok('pratica: modifica -> problematica "lavori da ultimare" con data di rientro');
+  ok('pratica: referente scritto a mano nella finestra (nome e ruolo, per conto dell\'intestatario)', g4.contactPerson);
 
   // ===== 6. Smistamento (menu Pianifica) =====
   await pianifica(page, /Smista pratiche per zona/);

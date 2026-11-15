@@ -72,6 +72,7 @@ import TestModeBanner from './Components/TestModeBanner';
 import TestPraticheModal from './Components/TestPraticheModal';
 import { testModeTitle, useTestMode } from './services/testMode';
 import { isTestPratica, loadTestScenario, removeTestPratiche } from './services/testPratiche';
+import { applyBridgeContacts } from './services/contactNote';
 
 // --- CONFIGURATION ---
 // URL webhook n8n: configurabile via VITE_N8N_WEBHOOK_URL (Method: POST)
@@ -751,6 +752,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
       let added = 0;
       let suspended = 0;
       let resumed = 0;
+      let referents = 0;
       const opts = portalOptions();
       setAllAppointments(prev => {
         // Sull'elenco e sui tecnici di ADESSO (possono essere cambiati
@@ -763,7 +765,11 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
           updated += 1;
           return { ...a, ...changes };
         });
-        const portalResult = applyPortalSuspensions(next, portal, opts);
+        // Chi chiamare secondo la nota di contatto del portale (pratiche già
+        // presenti: condizioni ricontrollate sull'elenco di adesso)
+        const contacts = applyBridgeContacts(next, portal, opts.now);
+        referents = contacts.applied.length;
+        const portalResult = applyPortalSuspensions(contacts.list, portal, opts);
         suspended = portalResult.applied.length;
         resumed = portalResult.restored.length;
         return portalResult.list;
@@ -772,6 +778,7 @@ function App({ gestionale }: { gestionale?: GestionaleContext } = {}) {
         added, updated, failed: result.failures.length,
         ...(suspended > 0 ? { suspended } : {}),
         ...(resumed > 0 ? { resumed } : {}),
+        ...(referents > 0 ? { referents } : {}),
       };
     } finally {
       importBusyRef.current = false;

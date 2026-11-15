@@ -358,14 +358,40 @@ describe('pratiche di prova', () => {
     const test = load().appointments;
     expect(test.filter(a => a.urgent)).toHaveLength(1);
     const ref = test.filter(a => a.contactPerson);
-    expect(ref).toHaveLength(1);
-    expect(ref[0].contactPerson).toMatch(/^.+ — .+$/);
-    expect(ref[0].referredBy).toBeTruthy();
+    expect(ref).toHaveLength(3);
+    for (const a of ref) {
+      expect(a.contactPerson).toMatch(/^.+ — .+$/);
+      expect(a.referredBy).toBe(a.title);
+      // il numero resta quello di chi prova (chiamate solo ai numeri ammessi)
+      expect(a.phone).toBe(ALLOWED);
+    }
+    // quella scritta a mano resta com'è
+    expect(test.find(a => a.contactPerson === 'Paolo Ricci — geometra')?.contactNote).toBeUndefined();
     expect(test.some(a => /[A-Z]/.test(a.title) && a.title === a.title.toUpperCase() && !/\d/.test(a.title))).toBe(true);
     const noOwner = test.filter(a => a.title === a.shortAddress);
     expect(noOwner).toHaveLength(1);
-    expect(test.filter(a => a.notes)).toHaveLength(2);
+    expect(test.filter(a => a.notes)).toHaveLength(4);
     expect(test.filter(a => a.durationMinutes === 40)).toHaveLength(1);
+  });
+
+  it('referenti dalla nota del portale: uno per gruppo, letti dallo stesso servizio dell\'import', () => {
+    const test = load().appointments;
+    const groups = testPraticheGroups();
+    const fromNote = test.filter(a => a.contactNote);
+    expect(fromNote).toHaveLength(2);
+    expect(new Set(fromNote.map(a => groups.find(g => g.id === a.id)!.group))).toEqual(new Set(['pavia', 'milano']));
+    const agente = fromNote.find(a => /AG\. IMM\./.test(a.notes || ''))!;
+    expect(agente.notes).toBe(`PROVA | Contatto Prelios: CONTATTARE AG. IMM. SIG. ROBERTO NERI ${ALLOWED}`);
+    expect(agente).toMatchObject({ contactPerson: 'Roberto Neri — agente immobiliare', referredBy: 'Giuseppe Marino', phone: ALLOWED });
+    const agenzia = fromNote.find(a => a !== agente)!;
+    expect(agenzia).toMatchObject({ contactPerson: 'Referente indicato dal cliente — agenzia immobiliare Girasole', referredBy: 'Elena De Luca', phone: ALLOWED });
+    // con un numero di cellulare (scritto come lo scrive la banca) vale lo stesso
+    const mobile = loadTestScenario([], defaultTechnicians(), '333 555 0109');
+    if (!mobile.ok) throw new Error(mobile.error);
+    expect(mobile.appointments.filter(a => a.contactNote).map(a => a.contactPerson)).toEqual([
+      'Roberto Neri — agente immobiliare',
+      'Referente indicato dal cliente — agenzia immobiliare Girasole',
+    ]);
   });
 
   it('due gruppi a due tecnici diversi con i tecnici predefiniti (che ricevono la base)', () => {

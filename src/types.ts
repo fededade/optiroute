@@ -89,6 +89,7 @@ export interface Appointment {
   project?: string;       // progetto/committente della pratica
   contactPerson?: string; // referente alternativo da contattare (nome + ruolo)
   referredBy?: string;    // chi ha indicato il referente (intestatario originario)
+  contactNote?: string;   // impronta della nota di contatto del portale già letta (si rilegge solo se cambia)
   portalSuspension?: string; // pratica sospesa sul portale: impronta della nota già applicata ("-" se vuota)
   portalSuspensionState?: string; // stato che la sospensione le ha dato ("status|issueType|followUpDate"); "*" = scritta solo la riga (stato scelto dall'operatore); assente = mai classificata
 

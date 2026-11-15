@@ -774,11 +774,14 @@ PERSONALE = {"cognome": "TESTAFINTA", "nome": "GIOVANNA", "cellulare": "+3902555
              "email": "giovanna.testafinta@banca.example", "key": "KEY-ZZZ"}
 
 
-def _browser_sospesi(trovata: bool = True, griglia: bool = True) -> BrowserPagina:
+def _browser_sospesi(trovata: bool = True, griglia: bool = True,
+                     wstbs: bool = True) -> BrowserPagina:
     righe = [dict(PERSONALE, data="12/11/2026", note="cliente da richiamare il 20/11"),
              dict(PERSONALE, data="02/11/2026", note="prima sospensione")]
     return BrowserPagina({
         prelios._JS_CLICCA_SOSPESI: [None, "clicked" if trovata else None],
+        # ripiego: chiamata diretta wsTbs.Url (solo nel documento principale)
+        prelios._JS_NAV_SOSPESI: ["chiamata" if wstbs else None, None],
         prelios._JS_GRIGLIA_SOSPESI: [
             {"griglia": False, "righe": [], "motivo": "Cliente assente"},
             ({"griglia": True, "righe": righe, "motivo": ""} if griglia else None)],
@@ -795,23 +798,48 @@ def test_pagina_sospesi_finta() -> None:
     b = _browser_sospesi()
     r = prelios.leggi_pagina_sospesi(b, log=lambda *_: None, attesa=2)
     assert r == {"raggiunta": True, "motivo": "Cliente assente", "esito": "OK",
+                 "arrivo": "clic",
                  "righe": [{"data": "12/11/2026", "note": "cliente da richiamare il 20/11"},
                            {"data": "02/11/2026", "note": "prima sospensione"}]}, r
     assert prelios._JS_CLICCA_SOSPESI in b.script
-    # voce «Sospesi» non trovata / griglia non comparsa
-    r = prelios.leggi_pagina_sospesi(_browser_sospesi(trovata=False), log=print, attesa=2)
-    assert not r["raggiunta"] and "«Sospesi» non trovata" in r["esito"]
+    assert prelios._JS_NAV_SOSPESI not in b.script          # clic riuscito: niente ripiego
+    # voce non trovata: chiamata diretta wsTbs.Url
+    b = _browser_sospesi(trovata=False)
+    r = prelios.leggi_pagina_sospesi(b, log=print, attesa=2)
+    assert r["raggiunta"] and r["arrivo"] == "chiamata diretta", r
+    assert prelios._JS_NAV_SOSPESI in b.script
+    # né voce né wsTbs: pagina non aperta
+    r = prelios.leggi_pagina_sospesi(_browser_sospesi(trovata=False, wstbs=False), log=print,
+                                     attesa=2)
+    assert not r["raggiunta"] and r["arrivo"] == ""
+    assert "Anpl_Immobili_Sospesi_ISP non trovata" in r["esito"]
+    assert "pagina «Sospesi» non aperta" in r["esito"], r
+    # griglia non comparsa: il motivo dice come si è arrivati e cosa manca
     r = prelios.leggi_pagina_sospesi(_browser_sospesi(griglia=False), log=print, attesa=2)
-    assert not r["raggiunta"] and "non comparsa" in r["esito"]
-    # Gli script: si clicca SOLO «Sospesi», nessun valore scritto, niente
-    # identificatori inseriti da fuori
+    assert not r["raggiunta"] and "non comparsa" in r["esito"] and r["arrivo"] == "clic"
+    assert "clic sulla voce del menu" in r["esito"] and "«Stato Perizia»" in r["esito"], r
+    r = prelios.leggi_pagina_sospesi(_browser_sospesi(trovata=False, griglia=False),
+                                     log=print, attesa=2)
+    assert "non comparsa" in r["esito"] and "chiamata diretta wsTbs.Url" in r["esito"], r
+    # Gli script: un solo clic, SOLO sull'elemento con il codice di pagina,
+    # con il controllo esplicito dei comandi vietati; nessuna ricerca per
+    # testo, nessun valore scritto, niente identificatori inseriti da fuori
     js = prelios._JS_CLICCA_SOSPESI
-    assert js.count(".click(") == 1 and "t !== 'Sospesi'" in js
-    for vietato in ("Nuovo", "Salva", "Canc", "Riattiva"):
-        assert vietato not in js
-    for js in (prelios._JS_GRIGLIA_SOSPESI, prelios._JS_STRUTTURA_PERIZIA):
-        assert ".click(" not in js and ".value =" not in js and "dispatchEvent" not in js
+    assert js.count(".click(") == 1 and "Anpl_Immobili_Sospesi_ISP" in js
+    for vietato in prelios.COMANDI_VIETATI:
+        assert f"'{vietato}'" in js, vietato
+    assert set(prelios.COMANDI_VIETATI) == {"Riattiva", "wsStatoValutazioneButtons",
+                                            "cmdSaveClick", "cmdCancelClick"}
+    for testo in ("innerText", "textContent", "'Sospesi'", ".value"):
+        assert testo not in js, testo
+    nav = prelios._JS_NAV_SOSPESI
+    assert "wsTbs.Url('Anpl_Immobili_Sospesi_ISP','ISPVL_','','5.208',null);" in nav
+    for js in (nav, prelios._JS_GRIGLIA_SOSPESI, prelios._JS_STRUTTURA_PERIZIA,
+               prelios._JS_CLICCA_SOSPESI):
+        assert ".value =" not in js and "dispatchEvent" not in js
         assert "%s" not in js and "{}" not in js
+    for js in (nav, prelios._JS_GRIGLIA_SOSPESI, prelios._JS_STRUTTURA_PERIZIA):
+        assert ".click(" not in js
     print("OK test_pagina_sospesi_finta")
 
 

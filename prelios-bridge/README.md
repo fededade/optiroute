@@ -218,21 +218,50 @@ Regole dei cicli (cache `bridge_cache.json` nella cartella del bridge):
 - per le **sospese**, oltre al telefono si legge la nota di sospensione
   (pagina «Sospesi» della perizia). La nota si rilegge quando cambia la
   data di sospensione o dopo 24 ore, al massimo 10 riletture per ciclo
-  (prima i telefoni mancanti, poi le note).
+  (prima i telefoni mancanti, poi le note);
+- una perizia **sospesa** arriva a OptiRoute solo **dopo il primo
+  tentativo di lettura della sua nota** (riuscito o no): così non compare
+  prima "senza nota" e poi "con la nota". Quelle non ancora tentate (oltre
+  il limite di 10) compaiono al ciclo dopo; il log dice quante sono in
+  attesa;
+- nei messaggi della finestra il numero della perizia si scrive con il
+  puntino (`844.787`), come sul portale; nei dati consegnati a OptiRoute e
+  nella cache resta com'è.
 
 ### Stato delle perizie sul portale
 
 Dall'elenco il bridge legge, **per nome della colonna** (non per posizione),
 le colonne Conclusa, Sopralluogo, Valutata, Sospesa, Revoca, Sospensione e
-Inoltrata Perizia, e calcola per ogni pratica la `fase`:
+Inoltrata Perizia e l'**icona di stato** della colonna «VT»: il nome del
+file dell'immagine è il codice dello stato (`EL.gif` → `EL`). Per ogni
+pratica calcola la `fase`, con queste regole in ordine:
 
-| fase | quando |
-|---|---|
-| `chiusa` | Conclusa, Inoltrata Perizia o Revoca non vuote |
-| `effettuato` | Valutata non vuota, oppure Sopralluogo con una data passata |
-| `fissato` | Sopralluogo con la data di oggi o futura |
-| `sospesa` | la perizia è fra le **sospese adesso** (vedi sotto) |
-| `da_fissare` | altrimenti |
+| # | fase | quando |
+|---|---|---|
+| 1 | `chiusa` | icona `EL` (eliminata), `AB` (abbandonata), `IR` (incarico rifiutato), `IP` (perizia inoltrata) o `PI` (perizia inviata), qualunque data ci sia |
+| 2 | `chiusa` | Conclusa, Inoltrata Perizia o Revoca non vuote |
+| 2 | `effettuato` | icona `VT` (valutata) o `PR` (perizia riaperta), oppure Valutata non vuota, oppure Sopralluogo con una data passata |
+| 2 | `fissato` | Sopralluogo con la data di oggi o futura |
+| 3 | `sospesa` | icona `SP`, oppure la perizia è fra le **sospese adesso** (vedi sotto) |
+| 4 | `da_fissare` | icona `IN` (incarico accettato) o `AT` |
+| 5 | — | icona con un altro codice e nessuna data: la perizia **NON viene consegnata a OptiRoute** né aperta sul portale |
+| 6 | come prima | icona non leggibile: date, poi sospese adesso, altrimenti `da_fissare` |
+
+**Da programmare** sono quindi solo le perizie `da_fissare` (icona `IN` o
+`AT`) e `sospesa`. Le eliminate non finiscono più fra quelle da fissare.
+Le perizie in uno stato già consegnato o chiuso (`IP`, `PI`, `VT`, `PR`)
+vengono consegnate come **non da programmare**: chi le aveva già
+importate in OptiRoute le vede uscire dal giro. Il significato di questi
+codici viene dai conteggi del primo giro vero: le 139 icone `IP` sono
+esattamente le righe con la data «Inoltrata Perizia», e `IP` + `PI` (152)
+sono esattamente le righe con la data «Conclusa». Le perizie della regola
+5 (un codice mai visto) sono contate per codice nel log, per esempio
+`3 perizie non pubblicate perché in uno stato che non conosco (XX: 2,
+ZZ: 1)`. I codici stanno tutti in un punto solo, `CODICI_ICONA` in
+`stato_portale.py`, con la fonte di ognuno. Se per una riga l'icona non si
+legge (portale cambiato), per quella vale la regola di prima e compare
+UNA riga di avviso nel log per ciclo. Gli elenchi da file (Excel/TSV) non
+hanno icone: per loro vale la regola di prima.
 
 **Sospese adesso**: una data nella colonna «Sospensione» non basta (la
 perizia può essere stata riattivata). Dopo la lettura normale il bridge fa
@@ -249,22 +278,37 @@ pagina NON vengono cliccati (sono solo descritti in `elenco_struttura.json`).
 
 Dopo ogni lettura, nella finestra del bridge compare una riga di soli
 conteggi, per esempio: `Stato sul portale: 4 con sopralluogo fissato, 5 già
-fatte o chiuse, 6 sospese, 0 da fissare`. Se le intestazioni non si trovano
-o manca una di quelle colonne, lo scrive nel log e le pratiche restano
+fatte o chiuse, 6 sospese, 0 da fissare, 3 non pubblicate (stato non
+riconosciuto)` (l'ultima parte solo per l'elenco letto dal portale). Se
+le intestazioni non si trovano o manca una di quelle colonne, lo scrive
+nel log e le pratiche restano
 senza stato (comportamento di prima). Vale anche per gli elenchi da file
 (Excel/TSV) se hanno quelle intestazioni (lì senza seconda ricerca: vale la
 colonna «Sospensione»).
 
-**Nota di sospensione**: per le sospese, dopo l'Anagrafica il bridge
-clicca la voce del menu della perizia il cui testo è esattamente
-«Sospesi» (nessun altro comando: mai Nuovo, Salva, Canc., Riattiva; niente
-scritto nei campi), aspetta la griglia e ne legge SOLO le colonne «Data» e
-«Note»: la nota è quella della riga più recente, preceduta dal «Motivo
-Sospensione» scelto. Cognome, nome, cellulare ed email di chi ha sospeso
-non vengono letti. Se la nota più recente dice «sopralluogo fissato» con
-una data e la colonna Sopralluogo è vuota, la pratica vale `fissato` con
-quella data. Se la voce «Sospesi» non si trova o la griglia non compare,
-la nota resta vuota e compare UNA riga nel log per ciclo.
+**Nota di sospensione**: per le sospese, dopo l'Anagrafica il bridge va
+alla pagina «Sospesi» della perizia. Le voci del menu della perizia sono
+campi usati come pulsanti: il bridge clicca SOLO quello il cui comando
+contiene esattamente il codice di pagina `Anpl_Immobili_Sospesi_ISP`; se
+non c'è, fa la stessa navigazione con la chiamata diretta
+`wsTbs.Url('Anpl_Immobili_Sospesi_ISP',…)` (come per l'Anagrafica). Non
+cerca nulla per testo. Prima del clic ricontrolla che il comando non
+contenga nessuno dei comandi che **cambiano lo stato della perizia** o
+salvano: «Attiva» (`Anpl_Immobili_Riattiva_ISP`), i pulsanti di stato
+(`wsStatoValutazioneButtons…`: «Sospesa», «Riattiva», «Inoltra Perizia»,
+«Conclusa», «Abbandona», «Accetta», «Rifiuta»…), «Salva»
+(`cmdSaveClick`), «Canc.» (`cmdCancelClick`): quelli non vengono MAI
+cliccati, e nei campi non viene scritto niente. Poi aspetta la griglia
+(riga di intestazione con «Data», «Note» e «Stato Perizia»; le righe sono
+tutte quelle della pagina con lo stesso numero di celle, anche se stanno
+in un'altra tabella) e ne legge SOLO le colonne «Data» e «Note»: la nota è quella della riga più
+recente, preceduta dal «Motivo Sospensione» scelto. Cognome, nome,
+cellulare ed email di chi ha sospeso non vengono letti. Se la nota più
+recente dice «sopralluogo fissato» con una data e la colonna Sopralluogo è
+vuota, la pratica vale `fissato` con quella data. Se la pagina non si apre
+o la griglia non compare, la nota resta vuota e compare UNA riga nel log
+per ciclo, che dice come si è arrivati alla pagina (clic o chiamata
+diretta) e cosa non si è trovato.
 
 `--serve --dry-run elenco.xlsx` espone le pratiche del file senza aprire il
 portale (telefoni vuoti, cache non scritta): utile per provare la web app.
@@ -340,9 +384,19 @@ Verificato (test automatici, senza portale):
   un portale simulato, nota dalla pagina «Sospesi» simulata (i dati di chi
   ha sospeso non finiscono mai in log, cache, snapshot o descrizione),
   regola "quali aprire", riletture della nota, cache vecchia che si carica;
+- icona di stato «VT»: tutti i rami della regola con i codici (e le
+  precedenze `EL` > date > `SP` > `IN`), codici sconosciuti non consegnati
+  e contati, icona mancante con la regola di prima, sospese consegnate solo
+  dopo il primo tentativo di lettura della nota, numero col puntino nei
+  messaggi;
 - gli script JavaScript nuovi sono stati eseguiti in un Chromium vero su
-  pagine finte (elenco con le 32 colonne, pagina della perizia, pagina
-  «Sospesi»), fuori dal repository;
+  pagine finte, fuori dal repository: elenco con le 32 colonne vere e le
+  icone (`SP.gif`, `EL.gif`, `IN.gif`…, anche con la colonna «VT» spostata
+  o l'intestazione in una tabella a parte), pagina della perizia con le
+  voci del menu vere (testi e comandi presi dalla descrizione anonima del
+  portale): viene cliccato solo «Sospesi», mai «Attiva», «Sospesa»,
+  «Riattiva», «Salva», «Canc.», nemmeno con comandi-trappola; pagina
+  «Sospesi»;
 - il giro classico `--dry-run` produce lo stesso output di prima;
 - collegamento col gestionale: indirizzi ammessi/rifiutati, controllo
   amministratore con un gestionale simulato (admin, tecnico, email non
@@ -373,11 +427,22 @@ la lettura del gestionale reale.
 - **seconda ricerca delle sospese**: la scelta in «Stato Perizia» della
   voce che contiene «sospes», l'attesa della griglia nuova e il ritorno del
   menu al valore vuoto;
-- **pagina «Sospesi»**: il clic sulla voce «Sospesi», l'attesa della
-  griglia e la lettura di «Data» e «Note» (scritti dal video del portale e
-  provati solo su pagine finte in un Chromium vero);
-- **colonne a icona** («VT», «App 1/2/3», «Sospesa», «Revoca»): il bridge
-  non le usa per lo stato; ne descrive solo il contenuto (immagini,
+- **pagina «Sospesi»**: che il clic sulla voce (o la chiamata diretta)
+  apra davvero la pagina, l'attesa della griglia e la lettura di «Data» e
+  «Note». La voce e il suo comando sono quelli veri (dalla descrizione
+  anonima), ma la griglia è scritta dal video del portale e provata solo su
+  pagine finte in un Chromium vero (anche con la testata in una tabella e
+  le righe in un'altra, come fa la griglia dell'elenco). Il primo giro vero dirà, in
+  `elenco_struttura.json` (`stato_portale.lettura_nota`), come si è
+  arrivati alla pagina e se la griglia è comparsa;
+- **icona di stato «VT»**: i nomi dei file (`EL.gif`, `SP.gif`…) e le
+  intestazioni sono quelli veri, ma la lettura dell'icona è provata solo su
+  pagine finte; il significato di `AB`, `IR` e `AT` è dedotto dai comandi
+  del portale (mai visti come icona) e quello di `IP`, `PI`, `VT`, `PR` dai
+  conteggi delle colonne di data del primo giro (non da un elenco ufficiale
+  del portale);
+- le altre **colonne a icona** («App 1/2/3», «Sospesa», «Revoca»): il
+  bridge non le usa per lo stato; ne descrive solo il contenuto (immagini,
   chiamate) in `elenco_struttura.json`;
 - l'ipotesi che la regola delle fasi corrisponda a come il portale usa le
   colonne di data;
@@ -423,6 +488,11 @@ non dei clienti:
   «Trovati» e «Max Righe»; i **link delle pagine** (solo descritti);
 - come è stato deciso chi è **sospeso** (seconda ricerca o ripiego sulla
   colonna) con i conteggi per fase;
+- i **codici dell'icona «VT»** trovati con i conteggi, quante perizie non
+  sono state consegnate per codice, quante senza icona leggibile; per la
+  **nota di sospensione** del ciclo: quanti tentativi, come si è arrivati
+  alla pagina «Sospesi» (clic o chiamata diretta) e se la griglia è
+  comparsa (mai i testi delle note);
 - la sezione **`perizia`**: com'è fatta la pagina Anagrafica di una
   perizia e, se raggiunta, la pagina «Sospesi» (campi senza valori,
   intestazioni delle tabelle, comandi del menu con la chiamata completa e
@@ -515,6 +585,7 @@ python test_contact_parse.py
 python test_elenco_griglia.py
 python test_struttura_elenco.py
 python test_stato_portale.py
+python test_icona_stato.py
 python test_bridge_cache.py
 python test_servizio.py
 python test_bridge_server.py

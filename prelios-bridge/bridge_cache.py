@@ -13,7 +13,9 @@ app riceve subito gli ultimi dati noti (mentre si attende il login).
 Stato sul portale (stato_portale.py): le pratiche con il sopralluogo già
 fissato, già fatto o chiuse NON vengono aperte (non verranno programmate);
 per quelle sospese si legge anche la nota di sospensione, riletta quando
-cambia la data di sospensione o dopo 24 ore. Il formato del file resta la
+cambia la data di sospensione o dopo 24 ore; nella modalità servizio una
+sospesa compare nello snapshot solo dopo il primo tentativo di lettura
+della nota (snapshot(attendi_nota=True)). Il formato del file resta la
 versione 1: i record scritti prima non hanno i campi nuovi e restano validi.
 
 Modulo PURO (solo libreria standard + excel_pratiche): testabile senza
@@ -296,17 +298,44 @@ class BridgeCache:
 
     # --- vista per l'HTTP (contratto v1) ---
 
-    def snapshot(self, portal: str) -> list[dict]:
+    @staticmethod
+    def _nota_tentata(rec: dict) -> bool:
+        """True se per la pratica c'è stato almeno un tentativo di lettura
+        della nota di sospensione (riuscito o no)."""
+        sosp = rec.get("sospensione")
+        return isinstance(sosp, dict) and bool(sosp.get("tentataIl"))
+
+    def sospese_in_attesa_nota(self, portal: str) -> int:
+        """Pratiche sospese dell'ultimo elenco mai tentate per la nota: con
+        snapshot(attendi_nota=True) non sono ancora pubblicate."""
+        n = 0
+        for c in self.data["elenco"].get(portal, []):
+            rec = self.data["pratiche"].get(self.chiave(portal, c))
+            if not rec or not isinstance(rec.get("pratica"), dict):
+                continue
+            p = Pratica.da_dict(rec["pratica"])
+            if p.fase == SOSPESA and not self._nota_tentata(rec):
+                n += 1
+        return n
+
+    def snapshot(self, portal: str, attendi_nota: bool = False) -> list[dict]:
         """Pratiche dell'ultimo elenco del portale nel formato del contratto
         HTTP v1 (campo `pratiche[]`). I campi dello stato sul portale
         (contratto §6: stato, fase, dataSopralluogo, sospensione) ci sono
-        solo quando noti."""
+        solo quando noti.
+
+        attendi_nota: una pratica sospesa compare solo DOPO il primo
+        tentativo di lettura della sua nota (riuscito o no), così chi legge
+        non la vede prima "senza nota" e poi "con la nota" (modalità
+        servizio con un portale che legge la nota)."""
         out = []
         for c in self.data["elenco"].get(portal, []):
             rec = self.data["pratiche"].get(self.chiave(portal, c))
             if not rec or not isinstance(rec.get("pratica"), dict):
                 continue
             p = Pratica.da_dict(rec["pratica"])
+            if attendi_nota and p.fase == SOSPESA and not self._nota_tentata(rec):
+                continue
             riga = {
                 "portal": portal,
                 "codice": p.codice,
@@ -351,7 +380,7 @@ class BridgeCache:
                 out.append(str(sosp.get("nota") or ""))
         return [t for t in out if t]
 
-    def conteggi(self, portal: str) -> tuple[int, int]:
-        """(pratiche nell'elenco, di cui con telefono)."""
-        snap = self.snapshot(portal)
+    def conteggi(self, portal: str, attendi_nota: bool = False) -> tuple[int, int]:
+        """(pratiche pubblicate, di cui con telefono)."""
+        snap = self.snapshot(portal, attendi_nota=attendi_nota)
         return len(snap), sum(1 for r in snap if r["telefono"])

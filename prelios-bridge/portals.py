@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 
 from excel_pratiche import Pratica, parse_grid_rows
+from stato_portale import riga_non_pubblicate
 
 
 class PortaleNonConfigurato(RuntimeError):
@@ -47,6 +48,10 @@ class PortalAdapter:
     legge_sospensione = False
     # True se nel ciclo corrente è già stata descritta la pagina di una perizia
     perizia_descritta = False
+    # Ultimo elenco letto dal portale: perizie NON pubblicate perché in uno
+    # stato non riconosciuto, per codice dell'icona (None = non noto, es.
+    # elenco da file)
+    non_pubblicate: dict[str, int] | None = None
 
     def login(self, browser, wait_seconds: int = 240, log=print,
               navigate: bool = True) -> bool:
@@ -113,6 +118,16 @@ class PreliosAdapter(PortalAdapter):
         self._descrivi_sospesi = False
         self.perizia_descritta = False
         self._testi_letti: set[str] = set()
+        self.non_pubblicate = None
+        self._lettura_nota = self._lettura_nota_vuota()
+
+    @staticmethod
+    def _lettura_nota_vuota() -> dict:
+        """Conteggi (per ciclo) dei tentativi di lettura della nota di
+        sospensione: come si è arrivati alla pagina «Sospesi» e se la
+        griglia è comparsa. Mai testi delle note."""
+        return {"tentativi": 0, "arrivo_con_clic": 0, "arrivo_con_chiamata_diretta": 0,
+                "pagina_non_aperta": 0, "griglia_comparsa": 0, "griglia_non_comparsa": 0}
 
     # --- descrizione della pagina della perizia ---
 
@@ -129,6 +144,17 @@ class PreliosAdapter(PortalAdapter):
         import prelios
         from stato_portale import nota_da_sospesi
         ris = prelios.leggi_pagina_sospesi(browser, log=log)
+        conta = self._lettura_nota
+        conta["tentativi"] += 1
+        arrivo = ris.get("arrivo")
+        if arrivo == prelios.ARRIVO_CLIC:
+            conta["arrivo_con_clic"] += 1
+        elif arrivo == prelios.ARRIVO_CHIAMATA:
+            conta["arrivo_con_chiamata_diretta"] += 1
+        else:
+            conta["pagina_non_aperta"] += 1
+        if arrivo:
+            conta["griglia_comparsa" if ris.get("raggiunta") else "griglia_non_comparsa"] += 1
         if not ris.get("raggiunta"):
             return {"letta": False, "nota": "", "dal": "", "esito": ris.get("esito", "")}
         if self._descrivi_sospesi:
@@ -187,6 +213,10 @@ class PreliosAdapter(PortalAdapter):
         if d is None:
             return None
         d = dict(d)
+        if isinstance(d.get("stato_portale"), dict) and self._lettura_nota["tentativi"]:
+            # lettura della nota in questo ciclo: solo conteggi, mai testi
+            d["stato_portale"] = dict(d["stato_portale"],
+                                      lettura_nota=dict(self._lettura_nota))
         if self._perizia_grezza is not None or self._sospesi_grezza is not None:
             from struttura_elenco import descrivi_perizia
             vietati = self.valori_da_nascondere()
@@ -214,34 +244,58 @@ class PreliosAdapter(PortalAdapter):
         import prelios
         self._descrizione = None
         self._vietati = set()
+        self.non_pubblicate = None
+        self._lettura_nota = self._lettura_nota_vuota()   # nuovo ciclo
         info: dict = {}
         righe = prelios.list_assigned(browser, log=log, info=info, max_righe=self.max_righe,
                                       cerca_sospese_ora=True)
         stats: dict = {}
         pagina = info.get("pagina") if isinstance(info.get("pagina"), dict) else {}
         th = [t.get("celle") or [] for t in (pagina.get("th") or []) if isinstance(t, dict)]
+        # Icona «VT» di ogni riga (allineata per indice); lista vuota se lo
+        # script non l'ha restituita: per tutte vale la regola di prima
+        icone = list(info.get("icone") or [])
 
         # Sospese ADESSO: dalla seconda ricerca, se è stata possibile
         ricerca = info.get("sospese") if isinstance(info.get("sospese"), dict) else {}
         righe_sospese = list(ricerca.get("righe") or []) if ricerca.get("esito") == "ok" else []
+        icone_sospese = list(ricerca.get("icone") or []) if ricerca.get("esito") == "ok" else []
         codici_sospesi: set[str] | None = None
         if ricerca.get("esito") == "ok":
             codici_sospesi = {p.codice for p in parse_grid_rows(
                 righe_sospese, solo_tipologia=None, intestazioni=th)}
-        pratiche = parse_grid_rows(righe, stats=stats, intestazioni=th, sospese=codici_sospesi)
+        pratiche = parse_grid_rows(righe, stats=stats, intestazioni=th, sospese=codici_sospesi,
+                                   icone=icone)
+        non_pubblicate = dict(stats.get("non_pubblicate") or {})
         aggiunte = 0
         if codici_sospesi is not None:
             noti = {p.codice for p in pratiche}
-            for p in parse_grid_rows(righe_sospese, intestazioni=th, sospese=codici_sospesi):
+            # (qui le icone non escludono nessuno: sono tutte nella ricerca
+            # delle sospese, quindi «sospesa» o, con le date, fissate/chiuse)
+            for p in parse_grid_rows(righe_sospese, intestazioni=th, sospese=codici_sospesi,
+                                     icone=icone_sospese):
                 if p.codice not in noti:   # sospese vecchie, fuori dalle più recenti
                     pratiche.append(p)
                     noti.add(p.codice)
                     aggiunte += 1
+        self.non_pubblicate = non_pubblicate
         stato_info = {
             "strada": "ricerca_sospese" if codici_sospesi is not None else "colonna_sospensione",
             "sospese_trovate": len(codici_sospesi) if codici_sospesi is not None else None,
             "sospese_aggiunte": aggiunte,
+            "icone_vt": dict(stats.get("icone") or {}),
+            "non_pubblicate": non_pubblicate,
+            "senza_icona": int(stats.get("senza_icona") or 0),
+            "colonna_vt": bool(info.get("colonna_vt")),
         }
+        if stats.get("senza_icona"):
+            log("ATTENZIONE: icona di stato della colonna «VT» non letta per "
+                f"{stats['senza_icona']} perizie"
+                + ("" if info.get("colonna_vt") else " (intestazione «VT» non trovata)")
+                + ": per quelle uso la regola di prima (date e ricerca delle sospese, "
+                "altrimenti «da fissare»).")
+        if non_pubblicate:
+            log(riga_non_pubblicate(non_pubblicate))
         if codici_sospesi is None:
             stato_info["motivo_ricerca"] = str(ricerca.get("esito") or "ricerca non fatta")[:200]
             log("ATTENZIONE: ricerca delle perizie sospese non possibile "

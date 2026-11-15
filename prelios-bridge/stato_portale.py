@@ -1,4 +1,4 @@
-"""Stato di ogni perizia sul portale, letto dalle colonne di data dell'elenco.
+"""Stato di ogni perizia sul portale, letto dall'icona «VT» e dalle colonne di data.
 
 L'Elenco Perizie del portale ha, fra le altre, queste colonne (nomi presi
 dalla descrizione anonima `elenco_struttura.json` prodotta dal bridge sul
@@ -11,16 +11,32 @@ Le colonne sono trovate PER NOME nella riga delle intestazioni, mai per
 posizione. Se le intestazioni non si trovano o manca una colonna, nessun
 campo di stato (comportamento di prima).
 
+Icona di stato: nella colonna «VT» dell'elenco del portale ogni riga ha
+un'icona; il nome del file dell'immagine senza estensione è il CODICE dello
+stato (EL.gif → EL). Vedi CODICI_ICONA (l'unico punto in cui stanno i
+codici). Gli elenchi da file (Excel/TSV) non hanno icone: per loro, e per
+le righe del portale in cui l'icona non si legge, vale la regola di prima.
+
 Fase (regole in ordine di precedenza, `oggi` è un parametro):
-- `chiusa`      Conclusa, Inoltrata Perizia o Revoca non vuote;
-- `effettuato`  Valutata non vuota, oppure Sopralluogo con data prima di oggi;
-- `fissato`     Sopralluogo con data di oggi o successiva;
-- `sospesa`     la perizia è fra quelle trovate dalla SECONDA ricerca del
-                portale («Stato Perizia» = sospesa): sono le sospese ADESSO.
-                Se quella ricerca non è stata possibile, ripiego: colonna
-                Sospensione (o Sospesa) non vuota. (Una data in Sospensione
-                da sola non basta: la perizia può essere stata riattivata.)
-- `da_fissare`  altrimenti.
+1. `chiusa`      codice EL, AB, IR, IP o PI (eliminata, abbandonata,
+                 incarico rifiutato, perizia inoltrata, perizia inviata),
+                 qualunque data ci sia;
+2. `chiusa`      Conclusa, Inoltrata Perizia o Revoca non vuote;
+   `effettuato`  codice VT o PR (valutata, perizia riaperta), oppure
+                 Valutata non vuota, oppure Sopralluogo con data prima di oggi;
+   `fissato`     Sopralluogo con data di oggi o successiva;
+3. `sospesa`     codice SP, oppure la perizia è fra quelle trovate dalla
+                 SECONDA ricerca del portale («Stato Perizia» = sospesa):
+                 sono le sospese ADESSO;
+4. `da_fissare`  codice IN o AT;
+5. codice presente ma non in CODICI_ICONA (stato non riconosciuto) e
+   nessuna data che decida: la perizia NON va
+   pubblicata né aperta (fase NON_RICONOSCIUTA, mai nello snapshot);
+6. icona non letta (elenco da file, o portale cambiato): regola di prima,
+   cioè dopo le date `sospesa` se è nella ricerca delle sospese (se quella
+   ricerca non è stata possibile, ripiego: colonna Sospensione o Sospesa
+   non vuota; una data in Sospensione da sola non basta, la perizia può
+   essere stata riattivata), altrimenti `da_fissare`.
 
 Nota di sospensione: dalla pagina «Sospesi» della perizia (vedi
 prelios.leggi_pagina_sospesi): la riga più recente. Se dice «sopralluogo
@@ -45,6 +61,43 @@ CHIUSA = "chiusa"
 FASI = (DA_FISSARE, FISSATO, EFFETTUATO, SOSPESA, CHIUSA)
 # Perizie che non verranno programmate: il bridge non le apre sul portale
 FASI_DA_NON_APRIRE = frozenset({FISSATO, EFFETTUATO, CHIUSA})
+# Icona «VT» con un codice che non conosco e nessuna data: la perizia NON
+# viene pubblicata né aperta (non è una fase del contratto, non esce mai)
+NON_RICONOSCIUTA = "non_riconosciuta"
+
+# Codici dell'icona della colonna «VT» (nome del file senza estensione,
+# maiuscolo) → (fase, testo di stato, colonna di data da aggiungere al
+# testo o ''). È L'UNICO punto in cui stanno.
+# Fonte: il file descrittivo del primo giro sul portale vero (198 righe):
+# - EL (13) = eliminata: la perizia aperta per la descrizione risultava
+#   «Eliminata»;
+# - SP (18) = sospesa: coincidono con le 18 della ricerca «Stato Perizia» =
+#   Sospesa;
+# - IN (9) = incarico accettato (presa in carico, ancora da fare);
+# - IP (139) = perizia inoltrata: esattamente le 139 righe con la data
+#   «Inoltrata Perizia»;
+# - PI (13) = perizia inviata/conclusa: IP + PI = 152 = le righe con la data
+#   «Conclusa»;
+# - VT (5) = valutata;
+# - PR (1) = perizia riaperta dopo la consegna (non da programmare).
+# AB, IR e AT NON sono mai stati visti come icona: sono dedotti dai comandi
+# della pagina della perizia (ButAction.AB «Abbandona», ButAction.IR
+# «Rifiuta») e dalla voce «Attivata» del menu «Stato Perizia».
+# Un codice che NON è qui (mai visto finora) senza date: perizia non
+# pubblicata (regola 5), contata per codice nel log.
+CODICI_ICONA: dict[str, tuple[str, str, str]] = {
+    "EL": (CHIUSA, "Eliminata", ""),
+    "AB": (CHIUSA, "Abbandonata", ""),
+    "IR": (CHIUSA, "Incarico rifiutato", ""),
+    "IP": (CHIUSA, "Perizia inoltrata", "inoltrata"),
+    "PI": (CHIUSA, "Perizia inviata", "conclusa"),
+    "VT": (EFFETTUATO, "Valutata", "valutata"),
+    "PR": (EFFETTUATO, "Perizia riaperta", ""),
+    "SP": (SOSPESA, "", ""),
+    "IN": (DA_FISSARE, "", ""),
+    "AT": (DA_FISSARE, "", ""),
+}
+_RE_CODICE_ICONA = re.compile(r"[A-Z]{1,3}")
 
 STATO_MAX = 80
 NOTA_MAX = 600
@@ -157,26 +210,51 @@ def _it(d: date) -> str:
 
 # === FASE E STATO ===
 
-def fase(valori: dict, oggi: date, sospesa_ora: bool | None = None) -> str:
+def codice_icona(valore: object) -> str | None:
+    """Codice dell'icona «VT» normalizzato: 1-3 lettere maiuscole; None se
+    assente o non valido (= icona non letta)."""
+    if not isinstance(valore, str):
+        return None
+    s = valore.strip().upper()
+    return s if _RE_CODICE_ICONA.fullmatch(s) else None
+
+
+def fase(valori: dict, oggi: date, sospesa_ora: bool | None = None,
+         icona: object = None) -> str:
     """Fase della perizia dalle celle di stato (chiavi di COLONNE_STATO;
-    chiavi mancanti = celle vuote). Vedi le regole in testa al modulo.
+    chiavi mancanti = celle vuote) e dal codice dell'icona «VT». Vedi le
+    regole in testa al modulo.
 
     sospesa_ora: True/False se è nota la ricerca delle sospese del portale
     (la perizia c'è o non c'è); None se quella ricerca non è stata
-    possibile (ripiego sulle colonne Sospensione/Sospesa)."""
+    possibile (senza icona: ripiego sulle colonne Sospensione/Sospesa).
+    icona: codice dell'icona (es. 'EL'); None = non letta (regola di prima).
+    Può ritornare NON_RICONOSCIUTA: perizia da non pubblicare."""
+    codice = codice_icona(icona)
+    noto = CODICI_ICONA.get(codice or "")
+    if noto and noto[0] == CHIUSA:
+        return CHIUSA
     if any(_pieno(valori.get(k)) for k in ("conclusa", "inoltrata", "revoca")):
         return CHIUSA
+    if noto and noto[0] == EFFETTUATO:   # valutata/riaperta: anche con un sopralluogo futuro
+        return EFFETTUATO
     sopralluogo = leggi_data(valori.get("sopralluogo"))
     if _pieno(valori.get("valutata")) or (sopralluogo is not None and sopralluogo < oggi):
         return EFFETTUATO
     if sopralluogo is not None:
         return FISSATO
-    if sospesa_ora is None:
-        if _pieno(valori.get("sospensione")) or _pieno(valori.get("sospesa")):
+    if codice is None:   # icona non letta: regola di prima
+        if sospesa_ora is None:
+            if _pieno(valori.get("sospensione")) or _pieno(valori.get("sospesa")):
+                return SOSPESA
+        elif sospesa_ora:
             return SOSPESA
-    elif sospesa_ora:
+        return DA_FISSARE
+    if (noto and noto[0] == SOSPESA) or sospesa_ora:
         return SOSPESA
-    return DA_FISSARE
+    if noto and noto[0] == DA_FISSARE:
+        return DA_FISSARE
+    return NON_RICONOSCIUTA
 
 
 def _con_data(testo: str, valore: object, preposizione: str = "il") -> str:
@@ -184,18 +262,22 @@ def _con_data(testo: str, valore: object, preposizione: str = "il") -> str:
     return f"{testo} {preposizione} {_it(d)}" if d else testo
 
 
-def stato_perizia(valori: dict, oggi: date, sospesa_ora: bool | None = None) -> dict:
+def stato_perizia(valori: dict, oggi: date, sospesa_ora: bool | None = None,
+                  icona: object = None) -> dict:
     """Fase, testo per le persone e date ISO di una perizia.
 
     Returns:
         {"fase", "stato" (max 80, '' per da_fissare), "data_sopralluogo"
          (AAAA-MM-GG o ''), "data_sospensione" (AAAA-MM-GG o '', solo per
          la fase sospesa)}"""
-    f = fase(valori, oggi, sospesa_ora)
+    f = fase(valori, oggi, sospesa_ora, icona)
     sopralluogo = leggi_data(valori.get("sopralluogo"))
     stato = ""
     data_sospensione = ""
-    if f == CHIUSA:
+    noto = CODICI_ICONA.get(codice_icona(icona) or "")
+    if noto and f == noto[0] and f in (CHIUSA, EFFETTUATO):
+        stato = _con_data(noto[1], valori.get(noto[2])) if noto[2] else noto[1]
+    elif f == CHIUSA:
         if _pieno(valori.get("conclusa")):
             stato = _con_data("Conclusa", valori.get("conclusa"))
         elif _pieno(valori.get("inoltrata")):
@@ -219,25 +301,45 @@ def stato_perizia(valori: dict, oggi: date, sospesa_ora: bool | None = None) -> 
 
 
 def stato_da_riga(riga: Sequence, mappa: dict[str, int], oggi: date,
-                  sospesa_ora: bool | None = None) -> dict:
+                  sospesa_ora: bool | None = None, icona: object = None) -> dict:
     """stato_perizia per una riga allineata alle intestazioni di `mappa`."""
     valori = {}
     for logico in COLONNE_STATO:
         i = mappa[logico]
         valori[logico] = riga[i] if 0 <= i < len(riga) else None
-    return stato_perizia(valori, oggi, sospesa_ora)
+    return stato_perizia(valori, oggi, sospesa_ora, icona)
 
 
-def riga_conteggi(fasi: Iterable[str]) -> str:
+def riga_conteggi(fasi: Iterable[str], non_pubblicate: int | None = None) -> str:
     """'Stato sul portale: 4 con sopralluogo fissato, 5 già fatte o chiuse,
-    6 sospese, 0 da fissare' (solo conteggi, nessun dato)."""
+    6 sospese, 0 da fissare' (solo conteggi, nessun dato). Con
+    `non_pubblicate` (elenco letto dal portale) aggiunge quante perizie non
+    sono state pubblicate perché in uno stato non riconosciuto."""
     fasi = list(fasi)
     fissate = sum(1 for f in fasi if f == FISSATO)
     fatte = sum(1 for f in fasi if f in (EFFETTUATO, CHIUSA))
     sospese = sum(1 for f in fasi if f == SOSPESA)
     da_fissare = sum(1 for f in fasi if f == DA_FISSARE)
-    return (f"Stato sul portale: {fissate} con sopralluogo fissato, {fatte} già "
+    riga = (f"Stato sul portale: {fissate} con sopralluogo fissato, {fatte} già "
             f"fatte o chiuse, {sospese} sospese, {da_fissare} da fissare")
+    if non_pubblicate is not None:
+        riga += f", {int(non_pubblicate)} non pubblicate (stato non riconosciuto)"
+    return riga
+
+
+def riga_non_pubblicate(conteggi: dict[str, int] | None) -> str:
+    """'3 perizie non pubblicate perché in uno stato che non conosco (PI: 2,
+    XX: 1)', codici dal più frequente; '' se non ce ne sono."""
+    voci = sorted(((str(c), int(n)) for c, n in (conteggi or {}).items() if int(n) > 0),
+                  key=lambda v: (-v[1], v[0]))
+    totale = sum(n for _c, n in voci)
+    if not totale:
+        return ""
+    dettaglio = ", ".join(f"{c}: {n}" for c, n in voci)
+    if totale == 1:
+        return f"1 perizia non pubblicata perché in uno stato che non conosco ({dettaglio})"
+    return (f"{totale} perizie non pubblicate perché in uno stato che non conosco "
+            f"({dettaglio})")
 
 
 # === NOTA DI SOSPENSIONE (pagina «Sospesi» della perizia, BEST-EFFORT) ===

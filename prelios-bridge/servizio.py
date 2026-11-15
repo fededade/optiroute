@@ -8,7 +8,10 @@ Dopo il login MANUALE (MFA) resta in esecuzione e a ogni ciclo:
    massimo una volta al giorno) — vedi bridge_cache.py;
    NON apre quelle che sul portale hanno il sopralluogo già fissato, già
    fatto o sono chiuse (stato_portale.py); per le sospese legge anche la
-   nota di sospensione (BEST-EFFORT), poi rilegge le note scadute (max 10);
+   nota di sospensione (BEST-EFFORT), poi rilegge le note scadute (max 10).
+   Una sospesa è pubblicata solo dopo il primo tentativo di lettura della
+   sua nota; le perizie in uno stato non riconosciuto (icona «VT») non
+   arrivano proprio (né pubblicate né aperte);
 3. pubblica i dati sul server HTTP locale (127.0.0.1, contratto v1 in
    bridge_server.py) da cui la web app OptiRoute li legge da sola.
 
@@ -35,13 +38,12 @@ from bridge_cache import BridgeCache, iso_utc
 from bridge_config import CONFIG_PATH, ConfigNonValida, origini_effettive
 from bridge_server import (Attivazione, BridgeState, carica_o_crea_token, make_server,
                            start_in_thread)
-from excel_pratiche import load_pratiche
+from excel_pratiche import codice_leggibile, load_pratiche
 from portals import PortaleNonConfigurato, get_adapter
 from stato_portale import DA_FISSARE, FASI_DA_NON_APRIRE, SOSPESA, riga_conteggi
 
-MSG_NOTA_NON_TROVATA = ("nota di sospensione non letta (voce «Sospesi» non trovata o "
-                        "griglia non comparsa nella pagina della perizia): vedi "
-                        "elenco_struttura.json")
+MSG_NOTA_NON_TROVATA = ("nota di sospensione non letta (pagina «Sospesi» della perizia non "
+                        "aperta o griglia non comparsa): vedi elenco_struttura.json")
 
 BRIDGE_DIR = Path(__file__).resolve().parent
 CACHE_PATH = BRIDGE_DIR / "bridge_cache.json"
@@ -124,8 +126,15 @@ class _Servizio:
 
     # --- pubblicazione verso l'HTTP ---
 
+    @property
+    def attendi_nota(self) -> bool:
+        """True se le sospese si pubblicano solo dopo il primo tentativo di
+        lettura della loro nota (portale che legge la nota)."""
+        return bool(getattr(self.adapter, "legge_sospensione", False))
+
     def pubblica(self) -> None:
-        self.state.set_pratiche(self.pid, self.cache.snapshot(self.pid))
+        self.state.set_pratiche(self.pid, self.cache.snapshot(self.pid,
+                                                              attendi_nota=self.attendi_nota))
 
     def stato(self, status: str, message: str, last_sync: str | None = None) -> None:
         self.state.set_portal(self.pid, status, message, last_sync=last_sync)
@@ -259,10 +268,15 @@ class _Servizio:
         if not self.args.elenco:
             self.salva_struttura(pratiche)
         fasi = [p.fase for p in pratiche if p.fase]
-        if fasi:
-            _log(riga_conteggi(fasi))
+        non_pubblicate = None
+        if not self.args.elenco and isinstance(getattr(self.adapter, "non_pubblicate", None),
+                                                dict):
+            non_pubblicate = sum(self.adapter.non_pubblicate.values())
+        if fasi or non_pubblicate:
+            _log(riga_conteggi(fasi, non_pubblicate))
 
-        if not pratiche and not self.args.elenco and self.cache.elenco(self.pid):
+        if not pratiche and not non_pubblicate and not self.args.elenco \
+                and self.cache.elenco(self.pid):
             # Probabile lettura griglia fallita: non si svuota l'elenco noto.
             msg = ("Elenco letto dal portale vuoto: mantengo l'ultimo elenco "
                    "noto (verificare con dump_elenco.py).")
@@ -297,7 +311,8 @@ class _Servizio:
 
         for i, pratica in enumerate(da_fare, start=1):
             self.stato("running", f"Recupero telefoni {i}/{len(da_fare)}")
-            _log(f"[{i}/{len(da_fare)}] Pratica {pratica.codice} ({pratica.intestatario})...")
+            _log(f"[{i}/{len(da_fare)}] Pratica {codice_leggibile(pratica.codice)} "
+                 f"({pratica.intestatario})...")
             sosp = {} if (legge_sosp and pratica.fase == SOSPESA) else None
             extra = {"sospensione": sosp} if sosp is not None else {}
             try:
@@ -318,14 +333,15 @@ class _Servizio:
             self.cache.registra(self.pid, pratica, telefono, esito, nota)
             if sosp is not None:
                 self._registra_nota(pratica, sosp.get("nota", ""), bool(sosp.get("letta")),
-                                    sosp.get("dal", ""), aperta=bool(sosp))
+                                    sosp.get("dal", ""), aperta=bool(sosp),
+                                    esito=str(sosp.get("esito") or ""))
             self.salva()
             self.pubblica()
 
         for i, pratica in enumerate(note, start=1):
             self.stato("running", f"Note di sospensione {i}/{len(note)}")
-            _log(f"[nota {i}/{len(note)}] Pratica {pratica.codice} ({pratica.intestatario}): "
-                 "nota di sospensione...")
+            _log(f"[nota {i}/{len(note)}] Pratica {codice_leggibile(pratica.codice)} "
+                 f"({pratica.intestatario}): nota di sospensione...")
             try:
                 testo, dal, esito = self.adapter.leggi_sospensione(self.browser, pratica,
                                                                    log=_log)
@@ -342,7 +358,8 @@ class _Servizio:
             if esito != "OK" and not esito.startswith("NON LETTA"):
                 _log(f"    -> {esito}")
             self._registra_nota(pratica, testo, esito == "OK", dal,
-                                aperta=esito == "OK" or esito.startswith("NON LETTA"))
+                                aperta=esito == "OK" or esito.startswith("NON LETTA"),
+                                esito=esito.removeprefix("NON LETTA: "))
             self.salva()
             self.pubblica()
 
@@ -352,22 +369,29 @@ class _Servizio:
         last = self.cache.set_last_sync(self.pid)
         self.salva()
         self.pubblica()
-        n, con_tel = self.cache.conteggi(self.pid)
+        if self.attendi_nota:
+            in_attesa = self.cache.sospese_in_attesa_nota(self.pid)
+            if in_attesa:
+                _log(f"Sospese in attesa della lettura della nota (pubblicate dopo il primo "
+                     f"tentativo, nei prossimi cicli): {in_attesa}.")
+        n, con_tel = self.cache.conteggi(self.pid, attendi_nota=self.attendi_nota)
         self.stato("ok", f"{n} pratiche, {con_tel} con telefono", last_sync=last)
         _log(f"Ciclo completato: {n} pratiche, {con_tel} con telefono.")
         return "ok"
 
     def _registra_nota(self, pratica, nota: str, letta: bool, dal: str = "",
-                       aperta: bool = True) -> None:
-        """Salva la nota di sospensione. Se la perizia è stata aperta ma la
-        pagina «Sospesi» non è stata raggiunta: UNA riga nel log per ciclo."""
+                       aperta: bool = True, esito: str = "") -> None:
+        """Salva il tentativo di lettura della nota di sospensione. Se la
+        perizia è stata aperta ma la griglia della pagina «Sospesi» non è
+        stata letta: UNA riga nel log per ciclo, con il motivo (come si è
+        arrivati alla pagina e cosa non si è trovato)."""
         self.cache.registra_sospensione(self.pid, pratica, nota, letta, dal)
         if letta:
             _log("    -> nota di sospensione letta" if nota else
                  "    -> pagina «Sospesi» senza nota")
         elif aperta and not self._avvisata_nota:
             self._avvisata_nota = True
-            _log("ATTENZIONE: " + MSG_NOTA_NON_TROVATA)
+            _log("ATTENZIONE: " + MSG_NOTA_NON_TROVATA + (f" — {esito}" if esito else ""))
 
     def _descrivi_perizia(self, pratiche) -> str:
         """Fine ciclo: se è stata descritta la pagina di una perizia, la
@@ -383,8 +407,8 @@ class _Servizio:
             if candidati:
                 self._descrizione_perizia_tentata = True
                 p = candidati[0]
-                _log(f"Apro la pratica {p.codice} solo per descrivere la pagina della "
-                     "perizia (una volta per avvio, nessun dato dei clienti).")
+                _log(f"Apro la pratica {codice_leggibile(p.codice)} solo per descrivere la "
+                     "pagina della perizia (una volta per avvio, nessun dato dei clienti).")
                 try:
                     a.descrivi_perizia(self.browser, p, log=_log)
                 except Exception as e:  # noqa: BLE001 — solo descrizione
@@ -505,7 +529,9 @@ def esegui_servizio(args, *, verifica=None, config_path=CONFIG_PATH,
                        else "Avvio del bridge...")
     state.set_portal(adapter.id, "starting", messaggio_avvio,
                      last_sync=cache.last_sync(adapter.id))
-    state.set_pratiche(adapter.id, cache.snapshot(adapter.id))
+    state.set_pratiche(adapter.id, cache.snapshot(
+        adapter.id, attendi_nota=bool(getattr(adapter, "legge_sospensione", False))
+        and not args.dry_run))
 
     attivazione = None
     if origini:
